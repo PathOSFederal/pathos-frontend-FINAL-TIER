@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm run:*)",
+      "Read(//c/dev/PathOS/**)",
+      "Bash(./pp.ps1 worker-heartbeat:*)",
+      "Bash(powershell.exe -File pp.ps1 worker-heartbeat -Step \"implementation-complete\" -Notes \"Added Benefits Workspace nav item to EXPLORE section. 3 files changed: routes.ts \\(constant + SIDEBAR_ROUTES\\), Sidebar.tsx \\(Calculator icon + nav item\\), workspace/page.tsx \\(SharedDashboardRouteShell wrap\\). Typecheck clean.\")",
+      "Bash(ls /c/dev/PathOS/*.ps1)",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''C:\\\\dev\\\\PathOS'' -Filter ''pp.ps1'' -Recurse -Depth 2 2>&1 | Select-Object -First 5 | Format-Table FullName\")",
+      "Bash(powershell.exe -File \"C:\\\\dev\\\\PathOS\\\\dev-pipeline\\\\pp.ps1\" worker-heartbeat -Step \"implementation-complete\" -Notes \"Added Benefits Workspace nav item to EXPLORE section. 3 files changed: routes.ts \\(constant + SIDEBAR_ROUTES\\), Sidebar.tsx \\(Calculator icon + nav item\\), workspace/page.tsx \\(SharedDashboardRouteShell wrap\\). Typecheck clean.\")",
+      "Bash(powershell.exe -File \"C:\\\\dev\\\\PathOS\\\\dev-pipeline\\\\pp.ps1\" implementation-done)",
+      "Bash(.pp.ps1 worker-heartbeat:*)",
+      "Bash(powershell.exe -Command \".\\\\pp.ps1 worker-heartbeat -Step ''implementation-complete'' -Notes ''Fixed 3 resume-readiness routes to resume-builder in JobSearchScreen.tsx \\(lines 1368, 1381, 2261\\)''\")",
+      "Bash(powershell.exe -Command \"Set-Location ''C:\\\\dev\\\\PathOS\\\\dev-pipeline''; .\\\\pp.ps1 worker-heartbeat -Step ''implementation-complete'' -Notes ''Fixed 3 resume-readiness routes to resume-builder in JobSearchScreen.tsx \\(lines 1368, 1381, 2261\\)''\")",
+      "Bash(powershell.exe -Command \"Set-Location ''C:\\\\dev\\\\PathOS\\\\dev-pipeline''; .\\\\pp.ps1 worker-heartbeat -Step implementation-complete -Notes ''Fixed 3 resume-readiness routes to resume-builder''\")",
+      "Bash(powershell.exe -version)",
+      "Bash($PSVersionTable.PSVersion)",
+      "Bash(powershell.exe -Command \"$PSVersionTable.PSVersion.ToString\\(\\)\")",
+      "Bash(powershell.exe -Command \"Write-Host $PSVersionTable.PSVersion\")",
+      "Bash(pwsh.exe --version)",
+      "Bash(pwsh.exe -Command \"Set-Location ''C:\\\\dev\\\\PathOS\\\\dev-pipeline''; .\\\\pp.ps1 worker-heartbeat -Step ''implementation-complete'' -Notes ''Fixed 3 resume-readiness routes to resume-builder in JobSearchScreen.tsx''\")",
+      "Bash(pwsh.exe -Command \"Set-Location ''C:\\\\dev\\\\PathOS\\\\dev-pipeline''; .\\\\pp.ps1 implementation-done\")"
+    ]
+  }
+}
