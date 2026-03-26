@@ -71,6 +71,8 @@ export interface JobSearchV1State {
   totalCount: number;
   hasMore: boolean;
   isLoadingMore: boolean;
+  /** Honest transient error for the most recent live search attempt. */
+  searchErrorMessage: string | null;
 }
 
 export interface JobSearchV1Actions {
@@ -79,6 +81,21 @@ export interface JobSearchV1Actions {
   applyFilters: (f: JobSearchFilters) => void;
   clearAllFilters: () => void;
   runSearch: () => void;
+  /**
+   * Live-search orchestration helpers.
+   *
+   * WHY THESE EXIST:
+   * The Job Search screen owns the network call timing, but the persisted
+   * result list, selection, pagination, and honest empty/error states still
+   * belong in the store so the UI has one source of truth.
+   */
+  startLiveSearch: (append: boolean) => void;
+  completeLiveSearch: (payload: {
+    results: Job[];
+    totalCount: number;
+    page: number;
+  }) => void;
+  failLiveSearch: (message: string, append: boolean) => void;
   setSelectedJob: (id: string | null) => void;
   setAppliedFromPrompt: (p: AppliedFromPrompt | null) => void;
   /** Persist proposed filters from prompt flow into store and save audit. */
@@ -121,6 +138,7 @@ function getDefaultState(): JobSearchV1State {
     totalCount: 0,
     hasMore: false,
     isLoadingMore: false,
+    searchErrorMessage: null,
   };
 }
 
@@ -193,8 +211,9 @@ function loadPersistedState(): JobSearchV1State {
     pageSize,
     page,
     totalCount,
-    hasMore,
-    isLoadingMore: false,
+      hasMore,
+      isLoadingMore: false,
+      searchErrorMessage: null,
   };
 }
 
@@ -286,9 +305,99 @@ export const useJobSearchV1Store = create<JobSearchV1State & JobSearchV1Actions>
           selectedJobId: selectedId,
           loading: false,
           hasSearched: true,
+          searchErrorMessage: null,
         });
         get().persist();
       }, 400);
+    },
+
+    startLiveSearch: function (append) {
+      if (append) {
+        set({
+          isLoadingMore: true,
+          searchErrorMessage: null,
+        });
+        return;
+      }
+
+      set({
+        loading: true,
+        hasSearched: true,
+        searchErrorMessage: null,
+      });
+    },
+
+    completeLiveSearch: function (payload) {
+      const state = get();
+      const nextAllResults: Job[] = [];
+
+      if (payload.page > 1) {
+        for (let i = 0; i < state.allResults.length; i++) {
+          const existing = state.allResults[i];
+          if (existing !== undefined) {
+            nextAllResults.push(existing);
+          }
+        }
+      }
+
+      for (let i = 0; i < payload.results.length; i++) {
+        const row = payload.results[i];
+        if (row !== undefined) {
+          nextAllResults.push(row);
+        }
+      }
+
+      let selectedId: string | null = null;
+      if (state.selectedJobId !== null) {
+        for (let i = 0; i < nextAllResults.length; i++) {
+          const row = nextAllResults[i];
+          if (row !== undefined && row.id === state.selectedJobId) {
+            selectedId = state.selectedJobId;
+            break;
+          }
+        }
+      }
+      if (selectedId === null && nextAllResults.length > 0) {
+        selectedId = nextAllResults[0].id;
+      }
+
+      set({
+        allResults: nextAllResults,
+        results: nextAllResults,
+        totalCount: payload.totalCount,
+        page: payload.page,
+        hasMore: nextAllResults.length < payload.totalCount,
+        selectedJobId: selectedId,
+        loading: false,
+        isLoadingMore: false,
+        hasSearched: true,
+        searchErrorMessage: null,
+      });
+      get().persist();
+    },
+
+    failLiveSearch: function (message, append) {
+      if (append) {
+        set({
+          isLoadingMore: false,
+          searchErrorMessage: message,
+        });
+        return;
+      }
+
+      set({
+        results: [],
+        allResults: [],
+        selectedJobId: null,
+        loading: false,
+        hasSearched: true,
+        page: 1,
+        totalCount: 0,
+        hasMore: false,
+        isLoadingMore: false,
+        searchErrorMessage: message,
+      });
+      get().persist();
     },
 
     loadSampleJobs: function () {
@@ -309,6 +418,7 @@ export const useJobSearchV1Store = create<JobSearchV1State & JobSearchV1Actions>
         selectedJobId: firstId,
         loading: false,
         hasSearched: true,
+        searchErrorMessage: null,
       });
       get().persist();
     },
@@ -365,6 +475,7 @@ export const useJobSearchV1Store = create<JobSearchV1State & JobSearchV1Actions>
         totalCount: 0,
         hasMore: false,
         hasSearched: false,
+        searchErrorMessage: null,
       });
       get().persist();
     },

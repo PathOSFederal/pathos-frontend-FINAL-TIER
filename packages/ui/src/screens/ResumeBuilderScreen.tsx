@@ -69,6 +69,8 @@ import {
   Map,
   TrendingUp,
   Info,
+  Home,
+  LayoutGrid,
 } from 'lucide-react';
 import {
   loadResumeStore,
@@ -127,6 +129,7 @@ export interface ResumeBulletVM {
 export type SectionId =
   | 'contact'
   | 'summary'
+  | 'identity-summary'
   | 'experience'
   | 'education'
   | 'skills'
@@ -169,7 +172,7 @@ interface InlineSuggestionDef {
  * Metadata for a resume section shown in the left rail.
  * Includes completion percentage, issue count, and target relevance.
  */
-interface SectionMeta {
+export interface SectionMeta {
   id: SectionId;
   label: string;
   completionPct: number;
@@ -298,9 +301,31 @@ const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string; badge?: number }>
  * Section definitions for the left rail. Each section maps to a canvas
  * region. Icons are from lucide-react to stay consistent with PathOS.
  */
-const SECTION_DEFS: Array<{ id: SectionId; label: string; icon: typeof FileText }> = [
+/**
+ * Full section definitions — includes all individual section IDs.
+ * Used by proposal logic, coverage map, and cross-tab references that
+ * still need individual section identifiers (e.g. 'contact', 'summary').
+ */
+export const SECTION_DEFS: Array<{ id: SectionId; label: string; icon: typeof FileText }> = [
   { id: 'contact', label: 'Contact Information', icon: User },
   { id: 'summary', label: 'Professional Summary', icon: FileText },
+  { id: 'identity-summary', label: 'Identity & Summary', icon: User },
+  { id: 'experience', label: 'Work Experience', icon: Briefcase },
+  { id: 'education', label: 'Education', icon: GraduationCap },
+  { id: 'skills', label: 'Skills', icon: Wrench },
+  { id: 'federal-details', label: 'Federal Details', icon: Shield },
+  { id: 'certifications', label: 'Certifications', icon: Award },
+  { id: 'supporting-evidence', label: 'Supporting Evidence', icon: FileCheck },
+];
+
+/**
+ * Edit-tab section definitions — the top-level editing groups shown in the
+ * Edit dashboard and section dropdown. Contact + Summary are merged into
+ * "Identity & Summary" to create a more substantial first editing experience.
+ * Other sections remain individual.
+ */
+export const EDIT_SECTION_GROUPS: Array<{ id: SectionId; label: string; icon: typeof FileText }> = [
+  { id: 'identity-summary', label: 'Identity & Summary', icon: User },
   { id: 'experience', label: 'Work Experience', icon: Briefcase },
   { id: 'education', label: 'Education', icon: GraduationCap },
   { id: 'skills', label: 'Skills', icon: Wrench },
@@ -414,7 +439,7 @@ const MOCK_INLINE_SUGGESTION: InlineSuggestionDef = {
  * the mock resume state. A real implementation would compute these
  * from the draft content + target job analysis.
  */
-const MOCK_SECTION_META: SectionMeta[] = [
+export const MOCK_SECTION_META: SectionMeta[] = [
   { id: 'contact', label: 'Contact Information', completionPct: 100, issueCount: 0, relevancePct: 0 },
   { id: 'summary', label: 'Professional Summary', completionPct: 0, issueCount: 0, relevancePct: 0 },
   { id: 'experience', label: 'Work Experience', completionPct: 75, issueCount: 2, relevancePct: 85 },
@@ -424,6 +449,96 @@ const MOCK_SECTION_META: SectionMeta[] = [
   { id: 'certifications', label: 'Certifications', completionPct: 50, issueCount: 0, relevancePct: 0 },
   { id: 'supporting-evidence', label: 'Supporting Evidence', completionPct: 20, issueCount: 6, relevancePct: 0 },
 ];
+
+/**
+ * Edit-tab section metadata — uses grouped sections for the Edit dashboard.
+ * "Identity & Summary" merges Contact (100%) and Summary (0%) into a single
+ * entry. The composite score averages the two: (100+0)/2 = 50%. Issues are
+ * summed. Relevance takes the max of the two sub-sections.
+ *
+ * This keeps the dashboard focused on 7 meaningful editing groups instead
+ * of 8 with a too-thin Contact card.
+ */
+export const EDIT_SECTION_META: SectionMeta[] = [
+  { id: 'identity-summary', label: 'Identity & Summary', completionPct: 50, issueCount: 0, relevancePct: 0 },
+  { id: 'experience', label: 'Work Experience', completionPct: 75, issueCount: 2, relevancePct: 85 },
+  { id: 'education', label: 'Education', completionPct: 100, issueCount: 0, relevancePct: 0 },
+  { id: 'skills', label: 'Skills', completionPct: 80, issueCount: 0, relevancePct: 85 },
+  { id: 'federal-details', label: 'Federal Details', completionPct: 40, issueCount: 4, relevancePct: 55 },
+  { id: 'certifications', label: 'Certifications', completionPct: 50, issueCount: 0, relevancePct: 0 },
+  { id: 'supporting-evidence', label: 'Supporting Evidence', completionPct: 20, issueCount: 6, relevancePct: 0 },
+];
+
+// ---------------------------------------------------------------------------
+// Section status derivation — label + color for dashboard cards
+// ---------------------------------------------------------------------------
+//
+// Each section card in the Edit dashboard shows a compact status label
+// (Strong / Moderate / Missing / Needs Work / Critical) derived from
+// the section's completion percentage and issue count. This keeps the
+// dashboard scannable without overloading each card with raw numbers.
+//
+
+/**
+ * Edit-mode state controls which of the two Edit tab states is active.
+ *   dashboard: section overview cards — user sees all sections at once
+ *   focused:   single-section editor — user is editing one section
+ */
+export type EditMode = 'dashboard' | 'focused';
+
+/**
+ * Derived status for a section dashboard card.
+ * label: human-readable status (e.g. "Strong", "Missing")
+ * color: CSS color token for the status badge
+ */
+export interface SectionStatusInfo {
+  label: string;
+  color: string;
+}
+
+/**
+ * Derive a human-readable section status from section metadata.
+ *
+ * Thresholds:
+ *   completionPct === 0                     → Missing
+ *   completionPct < 30 or issueCount >= 4   → Critical
+ *   issueCount > 0 or completionPct < 60    → Needs Work
+ *   completionPct >= 80                     → Strong
+ *   everything else                         → Moderate
+ *
+ * Colors use PathOS theme tokens to stay consistent with the score
+ * tier system used in Saved Jobs and other surfaces.
+ */
+export function deriveSectionStatus(meta: SectionMeta): SectionStatusInfo {
+  if (meta.completionPct === 0) {
+    return { label: 'Missing', color: 'var(--p-danger, #ef4444)' };
+  }
+  if (meta.completionPct < 30 || meta.issueCount >= 4) {
+    return { label: 'Critical', color: 'var(--p-danger, #ef4444)' };
+  }
+  if (meta.issueCount > 0 || meta.completionPct < 60) {
+    return { label: 'Needs Work', color: 'var(--p-warning, #eab308)' };
+  }
+  if (meta.completionPct >= 80) {
+    return { label: 'Strong', color: 'var(--p-success)' };
+  }
+  return { label: 'Moderate', color: 'var(--p-warning, #eab308)' };
+}
+
+/**
+ * Derive a compact metric string for a section dashboard card.
+ * Prefers issue count when issues exist, otherwise shows completion.
+ *
+ * Examples: "2 issues", "80% complete", "Not started", "" (for 100%)
+ */
+export function deriveSectionMetric(meta: SectionMeta): string {
+  if (meta.completionPct === 0) return 'Not started';
+  if (meta.issueCount > 0) {
+    return meta.issueCount + (meta.issueCount === 1 ? ' issue' : ' issues');
+  }
+  if (meta.completionPct >= 100) return '';
+  return meta.completionPct + '% complete';
+}
 
 /** Mock federal details for the canvas (not yet in core model). */
 const MOCK_FEDERAL_DETAILS = {
@@ -1168,185 +1283,1026 @@ function ContextStrip(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-component: Left resume sections rail
+// Sub-component: Section organizer — workspace-style section control panel
 // ---------------------------------------------------------------------------
+//
+// Replaces the previous SectionsRail (which felt like a second navigation
+// sidebar) with a calmer, card-based section organizer panel. Each section
+// appears as a distinct work-unit card showing completion, issues, and
+// relevance. The organizer stays visually subordinate to the center editing
+// surface while providing whole-resume awareness at a glance.
+//
 
 /**
- * Left rail listing all resume sections with completion indicators,
- * issue counts, and target relevance. The active section is highlighted
- * with an accent left border. Clicking a section scrolls the canvas
- * and updates the active section state.
+ * Individual card in the section organizer. Renders one resume section
+ * as a compact work-unit card with completion bar, issues badge, and
+ * relevance indicator.
  *
- * This rail communicates PathOS intelligence — not just a document outline.
- * Completion bars use tier colors; issue badges signal actionable items.
+ * Uses explicit useState hover tracking so the selected state survives
+ * hover without visual conflict (per Interaction-State Standard for
+ * list row / card controls). Selected state uses accent-tinted background
+ * plus a 4px accent left border, which is visually stronger than hover.
+ *
+ * Focus-visible uses a 2px inset ring via Tailwind utilities with the
+ * --tw-ring-color custom property set to --p-accent.
  */
-function SectionsRail(props: {
+function SectionOrganizerItem(props: {
+  section: SectionMeta;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+
+  /* Find the matching icon from SECTION_DEFS for this section. */
+  let IconComponent = FileText;
+  for (let i = 0; i < SECTION_DEFS.length; i++) {
+    if (SECTION_DEFS[i].id === props.section.id) {
+      IconComponent = SECTION_DEFS[i].icon;
+      break;
+    }
+  }
+
+  /* Determine completion bar color using the shared score tier system. */
+  const barColor = scoreTierColor(props.section.completionPct);
+
+  /*
+   * Build dynamic visual styles based on active (selected) and hovered
+   * states. Selected always takes precedence over hovered to prevent
+   * hover from making the active item look deselected.
+   */
+  let bgStyle = 'transparent';
+  let borderStyle = '1px solid transparent';
+  let leftBorderStyle = '3px solid transparent';
+  let titleColor = 'var(--p-text-muted)';
+  let iconColor = 'var(--p-text-dim)';
+
+  if (props.isActive) {
+    /* Selected state: accent tint + accent left border, stronger than hover */
+    bgStyle = 'color-mix(in srgb, var(--p-accent) 8%, var(--p-surface))';
+    borderStyle = '1px solid color-mix(in srgb, var(--p-accent) 30%, var(--p-border))';
+    leftBorderStyle = '4px solid var(--p-accent)';
+    titleColor = 'var(--p-text)';
+    iconColor = 'var(--p-accent)';
+  } else if (isHovered) {
+    /* Hover state: subtle background lift + border brightening */
+    bgStyle = 'var(--p-surface2)';
+    borderStyle = '1px solid var(--p-text-dim)';
+    leftBorderStyle = '3px solid var(--p-text-dim)';
+    titleColor = 'var(--p-text)';
+    iconColor = 'var(--p-text-muted)';
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      onMouseEnter={function () { setIsHovered(true); }}
+      onMouseLeave={function () { setIsHovered(false); }}
+      className="w-full text-left rounded-lg transition-all outline-none focus-visible:ring-2 focus-visible:ring-inset"
+      style={Object.assign(
+        {
+          padding: '10px 12px',
+          background: bgStyle,
+          border: borderStyle,
+          borderLeft: leftBorderStyle,
+          color: titleColor,
+          cursor: 'pointer',
+        },
+        /* Tailwind ring color for focus-visible — uses PathOS accent token */
+        { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
+      )}
+      aria-current={props.isActive ? 'true' : undefined}
+      data-testid={'section-rail-' + props.section.id}
+      data-selected={props.isActive ? 'true' : undefined}
+      data-hovered={isHovered ? 'true' : undefined}
+    >
+      {/* Title row: icon, section name, issue badge */}
+      <div className="flex items-center gap-2 mb-1.5">
+        <IconComponent
+          className="w-4 h-4 flex-shrink-0"
+          style={{ color: iconColor }}
+        />
+        <span className={'text-xs truncate' + (props.isActive ? ' font-semibold' : ' font-medium')}>
+          {props.section.label}
+        </span>
+        {props.section.issueCount > 0 && (
+          <span
+            className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
+            style={{
+              background: 'color-mix(in srgb, var(--p-danger, #ef4444) 15%, transparent)',
+              color: 'var(--p-danger, #ef4444)',
+            }}
+          >
+            {props.section.issueCount}
+          </span>
+        )}
+      </div>
+
+      {/* Completion progress bar */}
+      <div style={{ marginLeft: '24px' }}>
+        <div
+          className="h-1.5 rounded-full overflow-hidden"
+          style={{ background: 'var(--p-surface2)', width: '100%' }}
+          role="progressbar"
+          aria-valuenow={props.section.completionPct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={props.section.label + ' completion'}
+        >
+          <div
+            className="h-full rounded-full transition-all"
+            style={{
+              width: props.section.completionPct + '%',
+              background: barColor,
+            }}
+          />
+        </div>
+        {/* Secondary metadata: completion percentage + relevance */}
+        <div className="flex items-center gap-1 mt-1">
+          <span className="text-[10px]" style={{ color: 'var(--p-text-dim)' }}>
+            {props.section.completionPct}%
+          </span>
+          {props.section.relevancePct > 0 && (
+            <span className="text-[10px]" style={{ color: 'var(--p-text-dim)' }}>
+              · {props.section.relevancePct}% relevant
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Active indicator: "Editing" badge for the selected section */}
+      {props.isActive && (
+        <div className="mt-1.5" style={{ marginLeft: '24px' }}>
+          <span
+            className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+            style={{
+              background: 'color-mix(in srgb, var(--p-accent) 15%, transparent)',
+              color: 'var(--p-accent)',
+            }}
+          >
+            Editing
+          </span>
+        </div>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Section organizer panel — lists all resume sections as interactive
+ * cards in a quieter, workspace-style layout. Replaces the previous
+ * SectionsRail to feel more like a work organizer than a second nav.
+ *
+ * Uses wider spacing (248px width, gap between cards) and a quieter
+ * --p-bg background to stay visually subordinate to the center editing
+ * surface. Each card shows completion status, issue counts, and target
+ * relevance so the user maintains whole-resume awareness while editing
+ * one section at a time.
+ *
+ * Clicking a section updates the center editing surface to show only
+ * that section's content (section-focused editing model).
+ */
+function SectionOrganizer(props: {
   sections: SectionMeta[];
   activeSection: SectionId;
   onSectionClick: (id: SectionId) => void;
 }) {
   return (
     <nav
-      className="flex flex-col py-2 overflow-y-auto flex-shrink-0"
+      className="flex flex-col py-3 px-2.5 overflow-y-auto flex-shrink-0"
       style={{
-        width: '220px',
-        minWidth: '220px',
+        width: '248px',
+        minWidth: '248px',
         borderRight: '1px solid var(--p-border)',
-        background: 'var(--p-surface)',
+        background: 'var(--p-bg)',
       }}
       aria-label="Resume sections"
       data-testid="resume-sections-rail"
     >
-      <div className="px-3 py-1.5 mb-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
-          Resume Sections
+      {/* Organizer heading — quieter than nav sidebar headings */}
+      <div className="px-2 py-1 mb-2">
+        <span
+          className="text-[10px] font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--p-text-dim)' }}
+        >
+          Section Organizer
         </span>
       </div>
-      {props.sections.map(function (section) {
-        const isActive = section.id === props.activeSection;
-        /* Find the matching icon from SECTION_DEFS. */
-        let IconComponent = FileText;
-        for (let i = 0; i < SECTION_DEFS.length; i++) {
-          if (SECTION_DEFS[i].id === section.id) {
-            IconComponent = SECTION_DEFS[i].icon;
-            break;
-          }
-        }
 
-        /* Determine completion bar color using score tier logic. */
-        const barColor = scoreTierColor(section.completionPct);
-
-        return (
-          <button
-            key={section.id}
-            type="button"
-            onClick={function () { props.onSectionClick(section.id); }}
-            className="w-full text-left px-3 py-2 transition-colors"
-            style={{
-              background: isActive
-                ? 'color-mix(in srgb, var(--p-accent) 10%, transparent)'
-                : 'transparent',
-              borderLeft: isActive
-                ? '3px solid var(--p-accent)'
-                : '3px solid transparent',
-              color: isActive ? 'var(--p-text)' : 'var(--p-text-muted)',
-            }}
-            aria-current={isActive ? 'true' : undefined}
-            data-testid={'section-rail-' + section.id}
-          >
-            <div className="flex items-center gap-2 mb-1">
-              <IconComponent className="w-3.5 h-3.5 flex-shrink-0" />
-              <span className="text-xs font-medium truncate">{section.label}</span>
-              {/* Issue count badge */}
-              {section.issueCount > 0 && (
-                <span
-                  className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
-                  style={{
-                    background: 'color-mix(in srgb, var(--p-danger, #ef4444) 15%, transparent)',
-                    color: 'var(--p-danger, #ef4444)',
-                  }}
-                >
-                  {section.issueCount}
-                </span>
-              )}
-            </div>
-            {/* Completion bar */}
-            <div className="ml-5.5 mt-0.5" style={{ marginLeft: '22px' }}>
-              <div
-                className="h-1 rounded-full overflow-hidden"
-                style={{ background: 'var(--p-surface2)', width: '100%' }}
-                role="progressbar"
-                aria-valuenow={section.completionPct}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-label={section.label + ' completion'}
-              >
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{
-                    width: section.completionPct + '%',
-                    background: barColor,
-                  }}
-                />
-              </div>
-              {/* Target relevance (shown when > 0) */}
-              {section.relevancePct > 0 && (
-                <span className="text-[10px] mt-0.5 block" style={{ color: 'var(--p-text-dim)' }}>
-                  {section.relevancePct}% relevant to target
-                </span>
-              )}
-            </div>
-          </button>
-        );
-      })}
+      {/* Section cards — separated with gap for visual clarity */}
+      <div className="flex flex-col gap-1.5">
+        {props.sections.map(function (section) {
+          const isActive = section.id === props.activeSection;
+          return (
+            <SectionOrganizerItem
+              key={section.id}
+              section={section}
+              isActive={isActive}
+              onClick={function () { props.onSectionClick(section.id); }}
+            />
+          );
+        })}
+      </div>
     </nav>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Sub-component: Tab bar
+// Sub-component: Section Dashboard Card — single section work-unit in grid
 // ---------------------------------------------------------------------------
+//
+// Each card represents one resume section in the Edit dashboard state.
+// Shows: section icon, section name, status badge, progress bar, compact
+// metric. Clickable to open the focused editor for that section.
+//
+// Visual design priorities: scannable, calm, work-module feel (not nav item).
+// Uses explicit useState hover tracking so selected state (if ever needed)
+// survives hover without visual conflict.
+//
 
 /**
- * Workspace tab bar below the left rail + center split. Shows all workspace
- * tabs with the active tab highlighted. Suggested Changes shows a badge
- * count when proposals exist.
+ * Individual section card for the Edit dashboard. Renders one resume
+ * section as a clickable work-module card with a progress indicator,
+ * status badge, and optional compact metric.
  *
- * Uses role="tablist" / role="tab" / role="tabpanel" semantics.
+ * Accessible: keyboard focusable, labeled, clear visual states.
+ */
+function SectionDashboardCard(props: {
+  section: SectionMeta;
+  onSelect: () => void;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+
+  /* Find the matching icon from EDIT_SECTION_GROUPS (covers grouped
+   * sections like identity-summary) then fall back to SECTION_DEFS. */
+  let IconComponent = FileText;
+  let foundCardIcon = false;
+  for (let i = 0; i < EDIT_SECTION_GROUPS.length; i++) {
+    if (EDIT_SECTION_GROUPS[i].id === props.section.id) {
+      IconComponent = EDIT_SECTION_GROUPS[i].icon;
+      foundCardIcon = true;
+      break;
+    }
+  }
+  if (!foundCardIcon) {
+    for (let i = 0; i < SECTION_DEFS.length; i++) {
+      if (SECTION_DEFS[i].id === props.section.id) {
+        IconComponent = SECTION_DEFS[i].icon;
+        break;
+      }
+    }
+  }
+
+  /* Derive status label and color from section metadata */
+  const status = deriveSectionStatus(props.section);
+
+  /* Derive compact metric string */
+  const metric = deriveSectionMetric(props.section);
+
+  /* Progress bar color from the shared score tier system */
+  const barColor = scoreTierColor(props.section.completionPct);
+
+  /* Dynamic hover styling — explicit tracking per interaction-state standard */
+  const bgStyle = isHovered
+    ? 'var(--p-surface2)'
+    : 'var(--p-surface)';
+  const borderColor = isHovered
+    ? 'var(--p-text-dim)'
+    : 'var(--p-border)';
+
+  return (
+    <button
+      type="button"
+      onClick={props.onSelect}
+      onMouseEnter={function () { setIsHovered(true); }}
+      onMouseLeave={function () { setIsHovered(false); }}
+      className="w-full text-left rounded-lg transition-all outline-none focus-visible:ring-2 focus-visible:ring-inset"
+      style={Object.assign(
+        {
+          padding: '14px 16px',
+          background: bgStyle,
+          border: '1px solid ' + borderColor,
+          cursor: 'pointer',
+        },
+        /* Tailwind ring color for focus-visible — uses PathOS accent token */
+        { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
+      )}
+      aria-label={'Open ' + props.section.label + ' section — ' + status.label}
+      data-testid={'dashboard-card-' + props.section.id}
+    >
+      {/* Top row: icon + name + status badge */}
+      <div className="flex items-center gap-2.5 mb-2.5">
+        <div
+          className="flex items-center justify-center rounded-md flex-shrink-0"
+          style={{
+            width: '32px',
+            height: '32px',
+            background: 'color-mix(in srgb, var(--p-accent) 10%, transparent)',
+          }}
+        >
+          <IconComponent
+            className="w-4 h-4"
+            style={{ color: 'var(--p-accent)' }}
+          />
+        </div>
+        <span
+          className="text-sm font-semibold flex-1 truncate"
+          style={{ color: 'var(--p-text)' }}
+        >
+          {props.section.label}
+        </span>
+        {/* Status badge */}
+        <span
+          className="text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap"
+          style={{
+            color: status.color,
+            background: 'color-mix(in srgb, ' + status.color + ' 12%, transparent)',
+          }}
+        >
+          {status.label}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div
+        className="h-1.5 rounded-full overflow-hidden mb-1.5"
+        style={{ background: 'var(--p-surface2)', width: '100%' }}
+        role="progressbar"
+        aria-valuenow={props.section.completionPct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={props.section.label + ' completion'}
+      >
+        <div
+          className="h-full rounded-full transition-all"
+          style={{
+            width: props.section.completionPct + '%',
+            background: barColor,
+          }}
+        />
+      </div>
+
+      {/* Compact metric — one short piece of information */}
+      {metric && (
+        <div className="flex items-center gap-1">
+          <span
+            className="text-[11px]"
+            style={{ color: 'var(--p-text-dim)' }}
+          >
+            {metric}
+          </span>
+        </div>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Section Dashboard — the default Edit landing state.
+ *
+ * PURPOSE:
+ * Renders a compact command-surface for the Edit tab. At the top, a
+ * summary strip shows overall Match, Readiness, biggest blocker, and
+ * fastest win so the user instantly knows what matters most. Below
+ * that, a grid of section cards lets the user pick where to work.
+ *
+ * The summary strip replaces the need for any additional status bars
+ * and makes the dashboard feel more like a high-signal command surface
+ * than a flat page of boxes.
+ *
+ * Layout: responsive grid, 2-3 columns depending on width, with
+ * controlled max-width to prevent cards from stretching too wide.
+ */
+function SectionDashboard(props: {
+  sections: SectionMeta[];
+  onSectionSelect: (id: SectionId) => void;
+  matchScore: number;
+  readinessScore: number;
+  biggestBlocker: string;
+  fastestWin: string;
+  activeJob: Job | null;
+}) {
+  /*
+   * Sort sections for the "top priorities" treatment: sections with the
+   * lowest completion percentage and highest issue count should appear
+   * first, making weak/high-impact areas more obvious. Completed sections
+   * sink to the bottom. This ordering answers "what should I open first?"
+   */
+  const sortedSections: SectionMeta[] = [];
+  for (let i = 0; i < props.sections.length; i++) {
+    sortedSections.push(props.sections[i]);
+  }
+  sortedSections.sort(function (a, b) {
+    /* Sections with issues first */
+    if (a.issueCount > 0 && b.issueCount === 0) return -1;
+    if (b.issueCount > 0 && a.issueCount === 0) return 1;
+    /* Then by completion ascending (weakest first) */
+    if (a.completionPct !== b.completionPct) return a.completionPct - b.completionPct;
+    /* Tie-break: more issues first */
+    return b.issueCount - a.issueCount;
+  });
+
+  return (
+    <div
+      className="flex-1 overflow-y-auto"
+      style={{ background: 'var(--p-bg)' }}
+      data-testid="edit-section-dashboard"
+    >
+      <div className="max-w-[900px] mx-auto px-8 py-6">
+
+        {/* ---- Compact summary strip: overall resume signals ----
+         * Four compact data points in a single row so the user knows
+         * the resume's current state before opening any section.
+         */}
+        <div
+          className="rounded-lg mb-6 px-5 py-3.5 flex items-center gap-5 flex-wrap"
+          style={{
+            background: 'var(--p-surface)',
+            border: '1px solid var(--p-border)',
+          }}
+          data-testid="dashboard-summary-strip"
+        >
+          {props.activeJob ? (
+            <>
+              {/* Match score */}
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="text-[10px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--p-text-dim)' }}
+                >
+                  Match
+                </span>
+                <span
+                  className="text-sm font-bold px-2 py-0.5 rounded"
+                  style={{
+                    color: scoreTierColor(props.matchScore),
+                    background: 'color-mix(in srgb, ' + scoreTierColor(props.matchScore) + ' 12%, transparent)',
+                  }}
+                >
+                  {props.matchScore}%
+                </span>
+              </div>
+
+              {/* Readiness score */}
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="text-[10px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--p-text-dim)' }}
+                >
+                  Ready
+                </span>
+                <span
+                  className="text-sm font-bold px-2 py-0.5 rounded"
+                  style={{
+                    color: scoreTierColor(props.readinessScore),
+                    background: 'color-mix(in srgb, ' + scoreTierColor(props.readinessScore) + ' 12%, transparent)',
+                  }}
+                >
+                  {props.readinessScore}
+                </span>
+              </div>
+
+              {/* Divider */}
+              <div
+                className="h-5 flex-shrink-0"
+                style={{ width: '1px', background: 'var(--p-border)' }}
+              />
+
+              {/* Biggest blocker */}
+              <div className="flex items-center gap-1.5">
+                <AlertTriangle
+                  className="w-3.5 h-3.5 flex-shrink-0"
+                  style={{ color: 'var(--p-danger, #ef4444)' }}
+                />
+                <span
+                  className="text-xs font-medium truncate"
+                  style={{ color: 'var(--p-text-muted)', maxWidth: '200px' }}
+                >
+                  {props.biggestBlocker}
+                </span>
+              </div>
+
+              {/* Fastest win */}
+              <div className="flex items-center gap-1.5">
+                <Zap
+                  className="w-3.5 h-3.5 flex-shrink-0"
+                  style={{ color: 'var(--p-success)' }}
+                />
+                <span
+                  className="text-xs font-medium truncate"
+                  style={{ color: 'var(--p-text-muted)', maxWidth: '200px' }}
+                >
+                  {props.fastestWin}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Target className="w-3.5 h-3.5" style={{ color: 'var(--p-text-dim)' }} />
+              <span className="text-xs" style={{ color: 'var(--p-text-dim)' }}>
+                Select a target job to see match and readiness scores
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* ---- Section heading ---- */}
+        <div className="mb-4">
+          <h2
+            className="text-sm font-semibold mb-0.5"
+            style={{ color: 'var(--p-text)' }}
+          >
+            Sections
+          </h2>
+          <p
+            className="text-[11px]"
+            style={{ color: 'var(--p-text-dim)' }}
+          >
+            Ordered by priority — weakest sections first.
+          </p>
+        </div>
+
+        {/* ---- Section card grid ----
+         * Sorted by priority so the user sees the most impactful
+         * sections at the top. 2-3 columns responsive.
+         */}
+        <div
+          className="grid gap-3"
+          style={{
+            gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))',
+          }}
+          role="list"
+          aria-label="Resume sections"
+        >
+          {sortedSections.map(function (section) {
+            return (
+              <div key={section.id} role="listitem">
+                <SectionDashboardCard
+                  section={section}
+                  onSelect={function () { props.onSectionSelect(section.id); }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: Section Dropdown Menu — polished dropdown with hover states
+// ---------------------------------------------------------------------------
+//
+// Extracted from the inline render to support both dashboard and focused
+// mode. Includes:
+//   - "Overview" option (returns to dashboard)
+//   - All edit section groups with status badges
+//   - Explicit hover tracking per item for responsive feedback
+//   - focus-visible ring treatment
+//   - Current section highlighted with accent bg + font weight
+//
+
+/**
+ * Individual dropdown menu item with explicit hover tracking.
+ * Matches the dropdown-option interaction-state standard:
+ *   hover:  background shift to var(--p-surface2)
+ *   focus-visible: ring-2 ring-accent inset
+ *   selected: accent text + tinted bg + font-weight 600
+ */
+function SectionDropdownItem(props: {
+  icon: typeof FileText;
+  label: string;
+  isCurrent: boolean;
+  statusLabel: string | null;
+  statusColor: string | null;
+  onClick: () => void;
+  testId: string;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+  const IconComponent = props.icon;
+
+  /*
+   * Layered background logic:
+   *   Current item: accent tint (survives hover)
+   *   Hovered item: surface2 (not current only)
+   *   Default: transparent
+   */
+  let itemBg = 'transparent';
+  if (props.isCurrent) {
+    itemBg = 'color-mix(in srgb, var(--p-accent) 10%, transparent)';
+  } else if (isHovered) {
+    itemBg = 'var(--p-surface2)';
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      onMouseEnter={function () { setIsHovered(true); }}
+      onMouseLeave={function () { setIsHovered(false); }}
+      className="w-full text-left px-3 py-2 flex items-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-inset transition-colors"
+      style={Object.assign(
+        {
+          background: itemBg,
+          color: props.isCurrent ? 'var(--p-accent)' : 'var(--p-text)',
+        },
+        { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
+      )}
+      role="option"
+      aria-selected={props.isCurrent}
+      data-testid={props.testId}
+    >
+      <IconComponent
+        className="w-3.5 h-3.5 flex-shrink-0"
+        style={{ color: props.isCurrent ? 'var(--p-accent)' : 'var(--p-text-dim)' }}
+      />
+      <span className={'text-xs flex-1 truncate' + (props.isCurrent ? ' font-semibold' : ' font-medium')}>
+        {props.label}
+      </span>
+      {/* Status badge when available */}
+      {props.statusLabel && props.statusColor && (
+        <span
+          className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
+          style={{
+            color: props.statusColor,
+            background: 'color-mix(in srgb, ' + props.statusColor + ' 12%, transparent)',
+          }}
+        >
+          {props.statusLabel}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Section dropdown menu panel — renders all Edit section groups
+ * with an "Overview" option at the top. Used by the persistent
+ * local Edit control row in both dashboard and focused states.
+ */
+function SectionDropdownMenu(props: {
+  sections: SectionMeta[];
+  activeSection: SectionId;
+  editMode: EditMode;
+  onSelectSection: (id: SectionId) => void;
+  onSelectOverview: () => void;
+}) {
+  return (
+    <div
+      className="absolute top-full left-0 mt-1 py-1 rounded shadow-lg z-50"
+      style={{
+        background: 'var(--p-surface)',
+        border: '1px solid var(--p-border)',
+        minWidth: '240px',
+      }}
+      role="listbox"
+      aria-label="Resume sections"
+      data-testid="section-dropdown-menu"
+    >
+      {/* Overview option — always first, returns to dashboard */}
+      <SectionDropdownItem
+        icon={LayoutGrid}
+        label="Overview"
+        isCurrent={props.editMode === 'dashboard'}
+        statusLabel={null}
+        statusColor={null}
+        onClick={props.onSelectOverview}
+        testId="section-option-overview"
+      />
+
+      {/* Thin separator between Overview and sections */}
+      <div
+        className="my-1 mx-2"
+        style={{ borderTop: '1px solid var(--p-border)' }}
+      />
+
+      {/* Section options */}
+      {props.sections.map(function (section) {
+        const isCurrent = section.id === props.activeSection && props.editMode === 'focused';
+        /* Look up icon from EDIT_SECTION_GROUPS */
+        let SectionIcon = FileText;
+        for (let j = 0; j < EDIT_SECTION_GROUPS.length; j++) {
+          if (EDIT_SECTION_GROUPS[j].id === section.id) {
+            SectionIcon = EDIT_SECTION_GROUPS[j].icon;
+            break;
+          }
+        }
+        const sectionStatus = deriveSectionStatus(section);
+
+        return (
+          <SectionDropdownItem
+            key={section.id}
+            icon={SectionIcon}
+            label={section.label}
+            isCurrent={isCurrent}
+            statusLabel={sectionStatus.label}
+            statusColor={sectionStatus.color}
+            onClick={function () { props.onSelectSection(section.id); }}
+            testId={'section-option-' + section.id}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: Live Score Anchor — compact persistent score module
+// ---------------------------------------------------------------------------
+//
+// Replaces the noisy ContextStrip and the wider ResumeBrief with a single
+// compact, persistent score area in the Edit workspace. Shows only the
+// two most important scores (Match, Readiness) and one actionable cue.
+// This keeps the workspace header calm while still anchoring the user's
+// awareness of their resume quality.
+//
+
+/**
+ * Compact live score anchor for the Edit workspace header.
+ * Shows Match score, Readiness score, and one short actionable cue.
+ * Updates live when edits are accepted/saved.
+ */
+function LiveScoreAnchor(props: {
+  matchScore: number;
+  readinessScore: number;
+  biggestBlocker: string;
+  fastestWin: string;
+  activeJob: Job | null;
+}) {
+  /*
+   * When no target job is selected, show a minimal prompt instead of
+   * scores that would all be zero.
+   */
+  if (!props.activeJob) {
+    return (
+      <div
+        className="px-6 py-2 flex items-center gap-2 flex-shrink-0"
+        style={{
+          borderBottom: '1px solid var(--p-border)',
+          background: 'var(--p-surface)',
+        }}
+        data-testid="live-score-anchor"
+      >
+        <Target className="w-3.5 h-3.5" style={{ color: 'var(--p-text-dim)' }} />
+        <span className="text-xs" style={{ color: 'var(--p-text-dim)' }}>
+          Select a target job to see match and readiness scores
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="px-6 py-2 flex items-center gap-4 flex-wrap flex-shrink-0"
+      style={{
+        borderBottom: '1px solid var(--p-border)',
+        background: 'var(--p-surface)',
+      }}
+      data-testid="live-score-anchor"
+    >
+      {/* Match score chip */}
+      <div className="flex items-center gap-1.5">
+        <span
+          className="text-[10px] font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--p-text-dim)' }}
+        >
+          Match
+        </span>
+        <span
+          className="text-xs font-bold px-1.5 py-0.5 rounded"
+          style={{
+            color: scoreTierColor(props.matchScore),
+            background: 'color-mix(in srgb, ' + scoreTierColor(props.matchScore) + ' 12%, transparent)',
+          }}
+        >
+          {props.matchScore}%
+        </span>
+      </div>
+
+      {/* Readiness score chip */}
+      <div className="flex items-center gap-1.5">
+        <span
+          className="text-[10px] font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--p-text-dim)' }}
+        >
+          Ready
+        </span>
+        <span
+          className="text-xs font-bold px-1.5 py-0.5 rounded"
+          style={{
+            color: scoreTierColor(props.readinessScore),
+            background: 'color-mix(in srgb, ' + scoreTierColor(props.readinessScore) + ' 12%, transparent)',
+          }}
+        >
+          {props.readinessScore}
+        </span>
+      </div>
+
+      {/* Divider */}
+      <span style={{ color: 'var(--p-border)' }}>|</span>
+
+      {/* Single actionable cue — biggest blocker or fastest win */}
+      <div className="flex items-center gap-1.5">
+        <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--p-danger, #ef4444)' }} />
+        <span
+          className="text-[11px] font-medium truncate"
+          style={{ color: 'var(--p-text-muted)', maxWidth: '320px' }}
+        >
+          Biggest blocker: {props.biggestBlocker}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: Tab bar — primary workspace mode switcher + overall score
+// ---------------------------------------------------------------------------
+//
+// The tab row is the primary mode-switching surface for the Resume Builder.
+// It uses a grouped / segmented-control visual treatment: tabs sit inside
+// a subtle bordered container with stronger hit areas (px-4 py-2.5) and
+// an accent bottom-bar for the active tab. Hover uses explicit useState
+// tracking with an underline-hint pattern, consistent with the mode-switch
+// interaction-state standard (not INTERACTIVE_HOVER_CLASS, which applies
+// background-fill hover that conflicts with underline tab semantics).
+//
+// At the far end of the row, a compact overall score module shows the
+// resume-level Match and Readiness scores. This replaces the need for
+// a separate full-width status strip below the tabs.
+//
+
+/**
+ * Individual tab button with explicit hover tracking for underline-hint
+ * feedback, per the mode-switch interaction-state standard.
+ */
+function WorkspaceModeTabButton(props: {
+  tab: { id: WorkspaceTab; label: string; badge?: number };
+  isActive: boolean;
+  badgeCount: number;
+  onClick: () => void;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+
+  /*
+   * Visual styles:
+   *   Active:  accent text, 2px accent bottom bar, faint accent bg tint
+   *   Hovered: text brightens, faint underline hint appears
+   *   Default: muted text, no decoration
+   * Active must survive hover without regression.
+   */
+  let textColor = 'var(--p-text-muted)';
+  let bottomBorder = '2px solid transparent';
+  let bgTint = 'transparent';
+
+  if (props.isActive) {
+    textColor = 'var(--p-accent)';
+    bottomBorder = '2px solid var(--p-accent)';
+    bgTint = 'color-mix(in srgb, var(--p-accent) 6%, transparent)';
+  } else if (isHovered) {
+    textColor = 'var(--p-text)';
+    bottomBorder = '2px solid var(--p-text-dim)';
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      onMouseEnter={function () { setIsHovered(true); }}
+      onMouseLeave={function () { setIsHovered(false); }}
+      className="px-4 py-2.5 text-xs font-medium transition-colors relative outline-none focus-visible:ring-2 focus-visible:ring-inset"
+      style={Object.assign(
+        {
+          color: textColor,
+          borderBottom: bottomBorder,
+          background: bgTint,
+        },
+        { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
+      )}
+      role="tab"
+      aria-selected={props.isActive}
+      aria-controls={'resume-tabpanel-' + props.tab.id}
+      id={'resume-tab-' + props.tab.id}
+      data-testid={'resume-tab-' + props.tab.id}
+    >
+      {props.tab.label}
+      {props.badgeCount > 0 && (
+        <span
+          className="ml-1.5 inline-flex items-center justify-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+          style={{
+            background: 'color-mix(in srgb, var(--p-warning, #eab308) 20%, transparent)',
+            color: 'var(--p-warning, #eab308)',
+          }}
+        >
+          {props.badgeCount}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Workspace mode tab bar with grouped/segmented treatment and inline
+ * overall score module. The score module sits at the far-right end of
+ * the tab row so the user always sees resume-level scores without a
+ * separate strip.
  */
 function TabBar(props: {
   activeTab: WorkspaceTab;
   onTabChange: (tab: WorkspaceTab) => void;
   proposalCount: number;
+  matchScore: number;
+  readinessScore: number;
+  activeJob: Job | null;
 }) {
   return (
     <div
-      className="flex items-center gap-0 px-2 flex-shrink-0"
+      className="flex items-center flex-shrink-0"
       style={{
         borderBottom: '1px solid var(--p-border)',
         background: 'var(--p-surface)',
       }}
-      role="tablist"
-      aria-label="Resume Builder views"
       data-testid="resume-builder-tabs"
     >
-      {WORKSPACE_TABS.map(function (tab) {
-        const isActive = tab.id === props.activeTab;
-        /* For Suggested Changes, show the proposal count badge. */
-        const badgeCount = tab.id === 'suggested-changes' ? props.proposalCount : (tab.badge || 0);
+      {/* Grouped tab buttons — segmented inside a shared row */}
+      <div
+        className="flex items-center"
+        role="tablist"
+        aria-label="Resume Builder views"
+      >
+        {WORKSPACE_TABS.map(function (tab) {
+          const isActive = tab.id === props.activeTab;
+          const badgeCount = tab.id === 'suggested-changes' ? props.proposalCount : (tab.badge || 0);
 
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={function () { props.onTabChange(tab.id); }}
-            className="px-3 py-2 text-xs font-medium transition-colors relative"
-            style={{
-              color: isActive ? 'var(--p-accent)' : 'var(--p-text-muted)',
-              borderBottom: isActive ? '2px solid var(--p-accent)' : '2px solid transparent',
-              background: 'transparent',
-            }}
-            role="tab"
-            aria-selected={isActive}
-            aria-controls={'resume-tabpanel-' + tab.id}
-            id={'resume-tab-' + tab.id}
-            data-testid={'resume-tab-' + tab.id}
-          >
-            {tab.label}
-            {badgeCount > 0 && (
+          return (
+            <WorkspaceModeTabButton
+              key={tab.id}
+              tab={tab}
+              isActive={isActive}
+              badgeCount={badgeCount}
+              onClick={function () { props.onTabChange(tab.id); }}
+            />
+          );
+        })}
+      </div>
+
+      {/* Spacer pushes score module to far right */}
+      <div className="flex-1" />
+
+      {/* Overall resume score module — compact persistent anchor */}
+      <div
+        className="flex items-center gap-3 px-4 flex-shrink-0"
+        data-testid="overall-score-module"
+      >
+        {props.activeJob ? (
+          <>
+            {/* Match score chip */}
+            <div className="flex items-center gap-1">
               <span
-                className="ml-1.5 inline-flex items-center justify-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                className="text-[10px] font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--p-text-dim)' }}
+              >
+                Match
+              </span>
+              <span
+                className="text-xs font-bold px-1.5 py-0.5 rounded"
                 style={{
-                  background: 'color-mix(in srgb, var(--p-warning, #eab308) 20%, transparent)',
-                  color: 'var(--p-warning, #eab308)',
+                  color: scoreTierColor(props.matchScore),
+                  background: 'color-mix(in srgb, ' + scoreTierColor(props.matchScore) + ' 12%, transparent)',
                 }}
               >
-                {badgeCount}
+                {props.matchScore}%
               </span>
-            )}
-          </button>
-        );
-      })}
+            </div>
+            {/* Readiness score chip */}
+            <div className="flex items-center gap-1">
+              <span
+                className="text-[10px] font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--p-text-dim)' }}
+              >
+                Ready
+              </span>
+              <span
+                className="text-xs font-bold px-1.5 py-0.5 rounded"
+                style={{
+                  color: scoreTierColor(props.readinessScore),
+                  background: 'color-mix(in srgb, ' + scoreTierColor(props.readinessScore) + ' 12%, transparent)',
+                }}
+              >
+                {props.readinessScore}
+              </span>
+            </div>
+          </>
+        ) : (
+          <span
+            className="text-[11px]"
+            style={{ color: 'var(--p-text-dim)' }}
+          >
+            No target job
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -1391,6 +2347,87 @@ function IntelligenceStrip(props: {
       pendingProposalCount={props.proposalCount}
       activeJob={props.activeJob}
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: Section editor header — active section context bar
+// ---------------------------------------------------------------------------
+//
+// Shown at the top of the center editing surface when a section is
+// selected. Provides clear identification of what section is open for
+// focused editing. Includes the section icon, label, and key metadata
+// (completion, issues, relevance) so the user always knows their context.
+//
+
+/**
+ * Section editor header — inline element identifying the active section.
+ *
+ * Renders as an inline flex row (no outer container/border) so it can
+ * sit inside the focused-editor breadcrumb bar. Shows the section icon,
+ * label, and compact metadata (completion, issues, relevance).
+ */
+function SectionEditorHeader(props: {
+  sectionId: SectionId;
+  sectionMeta: SectionMeta | null;
+}) {
+  /* Look up the section definition for icon and full label. */
+  let sectionDef = SECTION_DEFS[0];
+  for (let i = 0; i < SECTION_DEFS.length; i++) {
+    if (SECTION_DEFS[i].id === props.sectionId) {
+      sectionDef = SECTION_DEFS[i];
+      break;
+    }
+  }
+  const IconComponent = sectionDef.icon;
+
+  /* Extract metadata values with explicit null checks (no ?. operator). */
+  const completionPct = props.sectionMeta ? props.sectionMeta.completionPct : 0;
+  const issueCount = props.sectionMeta ? props.sectionMeta.issueCount : 0;
+  const relevancePct = props.sectionMeta ? props.sectionMeta.relevancePct : 0;
+
+  return (
+    <div
+      className="flex items-center gap-2.5 flex-1"
+      data-testid="section-editor-header"
+    >
+      <IconComponent
+        className="w-4.5 h-4.5 flex-shrink-0"
+        style={{ color: 'var(--p-accent)' }}
+      />
+      <div className="flex-1 min-w-0">
+        <h2
+          className="text-sm font-semibold truncate"
+          style={{ color: 'var(--p-text)' }}
+        >
+          {sectionDef.label}
+        </h2>
+      </div>
+      {/* Compact metadata chips — inline with the section name */}
+      {props.sectionMeta && (
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
+            {completionPct}%
+          </span>
+          {issueCount > 0 && (
+            <span
+              className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+              style={{
+                color: 'var(--p-danger, #ef4444)',
+                background: 'color-mix(in srgb, var(--p-danger, #ef4444) 12%, transparent)',
+              }}
+            >
+              {issueCount} {issueCount === 1 ? 'issue' : 'issues'}
+            </span>
+          )}
+          {relevancePct > 0 && (
+            <span className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
+              {relevancePct}% relevant
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1662,6 +2699,27 @@ function InlineRewriteCard(props: {
  * When editingBulletId matches this bullet, the text appears in a textarea.
  * When activeSuggestionBulletId matches, the inline rewrite card appears below.
  */
+/**
+ * Single bullet row in a work experience entry.
+ *
+ * Renders differently depending on the view/edit-ready mode:
+ *
+ * View mode (sectionEditReady = false):
+ *   - Clean, document-like bullet text without health dots or badges
+ *   - Reads like a real resume bullet point
+ *   - No inline action buttons visible
+ *   - Text is not clickable (no cursor-text)
+ *
+ * Edit-ready mode (sectionEditReady = true):
+ *   - Health indicator dot appears for non-strong bullets
+ *   - Health badge appears for weak/generic bullets
+ *   - Inline action buttons are visible
+ *   - Text is clickable to enter editing
+ *   - Subtle background tint signals editable state
+ *
+ * Active editing state (isEditing = true):
+ *   - Always shows the textarea regardless of edit-ready mode
+ */
 function BulletRow(props: {
   bullet: ResumeBulletVM;
   experienceId: string;
@@ -1673,34 +2731,41 @@ function BulletRow(props: {
   onRewrite: () => void;
   showActions: boolean;
   autonomyMode: AutonomyMode;
+  sectionEditReady: boolean;
 }) {
   const healthColor = BULLET_HEALTH_COLORS[props.bullet.health];
   const healthLabel = BULLET_HEALTH_LABELS[props.bullet.health];
   const isWeak = props.bullet.health === 'weak';
   const isGeneric = props.bullet.health === 'generic';
-  const showHealthBadge = isWeak || isGeneric || props.bullet.health === 'needs-evidence';
+  const showHealthBadge = props.sectionEditReady && (isWeak || isGeneric || props.bullet.health === 'needs-evidence');
+
+  /* In edit-ready mode, show actions for ALL bullets (not just weak ones).
+   * In view mode, never show actions — the resume slice should read clean. */
+  const showInlineActions = props.sectionEditReady && !props.isEditing;
 
   return (
     <div
       className="group flex items-start gap-2 py-1.5 px-1 rounded transition-colors"
       style={{
-        background: isWeak
+        background: props.sectionEditReady && isWeak
           ? 'color-mix(in srgb, var(--p-danger, #ef4444) 5%, transparent)'
           : 'transparent',
       }}
       data-testid={'bullet-row-' + props.bullet.id}
     >
-      {/* Health indicator dot */}
-      <span
-        className="w-2 h-2 rounded-full mt-1.5 flex-shrink-0"
-        style={{ background: healthColor }}
-        aria-label={healthLabel + ' bullet'}
-      />
+      {/* Health indicator dot — only visible in edit-ready mode */}
+      {props.sectionEditReady && (
+        <span
+          className="w-2 h-2 rounded-full mt-2 flex-shrink-0"
+          style={{ background: healthColor }}
+          aria-label={healthLabel + ' bullet'}
+        />
+      )}
 
       {/* Bullet content */}
       <div className="flex-1 min-w-0">
         {props.isEditing ? (
-          /* Edit mode: textarea */
+          /* Active editing: textarea with accent border */
           <textarea
             value={props.editText}
             onChange={function (e: React.ChangeEvent<HTMLTextAreaElement>) {
@@ -1716,7 +2781,7 @@ function BulletRow(props: {
                 props.onEditSave();
               }
             }}
-            className="w-full text-xs leading-relaxed px-2 py-1.5 rounded resize-y outline-none"
+            className="w-full text-sm leading-relaxed px-2 py-1.5 rounded resize-y outline-none"
             style={{
               background: 'var(--p-surface2)',
               border: '1px solid var(--p-accent)',
@@ -1727,25 +2792,25 @@ function BulletRow(props: {
             aria-label="Edit bullet text"
           />
         ) : (
-          /* View mode: text with click-to-edit */
+          /* Read state — mode-dependent presentation */
           <div className="flex items-start gap-2">
             <p
-              className="text-xs leading-relaxed flex-1 cursor-text"
+              className={'text-sm leading-relaxed flex-1' + (props.sectionEditReady ? ' cursor-text' : '')}
               style={{ color: 'var(--p-text)' }}
-              onClick={props.onEditStart}
-              role="button"
-              tabIndex={0}
-              onKeyDown={function (e: React.KeyboardEvent<HTMLParagraphElement>) {
+              onClick={props.sectionEditReady ? props.onEditStart : undefined}
+              role={props.sectionEditReady ? 'button' : undefined}
+              tabIndex={props.sectionEditReady ? 0 : undefined}
+              onKeyDown={props.sectionEditReady ? function (e: React.KeyboardEvent<HTMLParagraphElement>) {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
                   props.onEditStart();
                 }
-              }}
-              aria-label={'Edit bullet: ' + props.bullet.text.slice(0, 40)}
+              } : undefined}
+              aria-label={props.sectionEditReady ? 'Edit bullet: ' + props.bullet.text.slice(0, 40) : undefined}
             >
               {'• ' + props.bullet.text}
             </p>
-            {/* Health badge for non-strong bullets */}
+            {/* Health badge — only visible in edit-ready mode for non-strong bullets */}
             {showHealthBadge && (
               <span
                 className="text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 mt-0.5"
@@ -1760,8 +2825,10 @@ function BulletRow(props: {
           </div>
         )}
 
-        {/* Inline actions — shown for all bullets, but emphasized for weak/generic */}
-        {props.showActions && !props.isEditing && (
+        {/* Inline actions — visible in edit-ready mode for all bullets.
+         * Rewrite is emphasized for weak/generic bullets but available
+         * for all bullets when the section is in edit-ready mode. */}
+        {showInlineActions && (
           <div className="flex items-center gap-1.5 mt-1">
             {props.autonomyMode === 'assisted' && (
               <button
@@ -1814,9 +2881,25 @@ function BulletRow(props: {
 // ---------------------------------------------------------------------------
 
 /**
- * One experience entry in the resume canvas. Shows job title, employer,
- * dates, grade, location, and individual bullets with health states.
- * Supports inline editing of bullet text and triggering rewrite suggestions.
+ * One experience entry in the resume canvas.
+ *
+ * Formatted to match how a real federal resume work entry looks:
+ * - Job title (bold) with grade inline
+ * - Employer on a separate line
+ * - Location, dates, hours on a detail line
+ * - Bullets underneath in a structured list
+ *
+ * In view mode (sectionEditReady = false):
+ *   - Clean, document-like presentation with no editing affordances
+ *   - The pencil icon is hidden
+ *   - "Add bullet" button is hidden
+ *   - Reads like a polished resume entry
+ *
+ * In edit-ready mode (sectionEditReady = true):
+ *   - Pencil icon is visible and functional
+ *   - Bullets show health indicators and inline actions
+ *   - "Add bullet" button appears
+ *   - Experience header gets a subtle editable highlight
  */
 function ExperienceBlock(props: {
   experience: ResumeExperience;
@@ -1827,6 +2910,7 @@ function ExperienceBlock(props: {
   activeSuggestion: InlineSuggestionDef | null;
   autonomyMode: AutonomyMode;
   proposalCount: number;
+  sectionEditReady: boolean;
   onBulletEditStart: (bulletId: string, text: string) => void;
   onBulletEditChange: (text: string) => void;
   onBulletEditSave: () => void;
@@ -1839,37 +2923,58 @@ function ExperienceBlock(props: {
   const exp = props.experience;
 
   return (
-    <div className="mb-4" data-testid={'experience-block-' + exp.id}>
-      {/* Experience header */}
-      <div className="flex items-start justify-between mb-1">
+    <div
+      className="mb-6 pb-4"
+      style={{ borderBottom: '1px solid var(--p-border)' }}
+      data-testid={'experience-block-' + exp.id}
+    >
+      {/* Experience header — resume-style job title block.
+       * In edit-ready mode, the header gets a subtle tint and the
+       * pencil icon becomes visible/functional. */}
+      <div
+        className="flex items-start justify-between mb-2 rounded px-2 py-1.5 transition-colors"
+        style={{
+          background: props.sectionEditReady
+            ? 'color-mix(in srgb, var(--p-accent) 3%, transparent)'
+            : 'transparent',
+          marginLeft: '-0.5rem',
+          marginRight: '-0.5rem',
+        }}
+      >
         <div>
-          <h4 className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>
+          {/* Job title — bold, prominent, with optional grade */}
+          <h4 className="text-sm font-bold" style={{ color: 'var(--p-text)' }}>
             {exp.jobTitle}
-            {exp.grade && (
-              <span className="ml-2 text-[11px] font-normal" style={{ color: 'var(--p-text-dim)' }}>
-                {exp.grade}
+            {exp.grade ? (
+              <span className="ml-2 text-xs font-normal" style={{ color: 'var(--p-text-dim)' }}>
+                {'(' + exp.grade + ')'}
               </span>
-            )}
+            ) : null}
           </h4>
-          <p className="text-xs" style={{ color: 'var(--p-text-muted)' }}>
+          {/* Employer name */}
+          <p className="text-sm mt-0.5" style={{ color: 'var(--p-text-muted)' }}>
             {exp.employer}
           </p>
-          <p className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
-            {exp.location} · {exp.startDate} - {exp.endDate} · {exp.hoursPerWeek} hours/week
+          {/* Location, dates, hours — detail line */}
+          <p className="text-xs mt-0.5" style={{ color: 'var(--p-text-dim)' }}>
+            {exp.location + '  ·  ' + exp.startDate + ' – ' + exp.endDate + '  ·  ' + exp.hoursPerWeek + ' hours/week'}
           </p>
         </div>
-        <button
-          type="button"
-          className={'p-1.5 rounded ' + INTERACTIVE_HOVER_CLASS}
-          style={{ color: 'var(--p-text-dim)' }}
-          aria-label={'Edit ' + exp.jobTitle + ' details'}
-        >
-          <Pencil className="w-3.5 h-3.5" />
-        </button>
+        {/* Pencil icon — only visible in edit-ready mode */}
+        {props.sectionEditReady && (
+          <button
+            type="button"
+            className={'p-1.5 rounded flex-shrink-0 ' + INTERACTIVE_HOVER_CLASS}
+            style={{ color: 'var(--p-accent)' }}
+            aria-label={'Edit ' + exp.jobTitle + ' details'}
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
 
-      {/* Bullets */}
-      <div className="mt-2 space-y-0.5">
+      {/* Bullets — resume-like list of accomplishment statements */}
+      <div className="mt-3 space-y-0.5">
         {props.bullets.map(function (bullet) {
           const isEditing = props.editingBulletId === bullet.id;
           const showSuggestion = props.activeSuggestionBulletId === bullet.id && props.activeSuggestion !== null;
@@ -1888,6 +2993,7 @@ function ExperienceBlock(props: {
                 onRewrite={function () { props.onBulletRewrite(bullet.id); }}
                 showActions={isWeak}
                 autonomyMode={props.autonomyMode}
+                sectionEditReady={props.sectionEditReady}
               />
               {/* Inline rewrite card (appears below the bullet) */}
               {showSuggestion && props.activeSuggestion !== null && (
@@ -1904,20 +3010,22 @@ function ExperienceBlock(props: {
         })}
       </div>
 
-      {/* Add bullet button */}
-      <button
-        type="button"
-        onClick={function () { props.onAddBullet(exp.id); }}
-        className={'flex items-center gap-1 mt-2 px-2 py-1 text-[11px] rounded ' + INTERACTIVE_HOVER_CLASS}
-        style={{
-          color: 'var(--p-text-dim)',
-          border: '1px dashed var(--p-border)',
-          background: 'transparent',
-        }}
-      >
-        <Plus className="w-3 h-3" />
-        Add bullet
-      </button>
+      {/* Add bullet button — only visible in edit-ready mode */}
+      {props.sectionEditReady && (
+        <button
+          type="button"
+          onClick={function () { props.onAddBullet(exp.id); }}
+          className={'flex items-center gap-1 mt-3 px-2 py-1 text-[11px] rounded ' + INTERACTIVE_HOVER_CLASS}
+          style={{
+            color: 'var(--p-text-dim)',
+            border: '1px dashed var(--p-border)',
+            background: 'transparent',
+          }}
+        >
+          <Plus className="w-3 h-3" />
+          Add bullet
+        </button>
+      )}
     </div>
   );
 }
@@ -1930,6 +3038,10 @@ function ExperienceBlock(props: {
  * Professional summary section on the resume canvas. When empty, shows a
  * high-impact missing state with trust-first, job-aware messaging. When
  * filled, shows the summary text with edit capability.
+ *
+ * In edit-ready mode, the filled summary text gets a subtle highlight
+ * border and background tint to signal that clicking will open the
+ * editor. In view mode, the text reads like a polished resume paragraph.
  */
 function ProfessionalSummaryBlock(props: {
   summary: string;
@@ -1939,13 +3051,21 @@ function ProfessionalSummaryBlock(props: {
   onEditStart: () => void;
   onEditChange: (text: string) => void;
   onEditSave: () => void;
+  sectionEditReady: boolean;
 }) {
   const isEmpty = !props.summary || !props.summary.trim();
 
   return (
     <div className="mb-4" data-testid="professional-summary-block">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--p-text)' }}>
+      {/* Section heading — uses resume-style uppercase label */}
+      <div className="flex items-center justify-between mb-3">
+        <h3
+          className="text-xs font-bold uppercase tracking-wider"
+          style={{
+            color: 'var(--p-text)',
+            letterSpacing: '0.08em',
+          }}
+        >
           Professional Summary
         </h3>
         {isEmpty && (
@@ -1962,9 +3082,11 @@ function ProfessionalSummaryBlock(props: {
       </div>
 
       {isEmpty ? (
-        /* Missing state — high-impact, trust-first messaging */
+        /* Missing state — high-impact, trust-first messaging.
+         * Sits within the resume-slice document structure so even
+         * the placeholder feels like part of the resume layout. */
         <div
-          className="flex flex-col items-center justify-center py-6 rounded-lg cursor-pointer transition-colors"
+          className="flex flex-col items-center justify-center py-8 rounded-lg cursor-pointer transition-colors"
           style={{
             border: '1px dashed var(--p-border)',
             background: 'color-mix(in srgb, var(--p-surface2) 50%, transparent)',
@@ -1990,14 +3112,14 @@ function ProfessionalSummaryBlock(props: {
           </p>
         </div>
       ) : props.isEditing ? (
-        /* Edit mode */
+        /* Active editing state — textarea with accent border */
         <textarea
           value={props.editText}
           onChange={function (e: React.ChangeEvent<HTMLTextAreaElement>) {
             props.onEditChange(e.target.value);
           }}
           onBlur={props.onEditSave}
-          className="w-full text-xs leading-relaxed px-3 py-2 rounded resize-y outline-none"
+          className="w-full text-sm leading-relaxed px-3 py-2.5 rounded resize-y outline-none"
           style={{
             background: 'var(--p-surface2)',
             border: '1px solid var(--p-accent)',
@@ -2008,20 +3130,32 @@ function ProfessionalSummaryBlock(props: {
           aria-label="Edit professional summary"
         />
       ) : (
-        /* Filled state — click to edit */
+        /* Filled state — reads like a real resume paragraph.
+         * In edit-ready mode, adds a subtle border and tint so the
+         * user can see that clicking will activate the editor.
+         * In view mode, the paragraph is clean and unadorned. */
         <p
-          className="text-xs leading-relaxed cursor-text rounded px-1 py-1 transition-colors"
-          style={{ color: 'var(--p-text-muted)' }}
-          onClick={props.onEditStart}
-          role="button"
-          tabIndex={0}
-          onKeyDown={function (e: React.KeyboardEvent<HTMLParagraphElement>) {
+          className="text-sm leading-relaxed rounded px-2 py-2 transition-all"
+          style={{
+            color: 'var(--p-text-muted)',
+            cursor: props.sectionEditReady ? 'text' : 'default',
+            border: props.sectionEditReady
+              ? '1px dashed var(--p-accent-muted, var(--p-border))'
+              : '1px solid transparent',
+            background: props.sectionEditReady
+              ? 'color-mix(in srgb, var(--p-accent) 3%, transparent)'
+              : 'transparent',
+          }}
+          onClick={props.sectionEditReady ? props.onEditStart : undefined}
+          role={props.sectionEditReady ? 'button' : undefined}
+          tabIndex={props.sectionEditReady ? 0 : undefined}
+          onKeyDown={props.sectionEditReady ? function (e: React.KeyboardEvent<HTMLParagraphElement>) {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
               props.onEditStart();
             }
-          }}
-          aria-label="Edit professional summary"
+          } : undefined}
+          aria-label={props.sectionEditReady ? 'Edit professional summary' : undefined}
         >
           {props.summary}
         </p>
@@ -2036,31 +3170,84 @@ function ProfessionalSummaryBlock(props: {
 
 /**
  * Top of the resume canvas showing the applicant's name, location,
- * phone, and email in a compact header format.
+ * phone, and email in a structured contact block.
+ *
+ * Designed to match how a real federal resume header looks:
+ * - Name in prominent uppercase tracking
+ * - Contact details in a clean, emoji-free line below
+ * - Citizenship and veteran status on a third line (federal-specific)
+ * - Subtle bottom border to separate from the summary section
+ *
+ * When sectionEditReady is true, the contact block shows a faint
+ * editable highlight to signal that fields can be modified.
  */
-function ContactHeader(props: { draft: ResumeDraft }) {
+function ContactHeader(props: { draft: ResumeDraft; sectionEditReady: boolean }) {
   const c = props.draft.contact;
   const name = c.fullName || 'Your Name';
   const location = (c.city && c.state) ? c.city + ', ' + c.state : '';
   const phone = c.phone || '';
   const email = c.email || '';
+  const citizenship = c.citizenship || '';
+  const veteranStatus = c.veteranStatus || '';
 
   return (
-    <div className="text-center mb-4 pb-3" style={{ borderBottom: '1px solid var(--p-border)' }}>
-      <h2 className="text-base font-bold tracking-wide" style={{ color: 'var(--p-text)' }}>
+    <div
+      className="text-center mb-4 pb-4 rounded transition-colors"
+      style={{
+        borderBottom: '2px solid var(--p-border)',
+        background: props.sectionEditReady
+          ? 'color-mix(in srgb, var(--p-accent) 3%, transparent)'
+          : 'transparent',
+        padding: props.sectionEditReady ? '1rem' : '0',
+      }}
+    >
+      {/* Applicant name — prominent, resume-style uppercase */}
+      <h2
+        className="text-lg font-bold tracking-widest"
+        style={{ color: 'var(--p-text)', letterSpacing: '0.12em' }}
+      >
         {name.toUpperCase()}
       </h2>
-      <div className="flex items-center justify-center gap-3 mt-1 text-[11px]" style={{ color: 'var(--p-text-muted)' }}>
+
+      {/* Primary contact line — location, phone, email separated by pipes */}
+      <div
+        className="flex items-center justify-center gap-2 mt-2 text-xs"
+        style={{ color: 'var(--p-text-muted)' }}
+      >
         {location && (
-          <span>{'📍 ' + location}</span>
+          <span>{location}</span>
+        )}
+        {location && phone && (
+          <span style={{ color: 'var(--p-text-dim)' }}>|</span>
         )}
         {phone && (
-          <span>{'📞 ' + phone}</span>
+          <span>{phone}</span>
+        )}
+        {(location || phone) && email && (
+          <span style={{ color: 'var(--p-text-dim)' }}>|</span>
         )}
         {email && (
-          <span>{'📧 ' + email}</span>
+          <span>{email}</span>
         )}
       </div>
+
+      {/* Federal-specific line — citizenship and veteran status */}
+      {(citizenship || veteranStatus) && (
+        <div
+          className="flex items-center justify-center gap-2 mt-1 text-[11px]"
+          style={{ color: 'var(--p-text-dim)' }}
+        >
+          {citizenship && (
+            <span>{'Citizenship: ' + citizenship}</span>
+          )}
+          {citizenship && veteranStatus && (
+            <span>|</span>
+          )}
+          {veteranStatus && (
+            <span>{'Veteran Status: ' + veteranStatus}</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2069,13 +3256,30 @@ function ContactHeader(props: { draft: ResumeDraft }) {
 // Sub-component: Education section on the canvas
 // ---------------------------------------------------------------------------
 
-function EducationSection(props: { draft: ResumeDraft }) {
+/**
+ * Education section formatted like a real resume education block.
+ *
+ * Each entry shows degree + field on one line, institution on the next,
+ * and graduation date with optional GPA on a third line. This mirrors
+ * the typographic rhythm of a professional federal resume.
+ *
+ * In edit-ready mode, each education entry gets a subtle editable
+ * highlight to signal that fields can be modified.
+ */
+function EducationSection(props: { draft: ResumeDraft; sectionEditReady: boolean }) {
   if (props.draft.education.length === 0) return null;
 
   return (
     <div className="mb-4" data-testid="education-section">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--p-text)' }}>
+      {/* Section heading — resume-style uppercase label */}
+      <div
+        className="flex items-center justify-between mb-4 pb-2"
+        style={{ borderBottom: '1px solid var(--p-border)' }}
+      >
+        <h3
+          className="text-xs font-bold uppercase tracking-wider"
+          style={{ color: 'var(--p-text)', letterSpacing: '0.08em' }}
+        >
           Education
         </h3>
         <span className="text-[10px] px-1.5 py-0.5 rounded" style={{
@@ -2085,18 +3289,34 @@ function EducationSection(props: { draft: ResumeDraft }) {
           Complete
         </span>
       </div>
+
+      {/* Education entries — structured like a resume education section */}
       {props.draft.education.map(function (edu) {
         return (
-          <div key={edu.id} className="mb-2">
-            <p className="text-xs font-semibold" style={{ color: 'var(--p-text)' }}>
+          <div
+            key={edu.id}
+            className="mb-4 rounded px-2 py-2 transition-colors"
+            style={{
+              background: props.sectionEditReady
+                ? 'color-mix(in srgb, var(--p-accent) 3%, transparent)'
+                : 'transparent',
+              border: props.sectionEditReady
+                ? '1px dashed var(--p-accent-muted, var(--p-border))'
+                : '1px solid transparent',
+            }}
+          >
+            {/* Degree and field — primary line, bold */}
+            <p className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>
               {edu.degree} in {edu.field}
             </p>
-            <p className="text-xs" style={{ color: 'var(--p-text-muted)' }}>
+            {/* Institution name */}
+            <p className="text-xs mt-0.5" style={{ color: 'var(--p-text-muted)' }}>
               {edu.institution}
             </p>
-            <p className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
-              Graduated {edu.graduationDate}
-              {edu.gpa ? ' | GPA: ' + edu.gpa : ''}
+            {/* Graduation date and optional GPA */}
+            <p className="text-xs mt-0.5" style={{ color: 'var(--p-text-dim)' }}>
+              {'Graduated: ' + edu.graduationDate}
+              {edu.gpa ? '  ·  GPA: ' + edu.gpa : ''}
             </p>
           </div>
         );
@@ -2109,37 +3329,73 @@ function EducationSection(props: { draft: ResumeDraft }) {
 // Sub-component: Skills section on the canvas
 // ---------------------------------------------------------------------------
 
-function SkillsSection(props: { draft: ResumeDraft }) {
+/**
+ * Skills section formatted like a resume skills block.
+ *
+ * Instead of loose chips floating in space, skills are presented in a
+ * denser, comma-separated line format that mirrors how skills appear
+ * on a real federal resume. This reduces dead space and gives the
+ * section a document-like rhythm.
+ *
+ * In edit-ready mode, individual skills get chip-style interactive
+ * borders, and the layout shifts to the wrapped chip format so the
+ * user can see discrete editing targets.
+ */
+function SkillsSection(props: { draft: ResumeDraft; sectionEditReady: boolean }) {
   if (props.draft.skills.length === 0) return null;
 
   return (
     <div className="mb-4" data-testid="skills-section">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--p-text)' }}>
+      {/* Section heading — resume-style uppercase label */}
+      <div
+        className="flex items-center justify-between mb-4 pb-2"
+        style={{ borderBottom: '1px solid var(--p-border)' }}
+      >
+        <h3
+          className="text-xs font-bold uppercase tracking-wider"
+          style={{ color: 'var(--p-text)', letterSpacing: '0.08em' }}
+        >
           Skills
         </h3>
         <span className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
           85% relevant
         </span>
-        <ChevronDown className="w-3.5 h-3.5" style={{ color: 'var(--p-text-dim)' }} />
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {props.draft.skills.map(function (skill) {
-          return (
-            <span
-              key={skill.id}
-              className="text-[11px] px-2 py-1 rounded"
-              style={{
-                background: 'var(--p-surface2)',
-                color: 'var(--p-text-muted)',
-                border: '1px solid var(--p-border)',
-              }}
-            >
-              {skill.name}
-            </span>
-          );
-        })}
-      </div>
+
+      {/* Skills presentation — mode-dependent layout.
+       * View mode: dense comma-separated list (resume-like).
+       * Edit-ready mode: wrapped chips with editable borders. */}
+      {props.sectionEditReady ? (
+        <div className="flex flex-wrap gap-2">
+          {props.draft.skills.map(function (skill) {
+            return (
+              <span
+                key={skill.id}
+                className="text-xs px-2.5 py-1 rounded transition-colors"
+                style={{
+                  background: 'color-mix(in srgb, var(--p-accent) 5%, var(--p-surface2))',
+                  color: 'var(--p-text-muted)',
+                  border: '1px dashed var(--p-accent-muted, var(--p-border))',
+                  cursor: 'pointer',
+                }}
+              >
+                {skill.name}
+              </span>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="text-sm leading-relaxed" style={{ color: 'var(--p-text-muted)' }}>
+          {/* Dense comma-separated format — reads like resume content */}
+          {(function () {
+            const names: string[] = [];
+            for (let i = 0; i < props.draft.skills.length; i++) {
+              names.push(props.draft.skills[i].name);
+            }
+            return names.join('  ·  ');
+          })()}
+        </div>
+      )}
     </div>
   );
 }
@@ -2148,11 +3404,28 @@ function SkillsSection(props: { draft: ResumeDraft }) {
 // Sub-component: Federal Details section on the canvas
 // ---------------------------------------------------------------------------
 
-function FederalDetailsSection() {
+/**
+ * Federal details section — structured as a document-style data block.
+ *
+ * Federal resumes require specific administrative details that standard
+ * resumes omit. This section presents them in a clean two-column layout
+ * with labeled fields, matching how these details appear on official
+ * federal resume templates.
+ *
+ * In edit-ready mode, each field gets a subtle editable highlight.
+ */
+function FederalDetailsSection(props: { sectionEditReady: boolean }) {
   return (
     <div className="mb-4" data-testid="federal-details-section">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--p-text)' }}>
+      {/* Section heading — resume-style uppercase label */}
+      <div
+        className="flex items-center justify-between mb-4 pb-2"
+        style={{ borderBottom: '1px solid var(--p-border)' }}
+      >
+        <h3
+          className="text-xs font-bold uppercase tracking-wider"
+          style={{ color: 'var(--p-text)', letterSpacing: '0.08em' }}
+        >
           Federal Details
         </h3>
         <span
@@ -2164,25 +3437,38 @@ function FederalDetailsSection() {
         >
           4 items missing
         </span>
-        <ChevronDown className="w-3.5 h-3.5" style={{ color: 'var(--p-text-dim)' }} />
       </div>
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
-        <div>
-          <span style={{ color: 'var(--p-text-dim)' }}>Security Clearance: </span>
-          <span style={{ color: 'var(--p-text)' }}>{MOCK_FEDERAL_DETAILS.securityClearance}</span>
-        </div>
-        <div>
-          <span style={{ color: 'var(--p-text-dim)' }}>Highest Grade: </span>
-          <span style={{ color: 'var(--p-text)' }}>{MOCK_FEDERAL_DETAILS.highestGrade}</span>
-        </div>
-        <div>
-          <span style={{ color: 'var(--p-text-dim)' }}>Federal Employee: </span>
-          <span style={{ color: 'var(--p-text)' }}>Yes</span>
-        </div>
-        <div>
-          <span style={{ color: 'var(--p-text-dim)' }}>Veteran Preference: </span>
-          <span style={{ color: 'var(--p-text)' }}>{MOCK_FEDERAL_DETAILS.veteranPreference}</span>
-        </div>
+
+      {/* Two-column data grid — labeled fields in resume-like layout */}
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-xs">
+        {[
+          { label: 'Security Clearance', value: MOCK_FEDERAL_DETAILS.securityClearance },
+          { label: 'Highest Grade', value: MOCK_FEDERAL_DETAILS.highestGrade },
+          { label: 'Federal Employee', value: MOCK_FEDERAL_DETAILS.federalEmployee ? 'Yes' : 'No' },
+          { label: 'Veteran Preference', value: MOCK_FEDERAL_DETAILS.veteranPreference },
+        ].map(function (field) {
+          return (
+            <div
+              key={field.label}
+              className="rounded px-2 py-1.5 transition-colors"
+              style={{
+                background: props.sectionEditReady
+                  ? 'color-mix(in srgb, var(--p-accent) 3%, transparent)'
+                  : 'transparent',
+                border: props.sectionEditReady
+                  ? '1px dashed var(--p-accent-muted, var(--p-border))'
+                  : '1px solid transparent',
+              }}
+            >
+              <span className="font-medium" style={{ color: 'var(--p-text-dim)' }}>
+                {field.label}
+              </span>
+              <span style={{ color: 'var(--p-text)' }}>
+                {'  ' + field.value}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -2192,20 +3478,49 @@ function FederalDetailsSection() {
 // Sub-component: Certifications section on the canvas
 // ---------------------------------------------------------------------------
 
-function CertificationsSection() {
+/**
+ * Certifications section — structured list with checkmarks.
+ *
+ * Each certification appears as a line item with a success indicator,
+ * matching how certifications appear on a professional resume. The
+ * heading uses the same uppercase treatment as other resume sections.
+ *
+ * In edit-ready mode, each cert entry gets a subtle editable highlight.
+ */
+function CertificationsSection(props: { sectionEditReady: boolean }) {
   return (
     <div className="mb-4" data-testid="certifications-section">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--p-text)' }}>
+      {/* Section heading — resume-style uppercase label */}
+      <div
+        className="flex items-center justify-between mb-4 pb-2"
+        style={{ borderBottom: '1px solid var(--p-border)' }}
+      >
+        <h3
+          className="text-xs font-bold uppercase tracking-wider"
+          style={{ color: 'var(--p-text)', letterSpacing: '0.08em' }}
+        >
           Certifications
         </h3>
-        <ChevronDown className="w-3.5 h-3.5" style={{ color: 'var(--p-text-dim)' }} />
       </div>
-      <div className="space-y-1">
+
+      {/* Certification entries */}
+      <div className="space-y-2">
         {MOCK_CERTIFICATIONS.map(function (cert) {
           return (
-            <div key={cert} className="flex items-center gap-2 text-xs" style={{ color: 'var(--p-text-muted)' }}>
-              <CheckCircle2 className="w-3.5 h-3.5" style={{ color: 'var(--p-success)' }} />
+            <div
+              key={cert}
+              className="flex items-center gap-2.5 text-sm rounded px-2 py-1.5 transition-colors"
+              style={{
+                color: 'var(--p-text-muted)',
+                background: props.sectionEditReady
+                  ? 'color-mix(in srgb, var(--p-accent) 3%, transparent)'
+                  : 'transparent',
+                border: props.sectionEditReady
+                  ? '1px dashed var(--p-accent-muted, var(--p-border))'
+                  : '1px solid transparent',
+              }}
+            >
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--p-success)' }} />
               {cert}
             </div>
           );
@@ -2219,11 +3534,29 @@ function CertificationsSection() {
 // Sub-component: Supporting Evidence section on the canvas
 // ---------------------------------------------------------------------------
 
-function SupportingEvidenceSection() {
+/**
+ * Supporting evidence section — placeholder for awards, publications,
+ * and other supplementary resume materials.
+ *
+ * This section uses the same heading treatment and document framing
+ * as other resume sections. The placeholder text sits within the
+ * resume-slice structure so even the empty state feels like a real
+ * section of a federal resume.
+ *
+ * In edit-ready mode, the content area gets a subtle highlight.
+ */
+function SupportingEvidenceSection(props: { sectionEditReady: boolean }) {
   return (
     <div className="mb-4" data-testid="supporting-evidence-section">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--p-text)' }}>
+      {/* Section heading — resume-style uppercase label */}
+      <div
+        className="flex items-center justify-between mb-4 pb-2"
+        style={{ borderBottom: '1px solid var(--p-border)' }}
+      >
+        <h3
+          className="text-xs font-bold uppercase tracking-wider"
+          style={{ color: 'var(--p-text)', letterSpacing: '0.08em' }}
+        >
           Supporting Evidence
         </h3>
         <span
@@ -2233,13 +3566,29 @@ function SupportingEvidenceSection() {
             color: 'var(--p-danger, #ef4444)',
           }}
         >
-          6
+          6 items needed
         </span>
-        <ChevronDown className="w-3.5 h-3.5" style={{ color: 'var(--p-text-dim)' }} />
       </div>
-      <p className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
-        Awards, publications, training records. Add to strengthen application.
-      </p>
+
+      {/* Placeholder content — framed within the section structure */}
+      <div
+        className="rounded px-3 py-4 transition-colors"
+        style={{
+          background: props.sectionEditReady
+            ? 'color-mix(in srgb, var(--p-accent) 3%, transparent)'
+            : 'color-mix(in srgb, var(--p-surface2) 50%, transparent)',
+          border: props.sectionEditReady
+            ? '1px dashed var(--p-accent-muted, var(--p-border))'
+            : '1px dashed var(--p-border)',
+        }}
+      >
+        <p className="text-xs" style={{ color: 'var(--p-text-dim)' }}>
+          Awards, publications, training records, and performance evaluations.
+        </p>
+        <p className="text-xs mt-1" style={{ color: 'var(--p-text-dim)' }}>
+          Add supporting evidence to strengthen your federal application.
+        </p>
+      </div>
     </div>
   );
 }
@@ -3242,6 +4591,44 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
   const [autonomyMode, setAutonomyMode] = useState<AutonomyMode>('assisted');
   const [showTargetJobDropdown, setShowTargetJobDropdown] = useState(false);
 
+  /*
+   * ---- Edit mode: dashboard vs focused ----
+   * Controls the two-state Edit tab. Starts on 'dashboard' so the user
+   * sees the section overview first and can choose which section to work on.
+   *   dashboard: section cards grid — overview of all sections
+   *   focused:   single-section editor — editing one section at a time
+   */
+  const [editMode, setEditMode] = useState<EditMode>('dashboard');
+
+  /*
+   * ---- Section edit-ready mode ----
+   * When focused on a section, the user can toggle between View mode and
+   * Edit-ready mode using the pencil icon in the control row.
+   *
+   * View mode (false):
+   *   Section looks like a polished resume slice — read-first, minimal
+   *   editing affordances. Content is clean and document-like.
+   *
+   * Edit-ready mode (true):
+   *   Editable regions are visibly highlighted. Health badges, inline
+   *   actions, and editing affordances appear or become more prominent.
+   *   The user clearly understands the section is ready for editing.
+   *
+   * Resets to false when:
+   *   - returning to dashboard
+   *   - switching to a different section
+   *   - entering focused mode on a new section
+   */
+  const [sectionEditReady, setSectionEditReady] = useState(false);
+
+  /*
+   * ---- Section dropdown open/close state ----
+   * Controls the custom dropdown in the focused-editor header row that
+   * lets the user switch between sections without going back to the
+   * dashboard. Closes automatically when clicking outside (via effect).
+   */
+  const [showSectionDropdown, setShowSectionDropdown] = useState(false);
+
   /* ---- Bullet view model ---- */
   const [bulletMap, setBulletMap] = useState<Record<string, ResumeBulletVM[]>>({});
 
@@ -3490,6 +4877,26 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     return 'All proposals reviewed';
   }, [activeJob, proposals]);
 
+  /*
+   * ---- Active section metadata for the section editor header ----
+   * Checks EDIT_SECTION_META first (for grouped sections like
+   * 'identity-summary'), then falls back to MOCK_SECTION_META for
+   * individual section IDs used by proposal/coverage logic.
+   */
+  const activeSectionMeta = useMemo(function (): SectionMeta | null {
+    for (let i = 0; i < EDIT_SECTION_META.length; i++) {
+      if (EDIT_SECTION_META[i].id === activeSection) {
+        return EDIT_SECTION_META[i];
+      }
+    }
+    for (let i = 0; i < MOCK_SECTION_META.length; i++) {
+      if (MOCK_SECTION_META[i].id === activeSection) {
+        return MOCK_SECTION_META[i];
+      }
+    }
+    return null;
+  }, [activeSection]);
+
   /* ---- Handler: change target job ---- */
   /*
    * Phase 2 hardening: switching target jobs now explicitly regenerates
@@ -3515,13 +4922,32 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     setProposals(newProposals);
   }, [savedJobs, store.draft]);
 
-  /* ---- Handler: section click in left rail — scroll canvas to section ---- */
+  /*
+   * ---- Handler: section click (from dashboard card or cross-tab jump) ----
+   * Sets the active section and switches Edit to focused mode so the
+   * center surface renders only the selected section's editor.
+   */
   const handleSectionClick = useCallback(function (sectionId: SectionId) {
     setActiveSection(sectionId);
-    const ref = sectionRefs.current[sectionId];
-    if (ref) {
-      ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    setEditMode('focused');
+    /* Reset edit-ready mode when entering a new section so the user
+     * always starts in the polished View mode for the new section. */
+    setSectionEditReady(false);
+  }, []);
+
+  /*
+   * ---- Handler: back to dashboard ----
+   * Returns the Edit tab to the section dashboard overview. Clears any
+   * in-progress editing state to prevent stale bullet or summary edits
+   * from persisting across dashboard transitions.
+   */
+  const handleBackToDashboard = useCallback(function () {
+    setEditMode('dashboard');
+    setEditingBulletId(null);
+    setActiveSuggestionBulletId(null);
+    setEditingSummary(false);
+    /* Reset edit-ready mode when returning to dashboard overview. */
+    setSectionEditReady(false);
   }, []);
 
   /* ---- Handler: start editing a bullet ---- */
@@ -3886,9 +5312,10 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     }
     setProposals(newProposals);
 
-    /* Switch to Edit tab and navigate to the affected section */
+    /* Switch to Edit tab in focused mode for the affected section */
     setActiveTab('edit');
     setActiveSection(targetProposal.sectionKey);
+    setEditMode('focused');
 
     /* Load the suggested content into the appropriate editing state */
     if (targetProposal.type === 'add-summary') {
@@ -3919,48 +5346,40 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     }
 
     /*
-     * Scroll to the target section after a short delay to let the
-     * Edit tab render and the section refs populate.
+     * Section-focused model: setting activeSection above is sufficient
+     * because the center editing surface renders only the selected
+     * section. No delayed scroll is needed.
      */
-    const targetSection = targetProposal.sectionKey;
-    setTimeout(function () {
-      const ref = sectionRefs.current[targetSection];
-      if (ref) {
-        ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 100);
   }, [proposals, bulletMap]);
 
   /*
    * ---- Handler: jump to section from Coverage Map ----
-   * Switches to the Edit tab and scrolls to the specified section.
+   * Switches to the Edit tab in focused mode for the target section.
+   * The section-focused model renders only the selected section, so
+   * no scrollIntoView is needed.
    */
   const handleJumpToSection = useCallback(function (sectionId: SectionId) {
     setActiveTab('edit');
-    setActiveSection(sectionId);
-    setTimeout(function () {
-      const ref = sectionRefs.current[sectionId];
-      if (ref) {
-        ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 100);
+    /* Map individual contact/summary to the combined group */
+    const mappedId = (sectionId === 'contact' || sectionId === 'summary')
+      ? 'identity-summary' as SectionId
+      : sectionId;
+    setActiveSection(mappedId);
+    setEditMode('focused');
   }, []);
 
   /*
    * ---- Handler: edit section from Coverage Map ----
-   * Same as jump to section — switches to Edit and scrolls.
-   * In a future phase this could also activate editing mode for
-   * the specific section.
+   * Switches to the Edit tab in focused mode for the target section.
+   * Maps contact/summary to the combined identity-summary group.
    */
   const handleEditSection = useCallback(function (sectionId: SectionId) {
     setActiveTab('edit');
-    setActiveSection(sectionId);
-    setTimeout(function () {
-      const ref = sectionRefs.current[sectionId];
-      if (ref) {
-        ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 100);
+    const mappedId = (sectionId === 'contact' || sectionId === 'summary')
+      ? 'identity-summary' as SectionId
+      : sectionId;
+    setActiveSection(mappedId);
+    setEditMode('focused');
   }, []);
 
   /*
@@ -4027,6 +5446,21 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     };
   }, [showTargetJobDropdown]);
 
+  /* ---- Handler: close section dropdown when clicking outside ---- */
+  useEffect(function () {
+    if (!showSectionDropdown) return;
+    function handleClick() {
+      setShowSectionDropdown(false);
+    }
+    const timer = setTimeout(function () {
+      document.addEventListener('click', handleClick);
+    }, 10);
+    return function () {
+      clearTimeout(timer);
+      document.removeEventListener('click', handleClick);
+    };
+  }, [showSectionDropdown]);
+
   /* ---- Loading state ---- */
   if (!mounted) {
     return (
@@ -4052,30 +5486,33 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
         onCloseTargetJobDropdown={function () { setShowTargetJobDropdown(false); }}
       />
 
-      {/* 2) Context strip */}
-      <ContextStrip autonomyMode={autonomyMode} proposalCount={pendingProposalCount} />
-
-      {/* 3) Main body: left rail + center panel */}
+      {/* 2) Main body: full-width center panel (left organizer removed) */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left resume sections rail */}
-        <SectionsRail
-          sections={MOCK_SECTION_META}
-          activeSection={activeSection}
-          onSectionClick={handleSectionClick}
-        />
-
-        {/* Center panel: tabs + content */}
+        {/* Center panel: tabs + content — now spans full width */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Tab bar */}
+          {/* Tab bar — primary mode switcher with inline overall score */}
           <TabBar
             activeTab={activeTab}
             onTabChange={setActiveTab}
             proposalCount={pendingProposalCount}
+            matchScore={computedMatchScore}
+            readinessScore={computedReadinessScore}
+            activeJob={activeJob}
           />
 
           {/* Tab content */}
           {activeTab === 'edit' ? (
-            /* ---- Edit tab: intelligence strip + resume canvas ---- */
+            /* ---- Edit tab: two-state workspace ----
+             *
+             * State A: Section Dashboard — grid of section cards showing
+             * health/progress at a glance. User picks which section to work on.
+             *
+             * State B: Focused Section Editor — renders only the selected
+             * section's editing surface with a "Back to sections" control.
+             *
+             * The LiveScoreAnchor stays visible in both states, providing
+             * a compact persistent view of match + readiness scores.
+             */
             <div
               className="flex-1 flex flex-col overflow-hidden"
               role="tabpanel"
@@ -4083,115 +5520,407 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
               aria-labelledby="resume-tab-edit"
               data-testid="resume-tabpanel-edit"
             >
-              {/* Resume Brief — compact summary-first layer replacing dense intel strip */}
-              <IntelligenceStrip
-                activeJob={activeJob}
-                matchScore={computedMatchScore}
-                readinessScore={computedReadinessScore}
-                topGap={computedTopGap}
-                proposalCount={pendingProposalCount}
-                fastestWin={computedFastestWin}
-              />
-
-              {/* Resume canvas — scrollable document */}
+              {/* ---- Persistent local Edit control row ----
+               *
+               * This row persists across BOTH dashboard and focused states,
+               * providing a stable local navigation/control pattern for Edit.
+               *
+               * Three controls:
+               *   1. Home/dashboard icon button — always returns to dashboard
+               *   2. Section dropdown — shows "Overview" on dashboard,
+               *      shows active section on focused state
+               *   3. Section score area — shows section score when focused,
+               *      empty/hidden on dashboard
+               */}
               <div
-                ref={canvasScrollRef}
-                className="flex-1 overflow-y-auto"
-                style={{ background: 'var(--p-bg)' }}
+                className="px-4 py-2 flex items-center gap-2 flex-shrink-0"
+                style={{
+                  borderBottom: '1px solid var(--p-border)',
+                  background: 'var(--p-surface)',
+                }}
+                data-testid="edit-local-control-row"
               >
-                <div className="max-w-[820px] mx-auto px-8 py-6">
-                  {/* Contact header */}
-                  <div ref={function (el) { sectionRefs.current['contact'] = el; }}>
-                    <ContactHeader draft={store.draft} />
-                  </div>
+                {/* 1. Home icon button — return to section dashboard */}
+                <button
+                  type="button"
+                  onClick={handleBackToDashboard}
+                  className={'flex items-center justify-center rounded ' + INTERACTIVE_HOVER_CLASS + ' outline-none focus-visible:ring-2 focus-visible:ring-inset'}
+                  style={Object.assign(
+                    {
+                      width: '30px',
+                      height: '30px',
+                      border: editMode === 'dashboard'
+                        ? '1px solid var(--p-accent)'
+                        : '1px solid var(--p-border)',
+                      background: editMode === 'dashboard'
+                        ? 'color-mix(in srgb, var(--p-accent) 8%, transparent)'
+                        : 'transparent',
+                      color: editMode === 'dashboard'
+                        ? 'var(--p-accent)'
+                        : 'var(--p-text-muted)',
+                      flexShrink: 0,
+                    },
+                    { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
+                  )}
+                  aria-label="Return to section dashboard"
+                  title="Section dashboard"
+                  data-testid="back-to-dashboard-btn"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                </button>
 
-                  {/* Professional Summary */}
-                  <div ref={function (el) { sectionRefs.current['summary'] = el; }}>
-                    <ProfessionalSummaryBlock
-                      summary={store.draft.summary}
-                      onEdit={handleSummaryEditChange}
-                      isEditing={editingSummary}
-                      editText={editingSummaryText}
-                      onEditStart={handleSummaryEditStart}
-                      onEditChange={handleSummaryEditChange}
-                      onEditSave={handleSummaryEditSave}
+                {/* 2. Section dropdown — shows "Overview" on dashboard, active section on focused */}
+                <div className="relative" data-testid="section-dropdown">
+                  <button
+                    type="button"
+                    onClick={function () { setShowSectionDropdown(!showSectionDropdown); }}
+                    className={'flex items-center gap-2 px-3 py-1.5 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                    style={Object.assign(
+                      {
+                        border: '1px solid var(--p-border)',
+                        background: 'transparent',
+                        color: 'var(--p-text)',
+                      },
+                      { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
+                    )}
+                    aria-haspopup="listbox"
+                    aria-expanded={showSectionDropdown}
+                    aria-label={editMode === 'dashboard'
+                      ? 'Section overview — select a section'
+                      : 'Current section: ' + (activeSectionMeta ? activeSectionMeta.label : 'Unknown')}
+                    data-testid="section-dropdown-trigger"
+                  >
+                    {/* Dropdown trigger icon and label */}
+                    {editMode === 'dashboard' ? (
+                      <>
+                        <LayoutGrid className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--p-accent)' }} />
+                        <span className="text-xs font-semibold">Overview</span>
+                      </>
+                    ) : (
+                      <>
+                        {/* Current section icon — looks up from Edit section groups */}
+                        {(function () {
+                          let SectionIcon = FileText;
+                          for (let i = 0; i < EDIT_SECTION_GROUPS.length; i++) {
+                            if (EDIT_SECTION_GROUPS[i].id === activeSection) {
+                              SectionIcon = EDIT_SECTION_GROUPS[i].icon;
+                              break;
+                            }
+                          }
+                          return <SectionIcon className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--p-accent)' }} />;
+                        })()}
+                        <span className="text-xs font-semibold truncate" style={{ maxWidth: '200px' }}>
+                          {activeSectionMeta ? activeSectionMeta.label : 'Unknown'}
+                        </span>
+                      </>
+                    )}
+                    <ChevronDown className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--p-text-dim)' }} />
+                  </button>
+
+                  {/* Dropdown panel — all sections + Overview option */}
+                  {showSectionDropdown && (
+                    <SectionDropdownMenu
+                      sections={EDIT_SECTION_META}
+                      activeSection={activeSection}
+                      editMode={editMode}
+                      onSelectSection={function (id) {
+                        setActiveSection(id);
+                        setEditMode('focused');
+                        setShowSectionDropdown(false);
+                        /* Reset edit-ready when switching sections via dropdown */
+                        setSectionEditReady(false);
+                      }}
+                      onSelectOverview={function () {
+                        handleBackToDashboard();
+                        setShowSectionDropdown(false);
+                      }}
                     />
-                  </div>
-
-                  {/* Work Experience */}
-                  <div ref={function (el) { sectionRefs.current['experience'] = el; }}>
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--p-text)' }}>
-                        Work Experience
-                      </h3>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px]" style={{ color: 'var(--p-text-dim)' }}>
-                          85% relevant
-                        </span>
-                        <span
-                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-                          style={{
-                            background: 'color-mix(in srgb, var(--p-danger, #ef4444) 15%, transparent)',
-                            color: 'var(--p-danger, #ef4444)',
-                          }}
-                        >
-                          2 issues
-                        </span>
-                      </div>
-                    </div>
-
-                    {store.draft.experience.map(function (exp) {
-                      const bullets = bulletMap[exp.id] || [];
-                      return (
-                        <ExperienceBlock
-                          key={exp.id}
-                          experience={exp}
-                          bullets={bullets}
-                          editingBulletId={editingBulletId}
-                          editingBulletText={editingBulletText}
-                          activeSuggestionBulletId={activeSuggestionBulletId}
-                          activeSuggestion={MOCK_INLINE_SUGGESTION}
-                          autonomyMode={autonomyMode}
-                          proposalCount={pendingProposalCount}
-                          onBulletEditStart={handleBulletEditStart}
-                          onBulletEditChange={handleBulletEditChange}
-                          onBulletEditSave={handleBulletEditSave}
-                          onBulletRewrite={handleBulletRewrite}
-                          onSuggestionAccept={handleSuggestionAccept}
-                          onSuggestionEditFirst={handleSuggestionEditFirst}
-                          onSuggestionDismiss={handleSuggestionDismiss}
-                          onAddBullet={handleAddBullet}
-                        />
-                      );
-                    })}
-                  </div>
-
-                  {/* Education */}
-                  <div ref={function (el) { sectionRefs.current['education'] = el; }}>
-                    <EducationSection draft={store.draft} />
-                  </div>
-
-                  {/* Skills */}
-                  <div ref={function (el) { sectionRefs.current['skills'] = el; }}>
-                    <SkillsSection draft={store.draft} />
-                  </div>
-
-                  {/* Federal Details */}
-                  <div ref={function (el) { sectionRefs.current['federal-details'] = el; }}>
-                    <FederalDetailsSection />
-                  </div>
-
-                  {/* Certifications */}
-                  <div ref={function (el) { sectionRefs.current['certifications'] = el; }}>
-                    <CertificationsSection />
-                  </div>
-
-                  {/* Supporting Evidence */}
-                  <div ref={function (el) { sectionRefs.current['supporting-evidence'] = el; }}>
-                    <SupportingEvidenceSection />
-                  </div>
+                  )}
                 </div>
+
+                {/* Spacer */}
+                <div className="flex-1" />
+
+                {/* 3. Edit-ready toggle — visible only in focused mode.
+                 *
+                 * This pencil button toggles between View mode (polished,
+                 * read-first resume slice) and Edit-ready mode (editable
+                 * regions highlighted, inline actions visible).
+                 *
+                 * The toggle uses aria-pressed to communicate state to
+                 * assistive technologies, and visually distinguishes the
+                 * active state with accent coloring + tinted background.
+                 */}
+                {editMode === 'focused' && (
+                  <button
+                    type="button"
+                    onClick={function () { setSectionEditReady(!sectionEditReady); }}
+                    className={'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                    style={Object.assign(
+                      {
+                        border: sectionEditReady
+                          ? '1px solid var(--p-accent)'
+                          : '1px solid var(--p-border)',
+                        background: sectionEditReady
+                          ? 'color-mix(in srgb, var(--p-accent) 10%, transparent)'
+                          : 'transparent',
+                        color: sectionEditReady
+                          ? 'var(--p-accent)'
+                          : 'var(--p-text-muted)',
+                        flexShrink: 0,
+                      },
+                      { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
+                    )}
+                    aria-label={sectionEditReady ? 'Switch to view mode' : 'Switch to edit mode'}
+                    aria-pressed={sectionEditReady}
+                    title={sectionEditReady ? 'Viewing in edit mode — click to switch to view mode' : 'Click to enter edit mode'}
+                    data-testid="section-edit-toggle"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    <span>{sectionEditReady ? 'Editing' : 'Edit'}</span>
+                  </button>
+                )}
+
+                {/* 4. Section score — only visible in focused mode */}
+                {editMode === 'focused' && activeSectionMeta && (function () {
+                  const sectionStatus = deriveSectionStatus(activeSectionMeta);
+                  return (
+                    <div
+                      className="flex items-center gap-2 flex-shrink-0"
+                      data-testid="section-score-display"
+                    >
+                      {/* Completion percentage */}
+                      <span
+                        className="text-xs font-bold px-1.5 py-0.5 rounded"
+                        style={{
+                          color: scoreTierColor(activeSectionMeta.completionPct),
+                          background: 'color-mix(in srgb, ' + scoreTierColor(activeSectionMeta.completionPct) + ' 12%, transparent)',
+                        }}
+                      >
+                        {activeSectionMeta.completionPct}%
+                      </span>
+                      {/* Status label */}
+                      <span
+                        className="text-[10px] font-semibold"
+                        style={{ color: sectionStatus.color }}
+                      >
+                        {sectionStatus.label}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
+
+              {editMode === 'dashboard' ? (
+                /* ---- State A: Section Dashboard ----
+                 * Default landing state for the Edit tab. Shows summary strip
+                 * and section cards ordered by priority.
+                 */
+                <SectionDashboard
+                  sections={EDIT_SECTION_META}
+                  onSectionSelect={handleSectionClick}
+                  matchScore={computedMatchScore}
+                  readinessScore={computedReadinessScore}
+                  biggestBlocker={computedTopGap}
+                  fastestWin={computedFastestWin}
+                  activeJob={activeJob}
+                />
+              ) : (
+                /* ---- State B: Focused Section Editor ----
+                 * Shows only the selected section's editing surface,
+                 * wrapped in a "resume slice" document container.
+                 *
+                 * The resume slice creates the visual impression of a
+                 * zoomed-in, polished portion of a real federal resume.
+                 * It uses a constrained-width panel with subtle framing
+                 * (border, shadow, surface background) so the content
+                 * does not float on the raw workspace background.
+                 *
+                 * When sectionEditReady is true, the container adds a
+                 * subtle accent border to signal that the section is in
+                 * edit-ready mode.
+                 */
+                <>
+
+                  {/* Section editing surface — renders only the active section */}
+                  <div
+                    ref={canvasScrollRef}
+                    className="flex-1 overflow-y-auto"
+                    style={{ background: 'var(--p-bg)' }}
+                  >
+                    <div className="max-w-[820px] mx-auto px-8 py-8">
+
+                      {/* ---- Resume slice document container ----
+                       * This panel creates a document-like surface that
+                       * makes focused section content feel like a real
+                       * resume fragment rather than loose content on a
+                       * dark workspace. The framing, padding, and subtle
+                       * shadow give it physical presence without clutter.
+                       *
+                       * In edit-ready mode, the border shifts to accent
+                       * color and a faint accent tint appears, signaling
+                       * that the section is ready for inline editing.
+                       */}
+                      <div
+                        className="rounded-lg"
+                        style={{
+                          background: 'var(--p-surface)',
+                          border: sectionEditReady
+                            ? '1px solid var(--p-accent)'
+                            : '1px solid var(--p-border)',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)',
+                          padding: '2rem 2.5rem',
+                          transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
+                        }}
+                        data-testid="resume-slice-container"
+                        data-edit-ready={sectionEditReady ? 'true' : 'false'}
+                      >
+
+                      {/* ---- Identity & Summary (combined group) ----
+                       * Merges Contact Information and Professional Summary
+                       * into one cohesive editing surface. Also handles the
+                       * individual 'contact' and 'summary' IDs for backward
+                       * compatibility with cross-tab jump handlers.
+                       */}
+                      {(activeSection === 'identity-summary' || activeSection === 'contact' || activeSection === 'summary') && (
+                        <div
+                          ref={function (el) {
+                            sectionRefs.current['contact'] = el;
+                            sectionRefs.current['summary'] = el;
+                            sectionRefs.current['identity-summary'] = el;
+                          }}
+                          data-testid="edit-section-identity-summary"
+                        >
+                          {/* Contact information sub-section */}
+                          <div data-testid="edit-section-contact">
+                            <ContactHeader draft={store.draft} sectionEditReady={sectionEditReady} />
+                          </div>
+
+                          {/* Visual separator between contact and summary */}
+                          <div
+                            className="my-6"
+                            style={{
+                              borderTop: '1px solid var(--p-border)',
+                            }}
+                          />
+
+                          {/* Professional summary sub-section */}
+                          <div data-testid="edit-section-summary">
+                            <ProfessionalSummaryBlock
+                              summary={store.draft.summary}
+                              onEdit={handleSummaryEditChange}
+                              isEditing={editingSummary}
+                              editText={editingSummaryText}
+                              onEditStart={handleSummaryEditStart}
+                              onEditChange={handleSummaryEditChange}
+                              onEditSave={handleSummaryEditSave}
+                              sectionEditReady={sectionEditReady}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ---- Work Experience ---- */}
+                      {activeSection === 'experience' && (
+                        <div
+                          ref={function (el) { sectionRefs.current['experience'] = el; }}
+                          data-testid="edit-section-experience"
+                        >
+                          {/* Section heading — consistent with other resume sections */}
+                          <div
+                            className="flex items-center justify-between mb-4 pb-2"
+                            style={{ borderBottom: '1px solid var(--p-border)' }}
+                          >
+                            <h3
+                              className="text-xs font-bold uppercase tracking-wider"
+                              style={{ color: 'var(--p-text)', letterSpacing: '0.08em' }}
+                            >
+                              Work Experience
+                            </h3>
+                          </div>
+                          {store.draft.experience.map(function (exp) {
+                            const bullets = bulletMap[exp.id] || [];
+                            return (
+                              <ExperienceBlock
+                                key={exp.id}
+                                experience={exp}
+                                bullets={bullets}
+                                editingBulletId={editingBulletId}
+                                editingBulletText={editingBulletText}
+                                activeSuggestionBulletId={activeSuggestionBulletId}
+                                activeSuggestion={MOCK_INLINE_SUGGESTION}
+                                autonomyMode={autonomyMode}
+                                proposalCount={pendingProposalCount}
+                                sectionEditReady={sectionEditReady}
+                                onBulletEditStart={handleBulletEditStart}
+                                onBulletEditChange={handleBulletEditChange}
+                                onBulletEditSave={handleBulletEditSave}
+                                onBulletRewrite={handleBulletRewrite}
+                                onSuggestionAccept={handleSuggestionAccept}
+                                onSuggestionEditFirst={handleSuggestionEditFirst}
+                                onSuggestionDismiss={handleSuggestionDismiss}
+                                onAddBullet={handleAddBullet}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* ---- Education ---- */}
+                      {activeSection === 'education' && (
+                        <div
+                          ref={function (el) { sectionRefs.current['education'] = el; }}
+                          data-testid="edit-section-education"
+                        >
+                          <EducationSection draft={store.draft} sectionEditReady={sectionEditReady} />
+                        </div>
+                      )}
+
+                      {/* ---- Skills ---- */}
+                      {activeSection === 'skills' && (
+                        <div
+                          ref={function (el) { sectionRefs.current['skills'] = el; }}
+                          data-testid="edit-section-skills"
+                        >
+                          <SkillsSection draft={store.draft} sectionEditReady={sectionEditReady} />
+                        </div>
+                      )}
+
+                      {/* ---- Federal Details ---- */}
+                      {activeSection === 'federal-details' && (
+                        <div
+                          ref={function (el) { sectionRefs.current['federal-details'] = el; }}
+                          data-testid="edit-section-federal-details"
+                        >
+                          <FederalDetailsSection sectionEditReady={sectionEditReady} />
+                        </div>
+                      )}
+
+                      {/* ---- Certifications ---- */}
+                      {activeSection === 'certifications' && (
+                        <div
+                          ref={function (el) { sectionRefs.current['certifications'] = el; }}
+                          data-testid="edit-section-certifications"
+                        >
+                          <CertificationsSection sectionEditReady={sectionEditReady} />
+                        </div>
+                      )}
+
+                      {/* ---- Supporting Evidence ---- */}
+                      {activeSection === 'supporting-evidence' && (
+                        <div
+                          ref={function (el) { sectionRefs.current['supporting-evidence'] = el; }}
+                          data-testid="edit-section-supporting-evidence"
+                        >
+                          <SupportingEvidenceSection sectionEditReady={sectionEditReady} />
+                        </div>
+                      )}
+
+                      </div>{/* end resume-slice-container */}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           ) : activeTab === 'suggested-changes' ? (
             /* ---- Suggested Changes tab: broader proposal review queue ---- */

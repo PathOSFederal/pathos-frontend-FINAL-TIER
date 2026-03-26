@@ -1,3 +1,439 @@
+# Resume Builder — Feature Branch Merge Notes (March 26, 2026)
+
+**Branch:** `feature/resumeBuilder`
+
+---
+
+## Run: Resume Slice + Edit-Ready Mode Refinement
+
+### Git state
+
+```
+Branch: feature/resumeBuilder
+```
+
+```
+git status --short:
+ M docs/merge-notes/current.md
+ M packages/ui/src/screens/ResumeBuilderScreen.test.tsx
+ M packages/ui/src/screens/ResumeBuilderScreen.tsx
+?? docs/change-briefs/resume-builder-edit-dashboard.md
+?? docs/change-briefs/resume-builder-edit-impact.md
+?? docs/change-briefs/resume-builder-header-cleanup.md
+?? docs/change-briefs/resume-builder-resume-slice.md
+```
+
+```
+git diff --name-status origin/develop...HEAD:
+A  docs/change-briefs/resume-builder-edit-focus.md
+M  docs/merge-notes/current.md
+M  packages/ui/src/screens/ResumeBuilderScreen.test.tsx
+M  packages/ui/src/screens/ResumeBuilderScreen.tsx
+```
+
+```
+git diff --stat origin/develop...HEAD:
+ docs/change-briefs/resume-builder-edit-focus.md    |  81 +++
+ docs/merge-notes/current.md                        |  77 +++
+ packages/ui/src/screens/ResumeBuilderScreen.test.tsx | 246 ++++++++
+ packages/ui/src/screens/ResumeBuilderScreen.tsx      | 653 +++++++++++--------
+ 4 files changed, 847 insertions(+), 210 deletions(-)
+```
+
+### Files changed this run
+
+- `packages/ui/src/screens/ResumeBuilderScreen.tsx` — Resume slice container, edit-ready mode state, section formatting improvements, edit toggle in control row
+- `packages/ui/src/screens/ResumeBuilderScreen.test.tsx` — 32 new tests for edit-ready mode, resume slice container, section formatting, SSR regression
+- `docs/change-briefs/resume-builder-resume-slice.md` — Non-technical change brief
+- `docs/merge-notes/current.md` — This file
+
+### Behavior changes
+
+- **Resume slice container:** Focused section content now renders inside a document-like panel (`resume-slice-container` testid) with border, shadow, and surface background. Reduces "floating content" visual problem.
+- **Edit-ready mode toggle:** New `section-edit-toggle` button in the control row toggles between View mode (clean, resume-like) and Edit-ready mode (editable areas highlighted, inline actions visible). Uses `aria-pressed` for accessibility.
+- **View mode:** Bullet health indicators hidden, inline actions hidden, bullet text not clickable, pencil icons hidden, add-bullet buttons hidden. Section reads like a polished resume.
+- **Edit-ready mode:** Health dots/badges visible, inline actions for all bullets, click-to-edit enabled, pencil icons visible, add-bullet buttons visible. Accent-tinted editable highlights on all sections.
+- **ContactHeader:** Name in uppercase with wider tracking, pipe-separated contact details (no emojis), citizenship/veteran status on federal-specific line.
+- **EducationSection:** Resume-style formatting with degree/institution/dates rhythm, heading with bottom border.
+- **SkillsSection:** View mode shows comma-separated dense list; edit-ready mode shows interactive chips.
+- **FederalDetailsSection:** Two-column data grid with labeled fields, consistent heading.
+- **CertificationsSection:** Structured list with consistent heading and edit-ready highlighting.
+- **SupportingEvidenceSection:** Framed placeholder with consistent heading.
+- **ExperienceBlock:** Stronger title/employer/dates hierarchy, entries separated by borders, pencil icon and add-bullet only in edit-ready mode.
+- **BulletRow:** Health indicators and inline actions gated behind edit-ready mode.
+
+### Tests
+
+- 140 tests total (32 new, 108 existing)
+- All pass
+- TypeScript compiles cleanly
+
+### Patch artifacts
+
+```
+artifacts/resume-builder-resume-slice.patch         — 216,696 bytes (cumulative: origin/develop to working tree)
+artifacts/resume-builder-resume-slice-this-run.patch — 189,831 bytes (incremental: HEAD to working tree)
+```
+
+### Known risks and follow-ups
+
+- Edit-ready mode is currently a boolean toggle. Future work could auto-activate edit-ready when the user starts typing or clicks into an editable area.
+- ProfessionalSummaryBlock in view mode does not allow click-to-edit. Users must toggle to edit-ready mode first. This is intentional but may need user feedback.
+- Federal Details, Certifications, and Supporting Evidence sections use mock data. Real editing flows deferred to later phases.
+- No human simulation gate triggered — changes are primarily visual/structural with state behavior validated by tests.
+
+### No commit, no push
+
+---
+
+## Run: Edit Dashboard Impact Refinement
+
+### Git state
+
+```
+Branch: feature/resumeBuilder
+Status: 3 modified + 3 untracked files (working tree only, no commits)
+```
+
+### git diff --name-status origin/develop...HEAD
+
+```
+A	docs/change-briefs/resume-builder-edit-focus.md
+M	docs/merge-notes/current.md
+M	packages/ui/src/screens/ResumeBuilderScreen.test.tsx
+M	packages/ui/src/screens/ResumeBuilderScreen.tsx
+```
+
+### Working tree additions (untracked)
+
+```
+docs/change-briefs/resume-builder-edit-dashboard.md
+docs/change-briefs/resume-builder-header-cleanup.md
+docs/change-briefs/resume-builder-edit-impact.md
+```
+
+### git diff --stat (working tree)
+
+```
+ docs/merge-notes/current.md                        |  181 ++-
+ packages/ui/src/screens/ResumeBuilderScreen.test.tsx|  824 ++++++++++-
+ packages/ui/src/screens/ResumeBuilderScreen.tsx     | 1560 ++++++++++++++++----
+ 3 files changed, 2306 insertions(+), 259 deletions(-)
+```
+
+### What changed this run
+
+#### ResumeBuilderScreen.tsx
+- **Added `identity-summary` to SectionId type** — new combined editing group
+- **Added `EDIT_SECTION_GROUPS`** — 7 top-level Edit tab section definitions (identity-summary replaces separate contact/summary)
+- **Added `EDIT_SECTION_META`** — section metadata for Edit dashboard using grouped sections with composite scores
+- **Made local Edit control row persistent** — renders in both dashboard and focused states with `data-testid="edit-local-control-row"`
+- **Dashboard icon button** — accent-highlighted when on dashboard, muted when in focused mode
+- **Section dropdown adapts to state** — shows "Overview" on dashboard, active section name on focused
+- **Added SectionDropdownMenu component** — extracted dropdown with Overview option, per-item hover tracking, focus-visible rings
+- **Added SectionDropdownItem component** — individual item with explicit useState hover tracking, layered background logic
+- **Redesigned SectionDashboard** — added compact summary strip (Match/Readiness/blocker/fastest win), priority-sorted section cards
+- **Merged Contact + Summary in focused editor** — `identity-summary` renders both ContactHeader and ProfessionalSummaryBlock with separator
+- **Updated cross-tab jump handlers** — `handleJumpToSection` and `handleEditSection` map contact/summary to identity-summary
+- **Added Home, LayoutGrid imports** from lucide-react
+
+#### ResumeBuilderScreen.test.tsx
+- **Added "Edit impact — identity-summary grouping"** — validates EDIT_SECTION_META grouping, composite score, individual preservation
+- **Added "Edit impact — persistent local control row"** — test ID, handler contract, dropdown label states
+- **Added "Edit impact — dashboard summary strip data model"** — validates all four summary strip data dependencies, priority sort
+- **Added "Edit impact — section dropdown structure"** — Overview option, EDIT_SECTION_META coverage, status derivation, combined editor
+- **Added "Edit impact — cross-tab jump mapping"** — contact/summary to identity-summary mapping logic
+- **Added "Edit impact — SSR structural regression"** — loading state, focused-editor-header removal check
+- **Updated EXPECTED_SECTION_IDS** — added identity-summary to expected list (9 entries)
+- **Updated focused-editor target test** — now checks both MOCK_SECTION_META and EDIT_SECTION_META
+- **Updated focused-editor header test IDs** — references edit-local-control-row instead of focused-editor-header
+- Total: 16 new tests (112 total, all passing)
+
+### Behavior changes
+- Edit tab now has a persistent local control row visible in both dashboard and focused states
+- Dashboard icon button is accent-highlighted when on dashboard, muted in focused mode
+- Section dropdown shows "Overview" on dashboard, active section name on focused
+- Dropdown includes "Overview" option at top to return to dashboard
+- Dropdown items have per-item hover tracking with visible background shifts
+- Contact Information and Professional Summary are now one editing group: "Identity & Summary"
+- Edit dashboard shows 7 section cards instead of 8
+- Dashboard has a compact summary strip with Match, Readiness, biggest blocker, fastest win
+- Section cards are sorted by priority (weakest/most-issues first)
+- Cross-tab jumps from Coverage Map/Suggested Changes map contact/summary to identity-summary
+
+### Tests
+- 112 tests passing (96 prior + 16 new)
+- TypeScript: clean (tsc --noEmit)
+- Lints: clean
+
+### Patch artifacts
+- `artifacts/resume-builder-edit-impact.patch` — cumulative diff (origin/develop to HEAD, committed) — 52.8 KB
+- `artifacts/resume-builder-edit-impact-this-run.patch` — incremental diff (working tree only) — 123.2 KB
+
+### Known risks and follow-ups
+- LiveScoreAnchor, SectionEditorHeader, IntelligenceStrip, SectionOrganizer, SectionOrganizerItem are dead code — cleanup pass needed
+- MOCK_SECTION_META still static — future phase should compute from live draft
+- EDIT_SECTION_META identity-summary composite score is hardcoded (50%) — should be computed
+- Dropdown lacks arrow-key listbox navigation (keyboard users can tab through options)
+- Section card priority sort is by completion/issues only — could factor in relevance
+
+### Human simulation gate
+- Required: Yes — structural grouping change, new persistent control, new dashboard layout
+- Triggers: merged editing group, persistent control row, priority-sorted dashboard, summary strip
+- Evidence: typecheck clean, 112 tests pass, linter clean
+
+---
+
+## Run: Header & Section Controls Cleanup
+
+### Git state
+
+```
+Branch: feature/resumeBuilder
+Status: 3 modified + 2 untracked files (working tree only, no commits)
+```
+
+### git diff --name-status origin/develop...HEAD
+
+```
+A	docs/change-briefs/resume-builder-edit-focus.md
+M	docs/merge-notes/current.md
+M	packages/ui/src/screens/ResumeBuilderScreen.test.tsx
+M	packages/ui/src/screens/ResumeBuilderScreen.tsx
+```
+
+### Working tree additions (untracked)
+
+```
+docs/change-briefs/resume-builder-edit-dashboard.md
+docs/change-briefs/resume-builder-header-cleanup.md
+```
+
+### git diff --stat (working tree)
+
+```
+ docs/merge-notes/current.md                        |   97 +-
+ packages/ui/src/screens/ResumeBuilderScreen.test.tsx|  523 ++++++++-
+ packages/ui/src/screens/ResumeBuilderScreen.tsx     | 1186 ++++++++++++++++----
+ 3 files changed, 1568 insertions(+), 238 deletions(-)
+```
+
+### What changed this run
+
+#### ResumeBuilderScreen.tsx
+- **Refined TabBar** — grouped segmented-control treatment with stronger hit areas (px-4 py-2.5), explicit hover tracking with underline-hint pattern, accent bg tint on active tab
+- **Added WorkspaceModeTabButton** — individual tab button sub-component with useState hover tracking per mode-switch interaction-state standard
+- **Added overall score module to tab row** — Match + Readiness chips at far-right end of TabBar, replaces separate status strip
+- **Removed LiveScoreAnchor from Edit tab body** — no longer rendered inside Edit's main content; scores now in tab row
+- **Replaced focused-editor breadcrumb header** — old "Back to sections / Section Name" breadcrumb replaced with compact control row: home icon (LayoutGrid) + section dropdown + section score
+- **Added section dropdown** — custom dropdown listing all 8 sections with icons and status badges, allows direct section switching
+- **Added section score display** — compact completion% + status label at far-right of focused-editor header
+- **Added showSectionDropdown state** — open/close state with outside-click-to-close effect
+- **Added Home, LayoutGrid imports** from lucide-react
+
+#### ResumeBuilderScreen.test.tsx
+- **Added "Header cleanup — overall score module data model"** — validates score derivation and overall vs section score distinction
+- **Added "Header cleanup — section dropdown data model"** — validates all sections present, status derivation, test ID naming, no draft mutation on switch
+- **Added "Header cleanup — focused-editor control structure"** — validates test ID conventions, score source distinction
+- **Added "Header cleanup — SSR structural regression"** — validates loading state, LiveScoreAnchor removal, workspace tabs presence
+- Total: 11 new tests (96 total, all passing)
+
+### Behavior changes
+- Tab row now uses grouped/segmented treatment with explicit hover states
+- Overall Match + Readiness scores now visible at far-right of tab row (all tabs)
+- LiveScoreAnchor strip no longer rendered in Edit tab body
+- Focused-editor header uses home icon + section dropdown + section score instead of breadcrumb text
+- Section dropdown allows direct switching without returning to dashboard
+- Section score shows completionPct + status label for current section
+
+### Tests
+- 96 tests passing (85 prior + 11 new)
+- TypeScript: clean (tsc --noEmit)
+- Lints: clean
+
+### Patch artifacts
+- `artifacts/resume-builder-header-cleanup.patch` — cumulative diff (origin/develop to HEAD, committed) — 52.8 KB
+- `artifacts/resume-builder-header-cleanup-this-run.patch` — incremental diff (working tree only) — 85.3 KB
+
+### Known risks and follow-ups
+- LiveScoreAnchor component still exists in file (dead code) — can be removed in cleanup pass
+- SectionEditorHeader component no longer used in focused-editor header — retained for possible reuse but is dead code
+- IntelligenceStrip shim still exists — dead code from earlier phase
+- MOCK_SECTION_META is still static — future phase should compute from live draft
+- Section dropdown closes on outside click but doesn't trap focus (keyboard-only navigation works via tab but no arrow-key listbox behavior)
+
+### Human simulation gate
+- Required: Yes — UI control structure changes to primary workspace header
+- Triggers: new tab bar treatment, new overall score placement, new section control pattern
+- Evidence: typecheck clean, 96 tests pass, linter clean
+
+---
+
+## Previous Run: Edit Dashboard Redesign
+
+### Git state
+
+```
+Branch: feature/resumeBuilder
+Status: 2 modified files (working tree only, no commits)
+```
+
+### git diff --name-status origin/develop...HEAD
+
+```
+A	docs/change-briefs/resume-builder-edit-focus.md
+M	docs/merge-notes/current.md
+M	packages/ui/src/screens/ResumeBuilderScreen.test.tsx
+M	packages/ui/src/screens/ResumeBuilderScreen.tsx
+```
+
+### git diff --stat origin/develop...HEAD
+
+```
+docs/change-briefs/resume-builder-edit-focus.md    |  81 +++
+docs/merge-notes/current.md                        |  77 +++
+packages/ui/src/screens/ResumeBuilderScreen.test.tsx | 246 ++++++++
+packages/ui/src/screens/ResumeBuilderScreen.tsx    | 653 +++++++++++--------
+4 files changed, 847 insertions(+), 210 deletions(-)
+```
+
+### Working tree changes (this run)
+
+```
+packages/ui/src/screens/ResumeBuilderScreen.test.tsx | 315 +++++++-
+packages/ui/src/screens/ResumeBuilderScreen.tsx      | 819 +++++++++++++-----
+2 files changed, 942 insertions(+), 192 deletions(-)
+```
+
+### What changed this run
+
+#### ResumeBuilderScreen.tsx
+- **Removed ContextStrip** from render — "You are editing: Master Resume" bar eliminated
+- **Removed SectionOrganizer** from Edit layout — left sidebar rail removed
+- **Added SectionDashboard** — new default landing state with section cards grid
+- **Added SectionDashboardCard** — individual clickable work-module cards with status badges
+- **Added LiveScoreAnchor** — compact persistent Match + Readiness score module
+- **Added editMode state** — 'dashboard' | 'focused' controlling two-state Edit tab
+- **Added deriveSectionStatus / deriveSectionMetric** — status label derivation from metadata
+- **Added handleBackToDashboard** — handler for returning to section dashboard
+- **Refactored SectionEditorHeader** — now an inline flex element within breadcrumb row
+- **Updated cross-tab jump handlers** — handleJumpToSection, handleEditSection, handleProposalEditFirst now set editMode='focused'
+- **Added "Back to sections" button** — breadcrumb-style navigation in focused editor
+
+#### ResumeBuilderScreen.test.tsx
+- **Added deriveSectionStatus tests** — validates all status labels (Strong/Moderate/Missing/Needs Work/Critical)
+- **Added deriveSectionMetric tests** — validates compact metric strings
+- **Added Edit Dashboard structure tests** — card test IDs, state transition contracts
+- **Added SSR regression test** — verifies ContextStrip removal and loading state
+- **Updated imports** — added deriveSectionStatus, deriveSectionMetric, SectionStatusInfo, EditMode
+
+### Behavior changes
+- Edit tab now defaults to section dashboard (card grid) instead of immediately showing a section editor
+- Clicking a dashboard card opens focused editor for that section
+- "Back to sections" button returns to dashboard
+- ContextStrip no longer visible
+- Left section organizer no longer visible
+- Compact LiveScoreAnchor replaces both removed strips
+
+### Tests
+- 85 tests passing (all prior + 23 new)
+- TypeScript: clean (tsc --noEmit)
+- Lints: clean
+
+### Patch artifacts
+- `artifacts/resume-builder-edit-dashboard.patch` — cumulative diff (origin/develop to working tree) — 90.9 KB
+- `artifacts/resume-builder-edit-dashboard-this-run.patch` — incremental diff (working tree only) — 59.4 KB
+
+### Known risks and follow-ups
+- SectionOrganizer and ContextStrip components still exist in the file (dead code) — can be removed in a cleanup pass
+- MOCK_SECTION_META is still static — a future phase should compute section metadata from live draft state
+- LiveScoreAnchor shows "Biggest blocker" but not "Fastest win" — could add a toggle or alternate
+- Preview / Version Diff tabs remain scaffolded placeholders
+
+### Human simulation gate
+- Required: Yes — UI structural changes to the primary editing surface
+- Triggers: new default state, removed components, new navigation pattern
+- Evidence: typecheck clean, 85 tests pass, linter clean
+
+---
+
+## Previous run: Section-Focused UX Refinement
+
+**Branch:** `feature/resumeBuilder`
+**Scope:** Edit tab section-focused editing, section organizer redesign, section editor header. No commit/push.
+
+## Git state
+
+```
+Branch: feature/resumeBuilder
+Status: 2 modified files (working tree only, no commits)
+```
+
+## Files changed this run
+
+```
+M  packages/ui/src/screens/ResumeBuilderScreen.tsx
+M  packages/ui/src/screens/ResumeBuilderScreen.test.tsx
+```
+
+## Diff stats (working tree)
+
+```
+packages/ui/src/screens/ResumeBuilderScreen.test.tsx | 246 +++++++++
+packages/ui/src/screens/ResumeBuilderScreen.tsx      | 653 +++++++++++--------
+2 files changed, 689 insertions(+), 210 deletions(-)
+```
+
+## What changed
+
+### ResumeBuilderScreen.tsx
+- **SectionsRail → SectionOrganizer + SectionOrganizerItem**: Redesigned left panel from nav-like sidebar to card-based section organizer. Each section is a distinct work-unit card with completion bar, issue badge, relevance indicator, and "Editing" badge for the active section.
+- **SectionOrganizerItem**: New component with explicit useState hover tracking per Interaction-State Standard. Hover: surface2 bg + border brightening. Selected: accent-tinted bg + 4px accent left border + "Editing" badge. Focus-visible: 2px inset ring via Tailwind + --p-accent.
+- **SectionEditorHeader**: New component shown at top of center editing surface. Identifies the active section with icon, label, and metadata (completion %, issues, relevance).
+- **Section-focused Edit tab**: Center editing surface now renders only the selected section instead of the full resume stacked vertically. Each section guarded by `activeSection === 'sectionId'` conditional.
+- **activeSectionMeta**: New useMemo deriving the active section's metadata from MOCK_SECTION_META for the section editor header.
+- **Simplified handlers**: handleSectionClick, handleJumpToSection, handleEditSection no longer use scrollIntoView. handleProposalEditFirst removed setTimeout scroll delay.
+- **New exports**: SECTION_DEFS, MOCK_SECTION_META, SectionMeta exported for test validation.
+- **New data-testid markers**: `section-editor-header`, `edit-section-{sectionId}`, `data-selected`, `data-hovered` on organizer items.
+
+### ResumeBuilderScreen.test.tsx
+- Added 4 new test suites (16 tests total) for section-focused Edit model:
+  - Section definitions: covers all IDs, labels, icons
+  - Section metadata: covers all IDs, valid ranges, label matching
+  - Data integrity: no cross-section mutation, stable coverage dimensions, deterministic test IDs
+  - SSR structural regression: loading state and tab structure intact
+
+## Validation performed
+
+- `pnpm typecheck` — clean
+- `pnpm test -- --run` — 887 tests pass across 58 files
+- `pnpm test -- --run packages/ui/src/screens/ResumeBuilderScreen.test.tsx` — 61 tests pass (45 existing + 16 new)
+- Lint check on modified file — no errors
+
+## Patch artifacts
+
+| Artifact | Size |
+|----------|------|
+| `artifacts/resume-builder-edit-focus.patch` | 45,327 bytes |
+| `artifacts/resume-builder-edit-focus-this-run.patch` | 45,327 bytes |
+
+## Change brief
+
+Updated: `docs/change-briefs/resume-builder-edit-focus.md`
+
+## Human simulation gate
+
+Not required for this run — changes are structural UI refinements testable by visual inspection. Section-focused model is validated by unit tests. Interaction states (hover, selected, focus-visible) use standard patterns documented in the Interaction-State Standard.
+
+## Known risks and follow-ups
+
+- Section organizer `MOCK_SECTION_META` is static — future work should compute metadata from draft content + target job analysis
+- Focus-visible ring uses `--tw-ring-color` CSS custom property via TypeScript cast — works but relies on Tailwind JIT
+- Scroll position per section is not preserved when switching sections (optional improvement noted in task)
+- Contact section has limited editing capability (display only) — future work to add inline contact editing
+
+---
+
 # Resume Builder Phase 2 — Suggested Changes + Coverage Map (March 25, 2026)
 
 **Branch:** `feature/backend-usajobs-ingestion-v1`
@@ -5363,3 +5799,660 @@ UX compression and decision-first refinement pass for Resume Builder. Shifted th
 - Mock scores remain deterministic — real NLP engine integration is a later phase.
 - Preview and Version Diff tabs still show coming-soon placeholders.
 - Human simulation gate: not required (UX refinement only — no persistence changes, no routing changes, no data model changes).
+
+---
+
+## March 26, 2026 — Frontend Backend Live Advisor Integration v1
+
+**Branch:** `feature/frontend-backend-live-advisor-integration-v1`
+
+### Summary
+- Integrated one real live advisor flow in **Saved Jobs**.
+- The Saved Jobs page now loads backend-backed canonical stored jobs through frontend proxy routes and evaluates the selected stored job with the real backend advisor response.
+- The integrated Saved Jobs path no longer seeds or renders mock saved-job data for evaluation.
+- Added a thin adapter boundary so backend response mapping does not leak across UI components.
+- Added honest loading, empty, error, and partial-evidence rendering for the live advisor panel.
+
+### What changed
+- `app/(shared)/dashboard/saved-jobs/page.tsx`
+  - Switched the real Saved Jobs page to `liveAdvisor` mode.
+  - Loads the persisted frontend profile from storage and sends that profile through the live stored-job evaluation path.
+- `app/api/live-advisor/stored-jobs/route.ts`
+  - New same-origin proxy route for backend stored-job catalog access.
+- `app/api/live-advisor/stored-jobs/evaluate/route.ts`
+  - New same-origin proxy route for backend stored-job evaluation access.
+- `lib/live-advisor/backend.ts`
+  - New backend config resolver for base URL and API key lookup.
+- `lib/live-advisor/client.ts`
+  - New browser-side fetch helpers for recent stored jobs and live stored-job evaluation.
+- `lib/live-advisor/adapter.ts`
+  - Added and kept as the single contract adapter for backend stored-job summaries, advisor output, and profile-to-request mapping.
+- `packages/ui/src/screens/SavedJobsScreen.tsx`
+  - Added live stored-job mode, honest backend-driven panel states, and live-only behavior for the integrated path.
+- `packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx`
+  - New presentational panel for real backend decision, reasons, gaps, warnings, missing evidence, next actions, and explainability metadata.
+- `packages/ui/src/index.ts`
+  - Exported the live Saved Jobs integration types and panel contract.
+- Tests added:
+  - `lib/live-advisor/adapter.test.ts`
+  - `packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx`
+
+### Primary live path
+- Integrated path: **Saved Jobs selected stored-job evaluation flow**
+- Live request chain:
+  - frontend page -> `/api/live-advisor/stored-jobs`
+  - frontend page -> `/api/live-advisor/stored-jobs/evaluate`
+  - frontend proxy -> backend `/api/v1/advisor/stored-jobs`
+  - frontend proxy -> backend `/api/v1/advisor/evaluate-stored-job`
+
+### Commands run
+- `pnpm test -- lib/live-advisor/adapter.test.ts packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx`
+  - passed: 7 tests
+- `pnpm typecheck`
+  - passed
+- `pnpm lint`
+  - failed due pre-existing repo errors outside this run in `packages/ui/src/screens/JobSearchScreen.tsx` and `packages/ui/src/screens/ResumeBuilderScreen.tsx`
+- `pnpm exec eslint "app/(shared)/dashboard/saved-jobs/page.tsx" "app/api/live-advisor/stored-jobs/route.ts" "app/api/live-advisor/stored-jobs/evaluate/route.ts" "lib/live-advisor/adapter.ts" "lib/live-advisor/client.ts" "lib/live-advisor/backend.ts" "lib/live-advisor/adapter.test.ts" "packages/ui/src/index.ts" "packages/ui/src/screens/SavedJobsScreen.tsx" "packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx" "packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx"`
+  - passed
+- `poetry run pytest -q tests/api/jobs/test__categories__advisor_stored_job.py`
+  - backend tests passed but command failed on backend coverage gate
+- `poetry run pytest -q --no-cov tests/api/jobs/test__categories__advisor_stored_job.py`
+  - passed: 5 tests
+- `pnpm test`
+  - passed: 60 files, 973 tests
+- `pnpm build`
+  - passed
+- `$env:DAY='26'; pnpm ci:validate`
+  - passed, with day-label warnings from existing historical references in `merge-notes.md` and `docs/ai/generated-docs-policy.md`
+
+### Results
+- Saved Jobs now uses the real backend advisor/evaluation path for the integrated live flow.
+- The integrated Saved Jobs path no longer depends on seeded mock saved jobs.
+- Adapter and presentational panel coverage were added for the live contract.
+- Backend spot-check for the new stored-job list endpoint passed once coverage enforcement was disabled for the targeted slice.
+
+### Known issues
+- `pnpm lint` still fails at repo level because of pre-existing errors outside this integration slice:
+  - `packages/ui/src/screens/JobSearchScreen.tsx`
+  - `packages/ui/src/screens/ResumeBuilderScreen.tsx`
+- `git rev-parse --verify develop` failed with:
+  - `fatal: Needed a single revision`
+- `git diff develop...HEAD` and `git diff --stat develop...HEAD` failed with:
+  - `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- There were unrelated local frontend edits already present in Resume Builder files and untracked resume-builder change briefs. The repo-wide incremental diff artifact therefore includes unrelated existing worktree changes in addition to this integration run.
+- Job Search still remains mocked in this phase. Only the Saved Jobs path is live.
+
+### Git state
+- `git status`
+  - modified:
+    - `app/(shared)/dashboard/saved-jobs/page.tsx`
+    - `docs/merge-notes/current.md`
+    - `packages/ui/src/index.ts`
+    - `packages/ui/src/screens/ResumeBuilderScreen.test.tsx`
+    - `packages/ui/src/screens/ResumeBuilderScreen.tsx`
+    - `packages/ui/src/screens/SavedJobsScreen.tsx`
+  - untracked:
+    - `app/api/live-advisor/`
+    - `docs/change-briefs/day-26.md`
+    - `docs/change-briefs/frontend-backend-live-advisor-integration-v1.md`
+    - `docs/change-briefs/resume-builder-edit-dashboard.md`
+    - `docs/change-briefs/resume-builder-edit-impact.md`
+    - `docs/change-briefs/resume-builder-header-cleanup.md`
+    - `docs/change-briefs/resume-builder-resume-slice.md`
+    - `lib/live-advisor/`
+    - `packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx`
+    - `packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx`
+- `git branch --show-current`
+  - `feature/frontend-backend-live-advisor-integration-v1`
+- `git diff --name-status develop...HEAD`
+  - failed because the frontend repo does not have a usable local `develop` ref
+- `git diff --stat develop...HEAD`
+  - failed because the frontend repo does not have a usable local `develop` ref
+
+### Patch artifacts
+- Required custom artifacts:
+  - `artifacts/frontend-backend-live-advisor-integration-v1.patch`
+    - contains the exact `develop...HEAD` failure because no local `develop` baseline exists
+  - `artifacts/frontend-backend-live-advisor-integration-v1-this-run.patch`
+    - repo-wide working-tree diff excluding `artifacts/`
+- Repo validation artifacts:
+  - `artifacts/day-26.patch`
+  - `artifacts/day-26-run.patch`
+- `ls -lh` style sizes:
+  - `frontend-backend-live-advisor-integration-v1.patch` — `125 B`
+  - `frontend-backend-live-advisor-integration-v1-this-run.patch` — `225.4 KB`
+
+## Live integration v1 completion assessment
+- Completed:
+  - one real live path in Saved Jobs now uses the backend advisor/evaluation contract
+  - the integrated Saved Jobs path bypasses mock saved-job evaluation data
+  - loading, empty, error, and partial-evidence states are explicit and honest
+  - backend contract translation is isolated in one adapter layer
+- Still mocked or deferred:
+  - Job Search remains outside the live backend path
+  - Dashboard and Career Readiness only retain existing behavior and did not receive broad live integration
+- Readiness:
+  - the system is ready for the next live integration slice
+
+### Concise summary
+- Files changed:
+  - Saved Jobs page wrapper, live advisor proxy routes, live advisor adapter/client/config helpers, Saved Jobs live panel, UI exports, required change briefs, merge notes
+- Tests run:
+  - targeted adapter/panel tests
+  - full frontend test suite
+  - frontend typecheck
+  - changed-file eslint
+  - full frontend build
+  - targeted backend advisor stored-job API tests
+- Status:
+  - **complete** for the narrow Saved Jobs live integration slice
+- Recommended next branch:
+  - `git checkout -b feature/frontend-job-search-live-integration-v1`
+
+# 2026-03-26 — Job Search live advisor integration v1
+
+## Summary of changes
+
+- Wired the Job Search selected-job evaluation path to the real backend advisor flow through the frontend proxy route at `app/api/live-advisor/evaluate/route.ts`.
+- Reused and extended the live advisor adapter/client boundary in `lib/live-advisor/adapter.ts` and `lib/live-advisor/client.ts` so backend mapping remains isolated from the UI.
+- Updated `app/(shared)/dashboard/job-search/page.tsx` and `packages/ui/src/screens/JobSearchScreen.tsx` so the selected job requests live evaluation, ignores stale responses, and renders honest loading, empty, error, warning, missing-evidence, and explainability states.
+- Preserved the Saved Jobs live path and kept this phase scoped to the Job Search selected-job flow.
+
+## Commands run
+
+- `git status --short`
+- `git branch --show-current`
+- `git diff --name-status develop...HEAD`
+  - failed: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `git diff --stat develop...HEAD`
+  - failed: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `pnpm test -- lib/live-advisor/adapter.test.ts packages/ui/src/screens/JobSearchScreen.test.tsx packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx`
+  - passed: 56 tests
+- `pnpm typecheck`
+  - passed
+- `pnpm test`
+  - passed: 60 files, 978 tests
+- `pnpm build`
+  - passed
+- `pnpm exec eslint "app/(shared)/dashboard/job-search/page.tsx" "app/api/live-advisor/evaluate/route.ts" "lib/live-advisor/adapter.ts" "lib/live-advisor/client.ts" "packages/ui/src/index.ts" "packages/ui/src/screens/JobSearchScreen.tsx" "packages/ui/src/screens/JobSearchScreen.test.tsx"`
+  - passed
+- `pnpm lint`
+  - failed due a pre-existing repo error outside this slice in `packages/ui/src/screens/ResumeBuilderScreen.tsx:4679`
+- `$env:DAY='26'; pnpm ci:validate`
+  - passed, with existing historical day-label warnings
+
+## Results
+
+- Job Search selected-job evaluation now uses the live backend advisor contract.
+- Mock advisor output is bypassed for the integrated Job Search selected-job path.
+- Saved Jobs remained live-wired and was not regressed by the shared adapter/client changes.
+- The selected-job panel now guards against stale responses when users change jobs quickly.
+- The integrated flow now surfaces backend reasons, gaps, warnings, missing evidence, next actions, confidence, and explainability metadata directly.
+
+## Known issues
+
+- `pnpm lint` still fails at repo level because of a pre-existing `react-hooks/set-state-in-effect` error in `packages/ui/src/screens/ResumeBuilderScreen.tsx:4679`.
+- The frontend repo still does not have a usable local `develop` ref, so `git diff develop...HEAD` and `git diff --stat develop...HEAD` cannot be used as a baseline here.
+- There are unrelated local frontend edits already present in Saved Jobs and Resume Builder files, plus existing untracked files under `app/api/live-advisor/`, `lib/live-advisor/`, and several change briefs. The repo-wide incremental patch artifact therefore includes unrelated worktree changes in addition to this phase.
+- The Job Search results list and search dataset remain local/mock in this slice. Only the selected-job evaluation flow is live.
+
+## Git state
+
+- `git status --short`
+  - `M app/(shared)/dashboard/job-search/page.tsx`
+  - `M app/(shared)/dashboard/saved-jobs/page.tsx`
+  - `M docs/merge-notes/current.md`
+  - `M packages/ui/src/index.ts`
+  - `M packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - `M packages/ui/src/screens/JobSearchScreen.tsx`
+  - `M packages/ui/src/screens/ResumeBuilderScreen.test.tsx`
+  - `M packages/ui/src/screens/ResumeBuilderScreen.tsx`
+  - `M packages/ui/src/screens/SavedJobsScreen.tsx`
+  - `?? app/api/live-advisor/`
+  - `?? docs/change-briefs/day-26.md`
+  - `?? docs/change-briefs/frontend-backend-live-advisor-integration-v1.md`
+  - `?? docs/change-briefs/job-search-live-advisor-integration-v1.md`
+  - `?? docs/change-briefs/resume-builder-edit-dashboard.md`
+  - `?? docs/change-briefs/resume-builder-edit-impact.md`
+  - `?? docs/change-briefs/resume-builder-header-cleanup.md`
+  - `?? docs/change-briefs/resume-builder-resume-slice.md`
+  - `?? lib/live-advisor/`
+  - `?? packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx`
+  - `?? packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx`
+- `git branch --show-current`
+  - `feature/job-search-live-advisor-integration-v1`
+- `git diff --name-status develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `git diff --stat develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+
+## Patch artifacts
+
+- Required custom artifacts:
+  - `artifacts/job-search-live-advisor-integration-v1.patch`
+  - `artifacts/job-search-live-advisor-integration-v1-this-run.patch`
+- `artifacts/job-search-live-advisor-integration-v1.patch`
+  - contains the exact `develop...HEAD` baseline failure text because no local `develop` ref is available
+- `artifacts/job-search-live-advisor-integration-v1-this-run.patch`
+  - contains the current working-tree diff excluding `artifacts/`
+- `ls -lh` outputs:
+  - `job-search-live-advisor-integration-v1.patch` — `126 B`
+  - `job-search-live-advisor-integration-v1-this-run.patch` — `280,993 B`
+
+## Job Search live integration completion assessment
+
+- Job Search flow now live:
+  - the selected/active job detail evaluation flow in Job Search now uses the real backend advisor path
+- Saved Jobs stability:
+  - Saved Jobs remained live-wired and stable in this phase
+- Still mocked:
+  - the Job Search result list/search dataset still uses local mock data
+  - Dashboard and Career Readiness remain outside live advisor integration for this slice
+- Readiness:
+  - the app is ready for the next live integration slice
+
+## Concise summary
+
+- Files changed:
+  - `app/(shared)/dashboard/job-search/page.tsx`
+  - `app/api/live-advisor/evaluate/route.ts`
+  - `lib/live-advisor/adapter.ts`
+  - `lib/live-advisor/client.ts`
+  - `packages/ui/src/index.ts`
+  - `packages/ui/src/screens/JobSearchScreen.tsx`
+  - `packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - `docs/change-briefs/job-search-live-advisor-integration-v1.md`
+  - `docs/merge-notes/current.md`
+- Tests run:
+  - targeted Job Search live-advisor tests
+  - `pnpm typecheck`
+  - `pnpm test`
+  - changed-file eslint
+  - `pnpm build`
+  - `pnpm lint` attempt
+  - `$env:DAY='26'; pnpm ci:validate`
+- Status:
+  - **complete** for the narrow Job Search live advisor integration slice
+- Recommended next branch:
+  - `git checkout -b feature/dashboard-live-advisor-summary-v1`
+
+# 2026-03-26 — Job Search live results v1
+
+## Summary of changes
+
+- Added a frontend proxy route at `app/api/live-advisor/search/route.ts` so Job Search can request backend-backed USAJOBS results without the browser calling USAJOBS directly.
+- Extended the live-advisor adapter/client boundary in `lib/live-advisor/adapter.ts` and `lib/live-advisor/client.ts` to build backend search requests and normalize canonical backend jobs into the existing frontend `Job` shape.
+- Updated `app/(shared)/dashboard/job-search/page.tsx` and `packages/ui/src/screens/JobSearchScreen.tsx` so the main Search button, Enter key submission, prompt-apply flow, filter-guide apply actions, and Load more behavior all use the live backend search path.
+- Added honest loading, empty, error, duplicate-request, stale-selection, and unsupported-filter notes for the live Job Search results flow while preserving the existing selected-job live evaluation path.
+- Updated `packages/ui/src/stores/jobSearchV1Store.ts` so the store can accept live search pages, preserve or replace selection deterministically, and surface honest transient live-search errors.
+
+## Commands run
+
+- `git status --short`
+- `git branch --show-current`
+- `git diff --name-status develop...HEAD`
+  - failed: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `git diff --stat develop...HEAD`
+  - failed: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `pnpm test -- lib/live-advisor/adapter.test.ts packages/ui/src/stores/jobSearchV1Store.test.ts packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - passed: 71 tests
+- `pnpm typecheck`
+  - passed
+- `pnpm exec eslint "app/(shared)/dashboard/job-search/page.tsx" "app/api/live-advisor/search/route.ts" "lib/live-advisor/adapter.ts" "lib/live-advisor/client.ts" "packages/ui/src/index.ts" "packages/ui/src/screens/JobSearchScreen.tsx" "packages/ui/src/screens/JobSearchScreen.test.tsx" "packages/ui/src/stores/jobSearchV1Store.ts" "packages/ui/src/stores/jobSearchV1Store.test.ts" "lib/live-advisor/adapter.test.ts"`
+  - passed
+- `pnpm test`
+  - passed: 60 files, 985 tests
+- `pnpm build`
+  - passed
+- `pnpm lint`
+  - failed due a pre-existing repo error outside this slice in `packages/ui/src/screens/ResumeBuilderScreen.tsx:4679`
+- `$env:DAY='26'; pnpm ci:validate`
+  - passed, with existing historical day-label warnings
+
+## Results
+
+- The Job Search Search button now uses live backend-backed data.
+- The main Job Search result list no longer relies on local/mock seeding for the live path.
+- Selected-job live evaluation still works on top of real backend-backed search results.
+- Load more now requests the next backend page instead of paging through a mock in-memory search result set.
+- The build confirmed the new route `/api/live-advisor/search` is registered in the app.
+
+## Known issues
+
+- `pnpm lint` still fails at repo level because of a pre-existing `react-hooks/set-state-in-effect` error in `packages/ui/src/screens/ResumeBuilderScreen.tsx:4679`.
+- The frontend repo still does not have a usable local `develop` ref, so `git diff develop...HEAD` and `git diff --stat develop...HEAD` cannot be used as a baseline here.
+- There are unrelated local frontend edits already present in Saved Jobs and Resume Builder files, plus existing untracked files under `app/api/live-advisor/`, `lib/live-advisor/`, and several change briefs. The repo-wide incremental patch artifact therefore includes unrelated worktree changes in addition to this phase.
+- The Job Search agency filter still stores display names while the backend search contract expects official USAJOBS organization codes, so the live path surfaces that limitation honestly instead of faking agency-code mapping.
+- Some auxiliary Job Search guide datasets and document-style detail content remain local deterministic frontend content.
+
+## Git state
+
+- `git status --short`
+  - `M app/(shared)/dashboard/job-search/page.tsx`
+  - `M app/(shared)/dashboard/saved-jobs/page.tsx`
+  - `M docs/merge-notes/current.md`
+  - `M packages/ui/src/index.ts`
+  - `M packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - `M packages/ui/src/screens/JobSearchScreen.tsx`
+  - `M packages/ui/src/screens/ResumeBuilderScreen.test.tsx`
+  - `M packages/ui/src/screens/ResumeBuilderScreen.tsx`
+  - `M packages/ui/src/screens/SavedJobsScreen.tsx`
+  - `M packages/ui/src/stores/jobSearchV1Store.test.ts`
+  - `M packages/ui/src/stores/jobSearchV1Store.ts`
+  - `?? app/api/live-advisor/`
+  - `?? docs/change-briefs/day-26.md`
+  - `?? docs/change-briefs/frontend-backend-live-advisor-integration-v1.md`
+  - `?? docs/change-briefs/job-search-live-advisor-integration-v1.md`
+  - `?? docs/change-briefs/job-search-live-results-v1.md`
+  - `?? docs/change-briefs/resume-builder-edit-dashboard.md`
+  - `?? docs/change-briefs/resume-builder-edit-impact.md`
+  - `?? docs/change-briefs/resume-builder-header-cleanup.md`
+  - `?? docs/change-briefs/resume-builder-resume-slice.md`
+  - `?? lib/live-advisor/`
+  - `?? packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx`
+  - `?? packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx`
+- `git branch --show-current`
+  - `feature/job-search-live-results-v1`
+- `git diff --name-status develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `git diff --stat develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+
+## Patch artifacts
+
+- Required custom artifacts:
+  - `artifacts/job-search-live-results-v1.patch`
+  - `artifacts/job-search-live-results-v1-this-run.patch`
+- `artifacts/job-search-live-results-v1.patch`
+  - contains the exact `develop...HEAD` baseline failure text because no local `develop` ref is available
+- `artifacts/job-search-live-results-v1-this-run.patch`
+  - contains the current working-tree diff excluding `artifacts/`
+- `ls -lh` outputs:
+  - `job-search-live-results-v1.patch` — `126 B`
+  - `job-search-live-results-v1-this-run.patch` — `330,159 B`
+
+## Job Search live results completion assessment
+
+- Search button live-backed:
+  - yes, the main Job Search Search button now uses live backend-backed data through the frontend proxy and backend search endpoint
+- Selected-job live evaluation:
+  - yes, the existing selected-job live advisor evaluation still works on top of the live search results path
+- Saved Jobs stability:
+  - Saved Jobs remained stable and live-wired in this phase
+- Still mocked:
+  - the Job Search agency filter is not fully live-mapped because the frontend still stores agency display names instead of official organization codes
+  - some auxiliary Job Search guide datasets and local detail-copy helpers remain deterministic frontend content
+- Readiness:
+  - the app is ready for the next live integration slice
+
+## Concise summary
+
+- Files changed:
+  - `app/(shared)/dashboard/job-search/page.tsx`
+  - `app/api/live-advisor/search/route.ts`
+  - `lib/live-advisor/adapter.ts`
+  - `lib/live-advisor/client.ts`
+  - `packages/ui/src/index.ts`
+  - `packages/ui/src/screens/JobSearchScreen.tsx`
+  - `packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - `packages/ui/src/stores/jobSearchV1Store.ts`
+  - `packages/ui/src/stores/jobSearchV1Store.test.ts`
+  - `lib/live-advisor/adapter.test.ts`
+  - `docs/change-briefs/job-search-live-results-v1.md`
+  - `docs/merge-notes/current.md`
+- Tests run:
+  - targeted live-search adapter/store/screen tests
+  - `pnpm typecheck`
+  - changed-file eslint
+  - `pnpm test`
+  - `pnpm build`
+  - `pnpm lint` attempt
+  - `$env:DAY='26'; pnpm ci:validate`
+- Status:
+  - **complete** for the narrow Job Search live results slice
+- Recommended next branch:
+  - `git checkout -b feature/dashboard-live-search-summary-v1`
+
+# Job Search live results v1 - config/setup follow-up
+
+## Summary of changes
+
+- Added a committed frontend env template at `.env.local.example` for local live Job Search and Saved Jobs integration.
+- Tightened the shared live-advisor backend config helper in `lib/live-advisor/backend.ts` so required env behavior is explicit and the missing-config error is clearer.
+- Added direct config helper coverage in `lib/live-advisor/backend.test.ts`.
+- Updated `README.md` and `docs/change-briefs/job-search-live-results-v1.md` so local frontend/backend setup, backend key alignment, restart behavior, and verification steps are explicit.
+
+## Commands run
+
+- `Get-Content docs/ai/cursor-house-rules.md`
+- `Get-Content docs/ai/testing-standards.md`
+- `Get-Content docs/ai/prompt-header.md`
+- `Get-Content lib/live-advisor/backend.ts`
+- `Get-Content .gitignore`
+- `Get-Content README.md`
+- `Get-Content docs/change-briefs/job-search-live-results-v1.md`
+- `Get-Content app/api/live-advisor/search/route.ts`
+- `Get-Content app/api/live-advisor/stored-jobs/route.ts`
+- `Get-Content app/api/live-advisor/stored-jobs/evaluate/route.ts`
+- `Get-Content app/api/live-advisor/evaluate/route.ts`
+- `rg -n "resolveLiveAdvisorBackendConfig|PATHOS_BACKEND_BASE_URL|PATHOS_BACKEND_API_KEY|PATHOS_API_KEYS" -S .`
+- `pnpm test -- lib/live-advisor/backend.test.ts lib/live-advisor/adapter.test.ts`
+  - passed: 13 tests
+- `pnpm exec eslint lib/live-advisor/backend.ts lib/live-advisor/backend.test.ts README.md`
+  - completed with a README ignore warning because no markdown eslint config is supplied
+- `pnpm typecheck`
+  - passed
+- `pnpm test`
+  - passed: 61 files, 991 tests
+- `pnpm build`
+  - passed
+- `pnpm exec eslint lib/live-advisor/backend.ts lib/live-advisor/backend.test.ts`
+  - passed
+- `$env:DAY='26'; pnpm ci:validate`
+  - passed, with the existing historical day-label warnings
+- `git status --short`
+- `git branch --show-current`
+- `git diff --name-status develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `git diff --stat develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+
+## Results
+
+- The frontend repo now contains a safe local env template for live backend integration.
+- The live advisor/search proxy routes still use one shared config helper instead of scattered env reads.
+- Missing backend auth config now returns a clearer setup error that points the operator to `.env.local.example` and the frontend restart requirement.
+- Local setup is now documented in the repo root README instead of being implied only by code and prior merge notes.
+
+## Known issues
+
+- This repo still does not have a usable local `develop` ref, so `git diff develop...HEAD` and `git diff --stat develop...HEAD` still fail exactly as logged below.
+- The repo-wide working tree still contains unrelated local edits and untracked files from parallel work, so the incremental patch artifact includes more than this narrow config follow-up.
+- `pnpm exec eslint lib/live-advisor/backend.ts lib/live-advisor/backend.test.ts README.md` produced a README ignore warning because the repo does not supply markdown eslint config. The changed TypeScript files lint cleanly.
+- Practical local runtime verification still depends on the developer filling `.env.local` with a real backend URL and accepted API key, then running frontend and backend together.
+
+## Git state
+
+- `git status --short`
+  - `M .gitignore`
+  - `M README.md`
+  - `M app/(shared)/dashboard/job-search/page.tsx`
+  - `M app/(shared)/dashboard/saved-jobs/page.tsx`
+  - `M docs/merge-notes/current.md`
+  - `M packages/ui/src/index.ts`
+  - `M packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - `M packages/ui/src/screens/JobSearchScreen.tsx`
+  - `M packages/ui/src/screens/ResumeBuilderScreen.test.tsx`
+  - `M packages/ui/src/screens/ResumeBuilderScreen.tsx`
+  - `M packages/ui/src/screens/SavedJobsScreen.tsx`
+  - `M packages/ui/src/stores/jobSearchV1Store.test.ts`
+  - `M packages/ui/src/stores/jobSearchV1Store.ts`
+  - `?? .env.local.example`
+  - `?? app/api/live-advisor/`
+  - `?? docs/change-briefs/day-26.md`
+  - `?? docs/change-briefs/frontend-backend-live-advisor-integration-v1.md`
+  - `?? docs/change-briefs/job-search-live-advisor-integration-v1.md`
+  - `?? docs/change-briefs/job-search-live-results-v1.md`
+  - `?? docs/change-briefs/resume-builder-edit-dashboard.md`
+  - `?? docs/change-briefs/resume-builder-edit-impact.md`
+  - `?? docs/change-briefs/resume-builder-header-cleanup.md`
+  - `?? docs/change-briefs/resume-builder-resume-slice.md`
+  - `?? lib/live-advisor/`
+  - `?? packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx`
+  - `?? packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx`
+- `git branch --show-current`
+  - `feature/job-search-live-results-v1`
+- `git diff --name-status develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `git diff --stat develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+
+## Patch artifacts
+
+- Required custom artifacts:
+  - `artifacts/job-search-live-results-v1.patch`
+  - `artifacts/job-search-live-results-v1-this-run.patch`
+- Day validation artifacts refreshed:
+  - `artifacts/day-26.patch`
+  - `artifacts/day-26-run.patch`
+- `artifacts/job-search-live-results-v1.patch`
+  - contains the exact `develop...HEAD` baseline failure text because no local `develop` ref is available
+- `artifacts/job-search-live-results-v1-this-run.patch`
+  - contains the current working-tree diff excluding `artifacts/`
+- `ls -lh` outputs:
+  - `job-search-live-results-v1.patch` - `200 B`
+  - `job-search-live-results-v1-this-run.patch` - `339,401 B`
+  - `day-26.patch` - `200 B`
+  - `day-26-run.patch` - `339,401 B`
+
+## Frontend live config follow-up assessment
+
+- Frontend config files created or updated:
+  - created `.env.local.example`
+  - updated `lib/live-advisor/backend.ts`
+  - updated `README.md`
+  - updated `docs/change-briefs/job-search-live-results-v1.md`
+- Required env vars for local live integration:
+  - `PATHOS_BACKEND_BASE_URL`
+  - `PATHOS_BACKEND_API_KEY`
+  - `PATHOS_API_KEYS` remains a supported fallback, but local frontend setup should prefer `PATHOS_BACKEND_API_KEY`
+- Live-path readiness once env is filled in:
+  - Job Search and Saved Jobs live paths are ready once `.env.local` points at the running backend and uses an API key accepted by backend `PATHOS_API_KEYS`
+- Remaining known limitation:
+  - runtime success still depends on the operator providing a real local backend URL and accepted key; this follow-up only makes that setup explicit and test-covered
+
+# Job Search live results v1 - final closeout safety review
+
+## Summary of changes
+
+- Performed a release-style closeout inspection of the current frontend branch for sensitive data exposure, unsafe config, and branch coherence.
+- Found and corrected one real safety issue: `.env.local.example` contained a concrete backend API key value instead of a placeholder.
+- Re-validated the live Job Search results flow, selected-job live evaluation flow, and Saved Jobs live path after the placeholder correction.
+
+## Commands run
+
+- `Get-Content docs/ai/cursor-house-rules.md`
+- `Get-Content docs/ai/testing-standards.md`
+- `Get-Content docs/ai/prompt-header.md`
+- `git branch --show-current`
+- `Get-ChildItem -Force -Name .env*`
+- `git status --short`
+- `rg -n "(API[_-]?KEY|TOKEN|SECRET|Authorization: Bearer|Bearer |desktop-dev-key|sk-|pk_|USAJOBS_API_KEY|PATHOS_API_KEYS|PATHOS_BACKEND_API_KEY|PATHOS_BACKEND_BASE_URL|C:\\\\|/Users/|/home/)" .env.local.example app/api/live-advisor lib/live-advisor docs/change-briefs docs/merge-notes/current.md README.md -S`
+- `git diff -- . ":(exclude)artifacts" | Select-String -Pattern "(sk-|pk_|Bearer |Authorization:|API_KEY|TOKEN|SECRET|desktop-dev-key|PATHOS_API_KEYS|PATHOS_BACKEND_API_KEY|USAJOBS_API_KEY)" -Context 1,1`
+- `Get-Content .env.local.example`
+- `Get-Content lib/live-advisor/backend.ts`
+- `Get-ChildItem app/api/live-advisor -Recurse | Select-Object FullName`
+- `pnpm test -- lib/live-advisor/backend.test.ts lib/live-advisor/adapter.test.ts packages/ui/src/screens/JobSearchScreen.test.tsx packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx`
+  - passed: 66 tests
+- `pnpm typecheck`
+  - passed
+- `pnpm build`
+  - passed
+- `pnpm exec eslint -- "lib/live-advisor/backend.ts" "lib/live-advisor/backend.test.ts" "app/api/live-advisor/evaluate/route.ts" "app/api/live-advisor/search/route.ts" "app/api/live-advisor/stored-jobs/route.ts" "app/api/live-advisor/stored-jobs/evaluate/route.ts" "packages/ui/src/screens/JobSearchScreen.tsx" "packages/ui/src/screens/JobSearchScreen.test.tsx" "packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx" "packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx" "packages/ui/src/stores/jobSearchV1Store.ts" "packages/ui/src/stores/jobSearchV1Store.test.ts" "app/(shared)/dashboard/job-search/page.tsx" "app/(shared)/dashboard/saved-jobs/page.tsx" "packages/ui/src/screens/SavedJobsScreen.tsx"`
+  - passed
+- `pnpm test`
+  - passed: 61 files, 991 tests
+- `$env:DAY='26'; pnpm ci:validate`
+  - passed, with the existing historical day-label warnings
+- `git status --short`
+- `git branch --show-current`
+- `git diff --name-status develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `git diff --stat develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+
+## Results
+
+- No sensitive data remains in the tracked example env file after the fix.
+- The live-advisor proxy routes and helper files do not contain embedded keys, payload dumps, or unsafe logging.
+- No tracked local `.env.local` file is present; only `.env.local.example` is visible in the repo, and it is now placeholder-only.
+- The branch remains coherent for the current ticket scope: live Job Search results use backend-backed data, selected-job live evaluation still works, and Saved Jobs remains live-wired.
+
+## Known issues
+
+- This repo still does not have a usable local `develop` ref, so `git diff develop...HEAD` and `git diff --stat develop...HEAD` still fail exactly as logged below.
+- The working tree still contains unrelated local edits and untracked files from parallel work, so the incremental patch artifact includes more than this ticket alone.
+- `pnpm build` still emits the existing `baseline-browser-mapping` staleness warnings, but the build passes.
+- The Job Search agency filter still uses frontend display names while the backend contract expects official USAJOBS organization codes; that limitation remains documented honestly.
+
+## Git state
+
+- `git status --short`
+  - `M .gitignore`
+  - `M README.md`
+  - `M app/(shared)/dashboard/job-search/page.tsx`
+  - `M app/(shared)/dashboard/saved-jobs/page.tsx`
+  - `M docs/merge-notes/current.md`
+  - `M packages/ui/src/index.ts`
+  - `M packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - `M packages/ui/src/screens/JobSearchScreen.tsx`
+  - `M packages/ui/src/screens/ResumeBuilderScreen.test.tsx`
+  - `M packages/ui/src/screens/ResumeBuilderScreen.tsx`
+  - `M packages/ui/src/screens/SavedJobsScreen.tsx`
+  - `M packages/ui/src/stores/jobSearchV1Store.test.ts`
+  - `M packages/ui/src/stores/jobSearchV1Store.ts`
+  - `?? .env.local.example`
+  - `?? app/api/live-advisor/`
+  - `?? docs/change-briefs/day-26.md`
+  - `?? docs/change-briefs/frontend-backend-live-advisor-integration-v1.md`
+  - `?? docs/change-briefs/job-search-live-advisor-integration-v1.md`
+  - `?? docs/change-briefs/job-search-live-results-v1.md`
+  - `?? docs/change-briefs/resume-builder-edit-dashboard.md`
+  - `?? docs/change-briefs/resume-builder-edit-impact.md`
+  - `?? docs/change-briefs/resume-builder-header-cleanup.md`
+  - `?? docs/change-briefs/resume-builder-resume-slice.md`
+  - `?? lib/live-advisor/`
+  - `?? packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.test.tsx`
+  - `?? packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx`
+- `git branch --show-current`
+  - `feature/job-search-live-results-v1`
+- `git diff --name-status develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+- `git diff --stat develop...HEAD`
+  - failed exactly with: `fatal: ambiguous argument 'develop...HEAD': unknown revision or path not in the working tree.`
+
+## Patch artifacts
+
+- Required custom artifacts:
+  - `artifacts/job-search-live-results-v1.patch`
+  - `artifacts/job-search-live-results-v1-this-run.patch`
+- `artifacts/job-search-live-results-v1.patch`
+  - contains the exact `develop...HEAD` baseline failure text because no local `develop` ref is available
+- `artifacts/job-search-live-results-v1-this-run.patch`
+  - contains the current working-tree diff excluding `artifacts/`
+- `ls -lh` outputs:
+  - `job-search-live-results-v1.patch` - `200 B`
+  - `job-search-live-results-v1-this-run.patch` - `346,796 B`
+
+## Final closeout safety assessment
+
+- Sensitive data risk found:
+  - yes, one concrete backend API key had been left in `.env.local.example`
+- Unsafe config removed or corrected:
+  - yes, that concrete key was replaced with the placeholder `replace-with-your-local-backend-api-key`
+- Example config files safe:
+  - yes, the tracked example env file is now placeholder-only
+- Branch ready for commit/PR:
+  - yes for the scoped ticket, with the honest limitation that unrelated parallel work is still present in the wider working tree
+- Remaining honest limitation:
+  - the Job Search agency filter still is not fully code-mapped to backend organization codes, and the repo still lacks a usable local `develop` ref for baseline diff commands
