@@ -52,7 +52,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { useNav } from '@pathos/adapters';
-import { CAREER_READINESS, RESUME_BUILDER } from '../routes/routes';
+import { RESUME_BUILDER } from '../routes/routes';
 import {
   loadSavedJobsStore,
   saveSavedJobsStore,
@@ -70,7 +70,6 @@ import { AskPathAdvisorButton } from '../components/AskPathAdvisorButton';
 import { usePathAdvisorScreenOverridesStore } from '../stores/pathAdvisorScreenOverridesStore';
 import {
   usePathAdvisorContextLogStore,
-  buildAnchorKey,
 } from '../stores/pathAdvisorContextLogStore';
 import type { PathAdvisorContextEntry } from '../stores/pathAdvisorContextLogStore';
 import { INTERACTIVE_HOVER_CLASS } from '../styles/interactiveHover';
@@ -78,7 +77,12 @@ import { scoreTierColor } from '../styles/scoreTiers';
 import { MatchBreakdownHeader, MatchBreakdownRow } from '../components/MatchBreakdownTable';
 import type { MatchBreakdownRowData } from '../components/MatchBreakdownTable';
 import {
-  buildDimensionBriefingPayload,
+  SavedJobsLiveAdvisorPanel,
+  type SavedJobsLiveEvaluation,
+  type SavedJobsLiveEvaluationState,
+  type SavedJobsLiveStoredJob,
+} from './_components/SavedJobsLiveAdvisorPanel';
+import {
   DimensionKey,
   JobMatchDimension,
   JobMatchSnapshot,
@@ -100,8 +104,25 @@ type SortKey = 'date-desc' | 'date-asc' | 'title' | 'agency';
 // Props
 // ---------------------------------------------------------------------------
 
-/** Props for SavedJobsScreen; currently no required props. */
-export type SavedJobsScreenProps = Record<string, unknown>;
+/**
+ * Live-advisor integration contract.
+ *
+ * The screen stays UI-focused by receiving two thin async functions instead of
+ * talking to the backend directly. This lets the app shell own profile mapping,
+ * proxy routes, and environment configuration while the shared UI package stays
+ * transport-agnostic.
+ */
+export interface SavedJobsLiveAdvisorIntegration {
+  loadStoredJobs: () => Promise<SavedJobsLiveStoredJob[]>;
+  evaluateStoredJob: (
+    storedJob: SavedJobsLiveStoredJob
+  ) => Promise<SavedJobsLiveEvaluation | null>;
+}
+
+/** Props for SavedJobsScreen. */
+export interface SavedJobsScreenProps {
+  liveAdvisor?: SavedJobsLiveAdvisorIntegration;
+}
 
 // ---------------------------------------------------------------------------
 // Local derived-data helpers
@@ -126,14 +147,6 @@ function countRecentJobs(jobs: Job[], days: number): number {
  * Count distinct agencies across all saved jobs.
  * Gives users a quick sense of how many agencies they are tracking.
  */
-function countUniqueAgencies(jobs: Job[]): number {
-  const seen = new Set<string>();
-  for (let i = 0; i < jobs.length; i++) {
-    seen.add(jobs[i].agency);
-  }
-  return seen.size;
-}
-
 /**
  * Filter saved jobs by a free-text query.
  * Matches title, agency, and location case-insensitively.
@@ -196,6 +209,95 @@ const SORT_LABELS: Record<SortKey, string> = {
 };
 
 const ALL_SORT_KEYS: SortKey[] = ['date-desc', 'date-asc', 'title', 'agency'];
+
+function formatLiveGradeRange(
+  gradeMin: number | null,
+  gradeMax: number | null
+): string | undefined {
+  if (gradeMin === null && gradeMax === null) {
+    return undefined;
+  }
+  if (gradeMin !== null && gradeMax !== null) {
+    if (gradeMin === gradeMax) {
+      return 'GS-' + String(gradeMin);
+    }
+    return 'GS-' + String(gradeMin) + ' to GS-' + String(gradeMax);
+  }
+  if (gradeMin !== null) {
+    return 'GS-' + String(gradeMin);
+  }
+  return 'GS-' + String(gradeMax);
+}
+
+function formatLiveSalaryRange(
+  salaryMin: number | null,
+  salaryMax: number | null
+): string | undefined {
+  if (salaryMin === null && salaryMax === null) {
+    return undefined;
+  }
+  if (salaryMin !== null && salaryMax !== null) {
+    return '$' + salaryMin.toLocaleString() + ' - $' + salaryMax.toLocaleString();
+  }
+  if (salaryMin !== null) {
+    return 'From $' + salaryMin.toLocaleString();
+  }
+  if (salaryMax !== null) {
+    return 'Up to $' + salaryMax.toLocaleString();
+  }
+  return undefined;
+}
+
+function buildLiveSavedJobsStore(
+  storedJobs: SavedJobsLiveStoredJob[]
+): { store: SavedJobsStore; liveJobMap: Record<string, SavedJobsLiveStoredJob> } {
+  const jobs: Job[] = [];
+  const liveJobMap: Record<string, SavedJobsLiveStoredJob> = {};
+
+  for (let i = 0; i < storedJobs.length; i++) {
+    const storedJob = storedJobs[i];
+    const primaryLocation =
+      storedJob.locations.length > 0 ? storedJob.locations.join(' \u2022 ') : 'Location not provided';
+    const title = storedJob.title !== null && storedJob.title !== '' ? storedJob.title : storedJob.jobId;
+    const agency =
+      storedJob.organization !== null && storedJob.organization !== ''
+        ? storedJob.organization
+        : 'Organization not provided';
+    const closeDate =
+      storedJob.closeDate !== null && storedJob.closeDate !== ''
+        ? new Date(storedJob.closeDate).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          })
+        : undefined;
+
+    jobs.push({
+      id: storedJob.jobId,
+      title: title,
+      agency: agency,
+      location: primaryLocation,
+      grade: formatLiveGradeRange(storedJob.gradeMin, storedJob.gradeMax),
+      salaryRange: formatLiveSalaryRange(storedJob.salaryMin, storedJob.salaryMax),
+      url: 'https://www.usajobs.gov/job/' + storedJob.jobId,
+      savedAt:
+        storedJob.lastSeenAt !== null && storedJob.lastSeenAt !== ''
+          ? storedJob.lastSeenAt
+          : new Date().toISOString(),
+      closeDate: closeDate,
+    });
+    liveJobMap[storedJob.jobId] = storedJob;
+  }
+
+  return {
+    store: {
+      schemaVersion: 1,
+      jobs: jobs,
+      selectedJobId: jobs.length > 0 ? jobs[0].id : null,
+    },
+    liveJobMap: liveJobMap,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // PathAdvisor screen overrides
@@ -366,6 +468,7 @@ function SavedJobItem(props: {
   isSelected: boolean;
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
+  showRemoveAction: boolean;
 }) {
   const job = props.job;
   const isSelected = props.isSelected;
@@ -379,6 +482,7 @@ function SavedJobItem(props: {
 
   /* Readiness score derived from matchScore — displayed as a prominent scan-level
    * badge in the title row so users can compare readiness across the list. */
+  const hasMatchScore = job.matchScore !== undefined && job.matchScore !== null;
   const readiness = deriveReadinessScore(job.matchScore);
 
   /* Mockup parity: selected uses accent-tinted background (warmer, more distinct than surface2).
@@ -434,16 +538,29 @@ function SavedJobItem(props: {
           >
             {job.title}
           </p>
-          <span
-            className="text-[11px] font-bold tabular-nums px-2 py-0.5 rounded-full flex-shrink-0"
-            style={{
-              background: 'color-mix(in srgb, ' + scoreTierColor(readiness) + ' 15%, transparent)',
-              color: scoreTierColor(readiness),
-            }}
-            title={'Readiness: ' + String(readiness) + '/100'}
-          >
-            {String(readiness)}%
-          </span>
+          {hasMatchScore ? (
+            <span
+              className="text-[11px] font-bold tabular-nums px-2 py-0.5 rounded-full flex-shrink-0"
+              style={{
+                background: 'color-mix(in srgb, ' + scoreTierColor(readiness) + ' 15%, transparent)',
+                color: scoreTierColor(readiness),
+              }}
+              title={'Readiness: ' + String(readiness) + '/100'}
+            >
+              {String(readiness)}%
+            </span>
+          ) : (
+            <span
+              className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full flex-shrink-0"
+              style={{
+                background: 'color-mix(in srgb, var(--p-accent) 12%, transparent)',
+                color: 'var(--p-accent)',
+              }}
+              title="Live backend evaluation available"
+            >
+              Live
+            </span>
+          )}
         </div>
 
         {/* Agency + location on one line (matches Job Search compact format) */}
@@ -498,27 +615,29 @@ function SavedJobItem(props: {
       {/* Right-side action: trash icon only, vertically centered.
        * No chevron, no expanding buttons, no extra icons. Row height stays stable.
        * Readiness score is now in the title row for better scan visibility. */}
-      <div className="flex items-center justify-center pr-2 flex-shrink-0">
-        <button
-          type="button"
-          onClick={function (e: React.MouseEvent) {
-            e.stopPropagation();
-            props.onRemove(job.id);
-          }}
-          onKeyDown={function (e: React.KeyboardEvent) {
-            if (e.key === 'Enter' || e.key === ' ') {
+      {props.showRemoveAction ? (
+        <div className="flex items-center justify-center pr-2 flex-shrink-0">
+          <button
+            type="button"
+            onClick={function (e: React.MouseEvent) {
               e.stopPropagation();
-              e.preventDefault();
               props.onRemove(job.id);
-            }
-          }}
-          className={INTERACTIVE_HOVER_CLASS + ' flex-shrink-0 p-1.5 rounded'}
-          aria-label={'Remove ' + job.title + ' from saved'}
-          style={{ color: 'var(--p-text-dim)', border: '1px solid transparent' }}
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
-      </div>
+            }}
+            onKeyDown={function (e: React.KeyboardEvent) {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.stopPropagation();
+                e.preventDefault();
+                props.onRemove(job.id);
+              }
+            }}
+            className={INTERACTIVE_HOVER_CLASS + ' flex-shrink-0 p-1.5 rounded'}
+            aria-label={'Remove ' + job.title + ' from saved'}
+            style={{ color: 'var(--p-text-dim)', border: '1px solid transparent' }}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1444,6 +1563,9 @@ export type SavedJobDetailsProps = {
   onStartGuidedApply: () => void;
   onBuildResume: () => void;
   onAskPathAdvisor: () => void;
+  allowRemove?: boolean;
+  liveStoredJob?: SavedJobsLiveStoredJob;
+  evaluateStoredJob?: ((storedJob: SavedJobsLiveStoredJob) => Promise<SavedJobsLiveEvaluation | null>) | undefined;
   initialViewMode?: DetailViewMode;
   initialAnnouncementSection?: AnnouncementSectionKey;
 };
@@ -1487,6 +1609,9 @@ export function SavedJobDetails(props: SavedJobDetailsProps) {
       onStartGuidedApply={props.onStartGuidedApply}
       onBuildResume={props.onBuildResume}
       onAskPathAdvisor={props.onAskPathAdvisor}
+      allowRemove={props.allowRemove}
+      liveStoredJob={props.liveStoredJob}
+      evaluateStoredJob={props.evaluateStoredJob}
       initialViewMode={props.initialViewMode}
       initialAnnouncementSection={props.initialAnnouncementSection}
     />
@@ -1499,6 +1624,9 @@ type SavedJobDetailsContentProps = {
   onStartGuidedApply: () => void;
   onBuildResume: () => void;
   onAskPathAdvisor: () => void;
+  allowRemove?: boolean;
+  liveStoredJob?: SavedJobsLiveStoredJob;
+  evaluateStoredJob?: ((storedJob: SavedJobsLiveStoredJob) => Promise<SavedJobsLiveEvaluation | null>) | undefined;
   initialViewMode?: DetailViewMode;
   initialAnnouncementSection?: AnnouncementSectionKey;
 };
@@ -1506,6 +1634,9 @@ type SavedJobDetailsContentProps = {
 function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
   const job = props.job;
   const usajobsUrl = job.url ? job.url : 'https://www.usajobs.gov';
+  const allowRemove = props.allowRemove !== false;
+  const liveStoredJob = props.liveStoredJob;
+  const evaluateStoredJob = props.evaluateStoredJob;
 
   /* ── View mode state ──────────────────────────────────────────────────
    * Controls whether the detail panel shows Match Overview (analytical) or
@@ -1529,8 +1660,6 @@ function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
 
   /* Compact match summary — headline-level summary of match intelligence. */
   const matchSummary = deriveMatchSummary(job);
-  const matchDims = deriveMatchDimensions(job);
-  const jobMatchSnapshot = buildSavedJobMatchSnapshot(job, matchDims, matchSummary);
 
   /* Close-date urgency check — used by Job Details and consideration bullets. */
   const isSoon = isCloseDateSoon(job.closeDate, 14);
@@ -1554,6 +1683,87 @@ function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
   if (activeAnnouncementContent === '' && announcementSections.length > 0) {
     activeAnnouncementContent = announcementSections[0].content;
   }
+
+  const [liveAdvisorState, setLiveAdvisorState] = useState<SavedJobsLiveEvaluationState>({
+    status: liveStoredJob !== undefined && evaluateStoredJob !== undefined ? 'loading' : 'idle',
+    errorMessage: null,
+    evaluation: null,
+  });
+
+  const fetchLiveAdvisorEvaluation = useCallback(async function () {
+    if (liveStoredJob === undefined || evaluateStoredJob === undefined) {
+      setLiveAdvisorState({
+        status: 'idle',
+        errorMessage: null,
+        evaluation: null,
+      });
+      return;
+    }
+
+    setLiveAdvisorState({
+      status: 'loading',
+      errorMessage: null,
+      evaluation: null,
+    });
+
+    try {
+      const evaluation = await evaluateStoredJob(liveStoredJob);
+      if (evaluation === null) {
+        setLiveAdvisorState({
+          status: 'empty',
+          errorMessage: null,
+          evaluation: null,
+        });
+        return;
+      }
+
+      setLiveAdvisorState({
+        status: 'success',
+        errorMessage: null,
+        evaluation: evaluation,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The live advisor request failed.';
+      setLiveAdvisorState({
+        status: 'error',
+        errorMessage: message,
+        evaluation: null,
+      });
+    }
+  }, [evaluateStoredJob, liveStoredJob]);
+
+  useEffect(function () {
+    if (liveStoredJob === undefined || evaluateStoredJob === undefined) {
+      return;
+    }
+
+    /* React's lint rule rejects direct state-setting work launched in the
+     * effect body. Scheduling the fetch keeps the auto-load behavior while
+     * making the effect a subscription-style trigger instead of an immediate
+     * state mutation site. */
+    const timeoutId = window.setTimeout(function () {
+      void fetchLiveAdvisorEvaluation();
+    }, 0);
+
+    return function () {
+      window.clearTimeout(timeoutId);
+    };
+  }, [evaluateStoredJob, fetchLiveAdvisorEvaluation, liveStoredJob]);
+
+  const liveOverallScore =
+    liveAdvisorState.evaluation !== null ? liveAdvisorState.evaluation.overallScore : null;
+  const headerScoreLabel =
+    liveStoredJob !== undefined && evaluateStoredJob !== undefined ? 'Evaluation' : 'Readiness';
+  const headerScoreValue =
+    liveStoredJob !== undefined && evaluateStoredJob !== undefined
+      ? (liveOverallScore !== null
+          ? String(liveOverallScore)
+          : (liveAdvisorState.status === 'loading' ? '...' : '--'))
+      : String(readinessScore);
+  const headerScoreColor =
+    liveStoredJob !== undefined && evaluateStoredJob !== undefined
+      ? (liveOverallScore !== null ? scoreTierColor(liveOverallScore) : 'var(--p-text-muted)')
+      : scoreTierColor(readinessScore);
 
   return (
     /* WORKSPACE FRAME: flex column fills the available card height.
@@ -1591,21 +1801,21 @@ function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
             <div
               className="flex flex-col items-center px-3 py-2 rounded-lg"
               style={{
-                background: 'color-mix(in srgb, ' + scoreTierColor(readinessScore) + ' 10%, var(--p-surface))',
-                border: '1px solid color-mix(in srgb, ' + scoreTierColor(readinessScore) + ' 20%, var(--p-border))',
+                background: 'color-mix(in srgb, ' + headerScoreColor + ' 10%, var(--p-surface))',
+                border: '1px solid color-mix(in srgb, ' + headerScoreColor + ' 20%, var(--p-border))',
               }}
             >
               <span
                 className="text-2xl font-bold tabular-nums leading-none"
-                style={{ color: scoreTierColor(readinessScore) }}
+                style={{ color: headerScoreColor }}
               >
-                {String(readinessScore)}
+                {headerScoreValue}
               </span>
               <span className="text-[9px] font-semibold uppercase tracking-wider mt-1 leading-none" style={{ color: 'var(--p-text-dim)' }}>
-                Readiness
+                {headerScoreLabel}
               </span>
             </div>
-            {hasMatchScore ? (
+            {liveStoredJob === undefined && hasMatchScore ? (
               <span
                 className="text-sm font-semibold tabular-nums px-2 py-1 rounded-md"
                 style={{
@@ -1875,6 +2085,14 @@ function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
           Match Overview
         </h3>
 
+        {liveStoredJob !== undefined && evaluateStoredJob !== undefined ? (
+          <SavedJobsLiveAdvisorPanel
+            jobTitle={job.title}
+            state={liveAdvisorState}
+            onRetry={fetchLiveAdvisorEvaluation}
+          />
+        ) : (
+          <>
         {/* Compact advisory — preserves the Top Action recommendation that was
          * in the removed summary grid. The redundant Readiness and Weighted Fit
          * values are already visible in the header badges (FIXED ZONE 1).
@@ -1994,6 +2212,8 @@ function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
             })}
           </ul>
         </div>
+          </>
+        )}
       </div>
 
       {/* ── PathOS Brief REMOVED — intelligence moved to PathAdvisor ──────── */}
@@ -2137,20 +2357,22 @@ function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
             tooltipText="Ask PathAdvisor about this position in the right panel."
             tooltipId="ask-pathadvisor-saved-jobs"
           />
-          <button
-            type="button"
-            onClick={props.onRemove}
-            className={INTERACTIVE_HOVER_CLASS + ' inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded'}
-            style={{
-              background: 'transparent',
-              color: 'var(--p-danger, #ef4444)',
-              border: '1px solid var(--p-danger, #ef4444)',
-              borderRadius: 'var(--p-radius)',
-            }}
-          >
-            <Trash2 className="w-4 h-4" />
-            Remove from Saved
-          </button>
+          {allowRemove ? (
+            <button
+              type="button"
+              onClick={props.onRemove}
+              className={INTERACTIVE_HOVER_CLASS + ' inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded'}
+              style={{
+                background: 'transparent',
+                color: 'var(--p-danger, #ef4444)',
+                border: '1px solid var(--p-danger, #ef4444)',
+                borderRadius: 'var(--p-radius)',
+              }}
+            >
+              <Trash2 className="w-4 h-4" />
+              Remove from Saved
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -2159,7 +2381,9 @@ function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
        * Anchored below the action bar; never scrolls away. flex-shrink-0
        * keeps it visible at the point of action regardless of content length. */}
       <p className="text-[11px] px-5 pb-3 flex-shrink-0" style={{ color: 'var(--p-text-dim)' }}>
-        Opens in your browser. PathOS does not access your USAJOBS account.
+        {liveStoredJob !== undefined
+          ? 'Evaluation comes from the deterministic backend. Opening the listing still happens in your browser.'
+          : 'Opens in your browser. PathOS does not access your USAJOBS account.'}
       </p>
     </div>
   );
@@ -2174,7 +2398,11 @@ function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
  * Distinct from the search-empty state (below).
  * Prompts the user to go find and save jobs in Job Search.
  */
-function EmptySavedJobs(props: { onGoToSearch: () => void }) {
+function EmptySavedJobs(props: {
+  onGoToSearch: () => void;
+  isLiveAdvisorMode: boolean;
+  errorMessage: string | null;
+}) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
       <div
@@ -2185,28 +2413,36 @@ function EmptySavedJobs(props: { onGoToSearch: () => void }) {
       </div>
       <div className="space-y-1.5">
         <p className="text-base font-semibold" style={{ color: 'var(--p-text)' }}>
-          No saved jobs yet
+          {props.isLiveAdvisorMode ? 'No live stored jobs available' : 'No saved jobs yet'}
         </p>
         <p className="text-sm max-w-xs" style={{ color: 'var(--p-text-dim)' }}>
-          Save jobs from Job Search to start building your decision workspace.
+          {props.isLiveAdvisorMode
+            ? (props.errorMessage !== null && props.errorMessage !== ''
+                ? props.errorMessage
+                : 'The live Saved Jobs integration did not find persisted backend jobs to evaluate.')
+            : 'Save jobs from Job Search to start building your decision workspace.'}
         </p>
       </div>
-      <button
-        type="button"
-        onClick={props.onGoToSearch}
-        className={INTERACTIVE_HOVER_CLASS + ' px-4 py-2 text-sm font-medium rounded'}
-        style={{
-          background: 'var(--p-accent)',
-          color: 'var(--p-bg)',
-          border: '1px solid transparent',
-          borderRadius: 'var(--p-radius)',
-        }}
-      >
-        Go to Job Search
-      </button>
+      {!props.isLiveAdvisorMode ? (
+        <button
+          type="button"
+          onClick={props.onGoToSearch}
+          className={INTERACTIVE_HOVER_CLASS + ' px-4 py-2 text-sm font-medium rounded'}
+          style={{
+            background: 'var(--p-accent)',
+            color: 'var(--p-bg)',
+            border: '1px solid transparent',
+            borderRadius: 'var(--p-radius)',
+          }}
+        >
+          Go to Job Search
+        </button>
+      ) : null}
       {/* Trust-first: even in the empty state, be explicit about local-only storage */}
       <p className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
-        All saved jobs stay on your device — PathOS does not sync to any server.
+        {props.isLiveAdvisorMode
+          ? 'This screen is waiting for live canonical stored jobs from the backend.'
+          : 'All saved jobs stay on your device — PathOS does not sync to any server.'}
       </p>
     </div>
   );
@@ -2279,6 +2515,8 @@ function SearchEmptyState(props: { query: string; onClear: () => void }) {
  */
 export function SavedJobsScreen(_props: SavedJobsScreenProps) {
   const nav = useNav();
+  const liveAdvisor = _props.liveAdvisor;
+  const isLiveAdvisorMode = liveAdvisor !== undefined;
 
   // ── Core store snapshot ──────────────────────────────────────────────────
   // This screen owns its own component-state snapshot of the persisted store.
@@ -2290,6 +2528,8 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
     selectedJobId: null,
   });
   const [mounted, setMounted] = useState(false);
+  const [liveStoredJobMap, setLiveStoredJobMap] = useState<Record<string, SavedJobsLiveStoredJob>>({});
+  const [liveLoadError, setLiveLoadError] = useState<string | null>(null);
 
   // ── Search + sort state ──────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
@@ -2307,21 +2547,48 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
 
   // ── On mount: load store + set advisor context + register storage listener ──
   useEffect(function () {
-    // 1. Load saved jobs from localStorage into component state.
-    //    If the store is empty, seed it with deterministic mock data so the page
-    //    renders fully populated during development. seedSavedJobsIfEmpty returns
-    //    unchanged when the store already has jobs (same guard as loadMockResultsIfEmpty).
-    //    queueMicrotask ensures the state update happens after the initial render,
-    //    avoiding hydration mismatches in Next.js (same approach as original screen).
-    const loaded = loadSavedJobsStore();
-    const seeded = seedSavedJobsIfEmpty(loaded);
-    if (seeded !== loaded) {
-      saveSavedJobsStore(seeded);
+    if (isLiveAdvisorMode && liveAdvisor !== undefined) {
+      void (async function () {
+        try {
+          const storedJobs = await liveAdvisor.loadStoredJobs();
+          const built = buildLiveSavedJobsStore(storedJobs);
+          queueMicrotask(function () {
+            setStore(built.store);
+            setLiveStoredJobMap(built.liveJobMap);
+            setLiveLoadError(null);
+            setMounted(true);
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Failed to load live stored jobs.';
+          queueMicrotask(function () {
+            setStore({
+              schemaVersion: 1,
+              jobs: [],
+              selectedJobId: null,
+            });
+            setLiveStoredJobMap({});
+            setLiveLoadError(message);
+            setMounted(true);
+          });
+        }
+      })();
+    } else {
+      // 1. Load saved jobs from localStorage into component state.
+      //    If the store is empty, seed it with deterministic mock data so the page
+      //    renders fully populated during development. seedSavedJobsIfEmpty returns
+      //    unchanged when the store already has jobs (same guard as loadMockResultsIfEmpty).
+      //    queueMicrotask ensures the state update happens after the initial render,
+      //    avoiding hydration mismatches in Next.js (same approach as original screen).
+      const loaded = loadSavedJobsStore();
+      const seeded = seedSavedJobsIfEmpty(loaded);
+      if (seeded !== loaded) {
+        saveSavedJobsStore(seeded);
+      }
+      queueMicrotask(function () {
+        setStore(seeded);
+        setMounted(true);
+      });
     }
-    queueMicrotask(function () {
-      setStore(seeded);
-      setMounted(true);
-    });
 
     // 2. Set PathAdvisor rail context for the Saved Jobs screen (static parts; railContent set when store is ready).
     setAdvisorOverrides({
@@ -2337,18 +2604,22 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
     //    writes to the same localStorage key. This fires only for other-tab changes;
     //    same-tab mutations are handled immediately by persist() below.
     function handleStorageEvent(e: StorageEvent) {
-      if (e.key === SAVED_JOBS_STORE_KEY) {
+      if (!isLiveAdvisorMode && e.key === SAVED_JOBS_STORE_KEY) {
         setStore(loadSavedJobsStore());
       }
     }
-    window.addEventListener('storage', handleStorageEvent);
+    if (!isLiveAdvisorMode) {
+      window.addEventListener('storage', handleStorageEvent);
+    }
 
     return function () {
       // Clear PathAdvisor overrides so the rail reverts to Dashboard context.
       setAdvisorOverrides(null);
-      window.removeEventListener('storage', handleStorageEvent);
+      if (!isLiveAdvisorMode) {
+        window.removeEventListener('storage', handleStorageEvent);
+      }
     };
-  }, [setAdvisorOverrides]);
+  }, [isLiveAdvisorMode, liveAdvisor, setAdvisorOverrides]);
 
   // ── PathAdvisor architecture: no railContent (no stacked mini-cards) ────
   // Per architecture correction: PathAdvisor is a unified output terminal.
@@ -2362,8 +2633,10 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
   // and localStorage atomically from the caller's perspective.
   const persist = useCallback(function (next: SavedJobsStore) {
     setStore(next);
-    saveSavedJobsStore(next);
-  }, []);
+    if (!isLiveAdvisorMode) {
+      saveSavedJobsStore(next);
+    }
+  }, [isLiveAdvisorMode]);
 
   // ── Derived list: filtered → sorted ─────────────────────────────────────
   // Computed fresh on each render from store.jobs + current search + current sort.
@@ -2405,6 +2678,9 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
   });
 
   useEffect(function () {
+    if (isLiveAdvisorMode) {
+      return;
+    }
     if (selectedJob === undefined || selectedJob === null) {
       return;
     }
@@ -2495,7 +2771,7 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
       dedupeKey: 'saved-job-brief-' + selectedJob.id,
       makeActive: true,
     });
-  }, [selectedJob, appendContextEntry]);
+  }, [appendContextEntry, isLiveAdvisorMode, selectedJob]);
 
   // Clean up context log entries when the screen unmounts so stale entries
   // from this screen do not persist in the PathAdvisor rail on other screens.
@@ -2567,7 +2843,13 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
   // ── True empty state ─────────────────────────────────────────────────────
   // No saved jobs at all — prompt the user to go to Job Search.
   if (store.jobs.length === 0) {
-    return <EmptySavedJobs onGoToSearch={handleGoToSearch} />;
+    return (
+      <EmptySavedJobs
+        onGoToSearch={handleGoToSearch}
+        isLiveAdvisorMode={isLiveAdvisorMode}
+        errorMessage={liveLoadError}
+      />
+    );
   }
 
   // ── Main workspace ───────────────────────────────────────────────────────
@@ -2605,7 +2887,7 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
             style={{ color: 'var(--p-text-dim)' }}
           >
             <Shield className="w-3 h-3" />
-            Saved locally on this device
+            {isLiveAdvisorMode ? 'Live backend stored jobs' : 'Saved locally on this device'}
           </div>
         </div>
 
@@ -2759,6 +3041,7 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
                       isSelected={store.selectedJobId === job.id}
                       onSelect={handleSelect}
                       onRemove={handleRemoveId}
+                      showRemoveAction={!isLiveAdvisorMode}
                     />
                   );
                 })}
@@ -2783,6 +3066,13 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
             onStartGuidedApply={handleStartGuidedApply}
             onBuildResume={function () { nav.push(RESUME_BUILDER); }}
             onAskPathAdvisor={handleAskPathAdvisor}
+            allowRemove={!isLiveAdvisorMode}
+            liveStoredJob={
+              selectedJob !== undefined && liveStoredJobMap[selectedJob.id] !== undefined
+                ? liveStoredJobMap[selectedJob.id]
+                : undefined
+            }
+            evaluateStoredJob={liveAdvisor !== undefined ? liveAdvisor.evaluateStoredJob : undefined}
           />
         </div>
       </div>

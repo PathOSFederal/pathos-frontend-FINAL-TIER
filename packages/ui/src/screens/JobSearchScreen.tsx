@@ -31,7 +31,6 @@ import {
   X,
   Check,
   BookOpen,
-  ChevronRight,
   Info,
   FileText,
   Building2,
@@ -43,20 +42,17 @@ import {
 } from 'lucide-react';
 import { useNav } from '@pathos/adapters';
 import { storageSetJSON, storageGetJSON } from '@pathos/core';
-import {
-  createSession,
-  addSession,
-  loadGuidedApplyStore,
-  saveGuidedApplyStore,
-} from '@pathos/core';
 import type { Job } from '@pathos/core';
-import { useJobSearchV1Store } from '../stores/jobSearchV1Store';
+import {
+  useJobSearchV1Store,
+  type JobSearchFilters,
+} from '../stores/jobSearchV1Store';
 import { usePathAdvisorScreenOverridesStore } from '../stores/pathAdvisorScreenOverridesStore';
 import { AskPathAdvisorButton } from '../components/AskPathAdvisorButton';
 import { useDashboardHeroDoNowStore } from '../stores/dashboardHeroDoNowStore';
 import { parsePromptToFilters, type ParsedPromptResult } from '../lib/promptToFiltersParser';
 import { getChecklistForJob } from './jobSearchMockChecklists';
-import { MOCK_JOBS, MOCK_JOB_TAGS } from './jobSearchMockJobs';
+import { MOCK_JOB_TAGS } from './jobSearchMockJobs';
 import type { JobWithOverview } from './jobSearchMockJobs';
 import { CAREER_READINESS_MOCK } from './careerReadiness/careerReadinessMockData';
 import {
@@ -93,6 +89,11 @@ import { INTERACTIVE_HOVER_CLASS } from '../styles/interactiveHover';
 import { scoreTierColor } from '../styles/scoreTiers';
 import { MatchBreakdownHeader, MatchBreakdownRow } from '../components/MatchBreakdownTable';
 import type { MatchBreakdownRowData } from '../components/MatchBreakdownTable';
+import {
+  SavedJobsLiveAdvisorPanel,
+  type SavedJobsLiveEvaluation,
+  type SavedJobsLiveEvaluationState,
+} from './_components/SavedJobsLiveAdvisorPanel';
 
 /** localStorage key for prompt-to-filters audit (view evidence). Not exported from core. */
 const PROMPT_TO_FILTERS_AUDIT_KEY = 'pathos:prompt-to-filters-audit';
@@ -136,42 +137,31 @@ const TYPES_OPTIONS = [
   { value: 'Term', label: 'Term' },
 ];
 
-/** Derive unique agencies from MOCK_JOBS for filter dropdown (no spread). */
-function getAgencyOptions(): Array<{ value: string; label: string }> {
-  const out: Array<{ value: string; label: string }> = [{ value: '', label: 'All Agencies' }];
-  const seen: Record<string, boolean> = {};
-  for (let i = 0; i < MOCK_JOBS.length; i++) {
-    const a = MOCK_JOBS[i].agency;
-    if (a !== undefined && a !== '' && seen[a] !== true) {
-      seen[a] = true;
-      out.push({ value: a, label: a });
-    }
-  }
-  out.sort(function (x, y) {
-    return x.label.localeCompare(y.label);
-  });
-  return out;
-}
+/**
+ * Live-search filter options must not depend on the mock result dataset.
+ *
+ * These lists are intentionally small and curated. They are only used for the
+ * dropdown labels and explicit user-driven filter selection.
+ */
+const AGENCY_OPTIONS = [
+  { value: '', label: 'All Agencies' },
+  { value: 'Department of Homeland Security', label: 'Department of Homeland Security' },
+  { value: 'Department of Veterans Affairs', label: 'Department of Veterans Affairs' },
+  { value: 'Department of Defense', label: 'Department of Defense' },
+  { value: 'Department of Health and Human Services', label: 'Department of Health and Human Services' },
+  { value: 'Department of Justice', label: 'Department of Justice' },
+  { value: 'General Services Administration', label: 'General Services Administration' },
+  { value: 'Office of Personnel Management', label: 'Office of Personnel Management' },
+];
 
-/** Derive unique locations from MOCK_JOBS for filter dropdown (no spread). */
-function getLocationOptions(): Array<{ value: string; label: string }> {
-  const out: Array<{ value: string; label: string }> = [{ value: '', label: 'Any Location' }];
-  const seen: Record<string, boolean> = {};
-  for (let i = 0; i < MOCK_JOBS.length; i++) {
-    const loc = MOCK_JOBS[i].location;
-    if (loc !== undefined && loc !== '' && seen[loc] !== true) {
-      seen[loc] = true;
-      out.push({ value: loc, label: loc });
-    }
-  }
-  out.sort(function (x, y) {
-    return x.label.localeCompare(y.label);
-  });
-  return out;
-}
-
-const AGENCY_OPTIONS = getAgencyOptions();
-const LOCATION_OPTIONS = getLocationOptions();
+const LOCATION_OPTIONS = [
+  { value: '', label: 'Any Location' },
+  { value: 'Washington, DC', label: 'Washington, DC' },
+  { value: 'Arlington, VA', label: 'Arlington, VA' },
+  { value: 'Kansas City, MO', label: 'Kansas City, MO' },
+  { value: 'Denver, CO', label: 'Denver, CO' },
+  { value: 'Remote', label: 'Remote' },
+];
 
 /** Sort option for results list (deterministic, explainable). */
 export type JobSearchSortKind = 'likelihood' | 'effortToReward' | 'strategic' | 'urgency';
@@ -185,6 +175,40 @@ const SORT_OPTIONS: Array<{ value: JobSearchSortKind; label: string }> = [
 
 export interface JobSearchScreenProps {
   initialQuery?: string;
+  liveAdvisor?: JobSearchLiveAdvisorIntegration;
+  liveSearch?: JobSearchLiveSearchIntegration;
+}
+
+/**
+ * Live advisor contract for the selected Job Search job.
+ *
+ * This mirrors the Saved Jobs integration pattern: the shared UI screen stays
+ * transport-agnostic while the app route owns profile loading and proxy usage.
+ */
+export interface JobSearchLiveAdvisorIntegration {
+  evaluateJob: (job: Job | JobWithOverview) => Promise<SavedJobsLiveEvaluation | null>;
+}
+
+/**
+ * Live backend-backed Job Search contract.
+ *
+ * The shared UI screen provides frontend search intent. The page wrapper owns
+ * transport, proxy routing, and backend credential boundaries.
+ */
+export interface JobSearchLiveSearchIntegration {
+  searchJobs: (input: {
+    keyword: string;
+    location?: string;
+    filters: JobSearchFilters;
+    page: number;
+    pageSize: number;
+  }) => Promise<{
+    results: Job[];
+    total: number;
+    page: number;
+    pageSize: number;
+    requestId: string;
+  }>;
 }
 
 /** Derive risk flag labels from job overview for compact chips (Travel, Drug test, Clearance). */
@@ -215,6 +239,90 @@ function getRemoteTeleworkLabel(job: Job | JobWithOverview): string | null {
   return null;
 }
 
+function parseJobDate(value: string | undefined): Date | null {
+  if (value === undefined || value === '') {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function formatJobCloseLabel(job: Job | JobWithOverview): string {
+  const closeDate = parseJobDate(job.closeDate);
+  if (closeDate === null) {
+    return 'Open';
+  }
+
+  return (
+    'Closes ' +
+    closeDate.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    })
+  );
+}
+
+function isJobClosingSoon(job: Job | JobWithOverview): boolean {
+  const closeDate = parseJobDate(job.closeDate);
+  if (closeDate === null) {
+    return false;
+  }
+
+  const now = new Date();
+  const diffMs = closeDate.getTime() - now.getTime();
+  const diffDays = diffMs / (1000 * 60 * 60 * 24);
+  return diffDays <= 7;
+}
+
+function buildLiveSearchRequestSignature(input: {
+  keyword: string;
+  location?: string;
+  filters: JobSearchFilters;
+  page: number;
+  pageSize: number;
+}): string {
+  const filters = input.filters;
+  return JSON.stringify({
+    keyword: input.keyword,
+    location: input.location !== undefined ? input.location : null,
+    gradeBand: filters.gradeBand !== undefined ? filters.gradeBand : null,
+    series: filters.series !== undefined ? filters.series : null,
+    agency: filters.agency !== undefined ? filters.agency : null,
+    remoteType: filters.remoteType !== undefined ? filters.remoteType : null,
+    appointmentType:
+      filters.appointmentType !== undefined ? filters.appointmentType : null,
+    page: input.page,
+    pageSize: input.pageSize,
+  });
+}
+
+function getLiveSearchConstraintNotes(filters: JobSearchFilters): string[] {
+  const notes: string[] = [];
+
+  if (filters.agency !== undefined && filters.agency !== '') {
+    notes.push(
+      'Agency filter is not yet applied in live search because this UI still stores agency display names instead of official USAJOBS organization codes.'
+    );
+  }
+
+  if (
+    filters.remoteType !== undefined &&
+    filters.remoteType !== '' &&
+    filters.remoteType.toLowerCase().indexOf('remote') === -1
+  ) {
+    notes.push(
+      'Telework and hybrid filtering are not yet mapped into the live backend search contract.'
+    );
+  }
+
+  return notes;
+}
+
 /**
  * Single row: entire row is click target for selection; hover and selected styles (token-only).
  * Option A2: Left-edge 2px match bar (scan-first signal) by matchLevel; selection is background-only (no double bar).
@@ -234,8 +342,12 @@ function JobListItem(props: {
   onPeek?: (job: Job | JobWithOverview) => void;
 }) {
   const [hover, setHover] = useState(false);
-  const closeLabel = props.tag === 'Close date updated' ? 'Closes soon' : 'Closes Apr 1';
-  const closeChipUrgency = props.tag === 'Close date updated';
+  const closeLabel =
+    props.tag === 'Close date updated'
+      ? 'Closes soon'
+      : formatJobCloseLabel(props.job);
+  const closeChipUrgency =
+    props.tag === 'Close date updated' || isJobClosingSoon(props.job);
   const remoteLabel = getRemoteTeleworkLabel(props.job);
   const oneRisk = props.riskFlags.length > 0 ? props.riskFlags[0] : null;
 
@@ -485,6 +597,19 @@ export interface QualificationSnapshot {
   risks: string[];
   inputsUsed: string[];
   missingInputs: string[];
+}
+
+function shouldApplyJobSearchLiveResult(
+  activeJobId: string | null,
+  activeRequestId: number,
+  settledJobId: string,
+  settledRequestId: number
+): boolean {
+  return (
+    activeJobId !== null &&
+    activeJobId === settledJobId &&
+    activeRequestId === settledRequestId
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -870,17 +995,20 @@ function getSearchAnnouncementSections(job: Job | JobWithOverview): JobSearchAnn
  * part of the announcement section navigation system. */
 type DetailsTab = 'overview' | 'requirements' | 'pathosBrief';
 
-function JobDetailsPanel(props: {
+export function JobDetailsPanel(props: {
   job: Job | JobWithOverview | undefined;
   isSaved: boolean;
+  isLiveAdvisorMode: boolean;
   activeTab: DetailsTab;
   onTabChange: (tab: DetailsTab) => void;
   decisionBrief: import('../stores/decisionBriefsV1Store').DecisionBriefRecord | null;
   snapshot: QualificationSnapshot | undefined;
   jobMatchSnapshot: JobMatchSnapshot | undefined;
+  liveAdvisorState: SavedJobsLiveEvaluationState;
   onSave: () => void;
   onTailor: () => void;
   onAskPathAdvisor: () => void;
+  onRetryLiveEvaluation: () => void;
   onExplainInPathAdvisor: (snapshot: QualificationSnapshot) => void;
   onOpenCareerReadinessActionPlan: () => void;
   onOpenDimensionBriefing: (dim: JobMatchDimension) => void;
@@ -915,14 +1043,17 @@ function JobDetailsPanel(props: {
       key={props.job.id}
       job={props.job}
       isSaved={props.isSaved}
+      isLiveAdvisorMode={props.isLiveAdvisorMode}
       activeTab={props.activeTab}
       onTabChange={props.onTabChange}
       decisionBrief={props.decisionBrief}
       snapshot={props.snapshot}
       jobMatchSnapshot={props.jobMatchSnapshot}
+      liveAdvisorState={props.liveAdvisorState}
       onSave={props.onSave}
       onTailor={props.onTailor}
       onAskPathAdvisor={props.onAskPathAdvisor}
+      onRetryLiveEvaluation={props.onRetryLiveEvaluation}
       onExplainInPathAdvisor={props.onExplainInPathAdvisor}
       onOpenCareerReadinessActionPlan={props.onOpenCareerReadinessActionPlan}
       onOpenDimensionBriefing={props.onOpenDimensionBriefing}
@@ -952,14 +1083,17 @@ function JobDetailsPanel(props: {
 function JobDetailsPanelContent(props: {
   job: Job | JobWithOverview;
   isSaved: boolean;
+  isLiveAdvisorMode: boolean;
   activeTab: DetailsTab;
   onTabChange: (tab: DetailsTab) => void;
   decisionBrief: import('../stores/decisionBriefsV1Store').DecisionBriefRecord | null;
   snapshot: QualificationSnapshot | undefined;
   jobMatchSnapshot: JobMatchSnapshot | undefined;
+  liveAdvisorState: SavedJobsLiveEvaluationState;
   onSave: () => void;
   onTailor: () => void;
   onAskPathAdvisor: () => void;
+  onRetryLiveEvaluation: () => void;
   onExplainInPathAdvisor: (snapshot: QualificationSnapshot) => void;
   onOpenCareerReadinessActionPlan: () => void;
   onOpenDimensionBriefing: (dim: JobMatchDimension) => void;
@@ -969,6 +1103,7 @@ function JobDetailsPanelContent(props: {
   const brief = props.decisionBrief;
   const snapshot = props.snapshot;
   const jobMatch = props.jobMatchSnapshot;
+  const liveAdvisorState = props.liveAdvisorState;
   const hasOverview = 'overview' in job && job.overview !== undefined;
 
   /* View mode: 'match' shows job info + match intelligence (default);
@@ -984,28 +1119,61 @@ function JobDetailsPanelContent(props: {
    * (e.g. after save action triggers brief generation). */
   useEffect(function () {
     if (props.activeTab === 'pathosBrief') {
-      setViewMode('listing');
-      setAnnouncementSection('pathosBrief');
+      const timeoutId = window.setTimeout(function () {
+        setViewMode('listing');
+        setAnnouncementSection('pathosBrief');
+      }, 0);
+      return function () {
+        window.clearTimeout(timeoutId);
+      };
     }
   }, [props.activeTab]);
 
   /* Per-job readiness score — derived from match score so each job exercises
    * a different color tier (strong/green >= 80, medium/amber >= 60, weak/red < 60). */
-  const displayReadiness = jobMatch !== undefined
-    ? deriveJobReadiness(jobMatch.overallMatchScore)
-    : 70;
-  const readinessColor = scoreTierColor(displayReadiness);
-  const matchScoreColor = jobMatch !== undefined
-    ? scoreTierColor(jobMatch.overallMatchScore)
-    : 'var(--p-text-muted)';
+  const liveOverallScore =
+    liveAdvisorState.evaluation !== null
+      ? liveAdvisorState.evaluation.overallScore
+      : null;
+  const displayReadiness =
+    props.isLiveAdvisorMode
+      ? (liveOverallScore !== null ? liveOverallScore : 0)
+      : (jobMatch !== undefined ? deriveJobReadiness(jobMatch.overallMatchScore) : 70);
+  const readinessColor =
+    props.isLiveAdvisorMode
+      ? (liveOverallScore !== null ? scoreTierColor(liveOverallScore) : 'var(--p-text-muted)')
+      : scoreTierColor(displayReadiness);
+  const matchScoreColor =
+    props.isLiveAdvisorMode
+      ? (liveOverallScore !== null ? scoreTierColor(liveOverallScore) : 'var(--p-text-muted)')
+      : (jobMatch !== undefined ? scoreTierColor(jobMatch.overallMatchScore) : 'var(--p-text-muted)');
+  const headerPrimaryLabel = props.isLiveAdvisorMode ? 'Evaluation' : 'Readiness';
+  const headerPrimaryValue =
+    props.isLiveAdvisorMode
+      ? (liveAdvisorState.status === 'loading'
+          ? '...'
+          : (liveOverallScore !== null ? String(liveOverallScore) : '--'))
+      : String(displayReadiness);
+  const headerSecondaryValue =
+    props.isLiveAdvisorMode
+      ? (liveAdvisorState.evaluation !== null
+          ? (liveAdvisorState.evaluation.applicationDecision !== null
+              ? liveAdvisorState.evaluation.applicationDecision.decisionBand
+              : liveAdvisorState.evaluation.decisionBand)
+          : (liveAdvisorState.status === 'loading' ? 'Loading' : 'Pending'))
+      : (jobMatch !== undefined ? String(jobMatch.overallMatchScore) + '/100 Match' : '');
 
   /* Overview fields for the Decision Summary Band. */
   const ov = hasOverview && 'overview' in job ? job.overview : undefined;
   const remoteLabel = getRemoteTeleworkLabel(job);
 
-  /* Close-date display — uses mock close dates for evaluation. */
-  const closeDateLabel = MOCK_JOB_TAGS[job.id] === 'Close date updated' ? 'Closes soon' : 'Open';
-  const isUrgent = MOCK_JOB_TAGS[job.id] === 'Close date updated';
+  /* Close-date display for detail summary. Live results use the actual close date when present. */
+  const closeDateLabel =
+    MOCK_JOB_TAGS[job.id] === 'Close date updated'
+      ? 'Closes soon'
+      : formatJobCloseLabel(job);
+  const isUrgent =
+    MOCK_JOB_TAGS[job.id] === 'Close date updated' || isJobClosingSoon(job);
 
   /* Announcement sections for the document viewer. Generated per-job so
    * content references the job's title, agency, and grade for realism.
@@ -1082,16 +1250,16 @@ function JobDetailsPanelContent(props: {
                 className="text-2xl font-bold tabular-nums leading-none"
                 style={{ color: readinessColor }}
               >
-                {String(displayReadiness)}
+                {headerPrimaryValue}
               </span>
               <span
                 className="text-[9px] font-semibold uppercase tracking-wider mt-1 leading-none"
                 style={{ color: 'var(--p-text-dim)' }}
               >
-                Readiness
+                {headerPrimaryLabel}
               </span>
             </div>
-            {jobMatch !== undefined ? (
+            {(props.isLiveAdvisorMode || jobMatch !== undefined) ? (
               <span
                 className="text-sm font-semibold tabular-nums px-2 py-1 rounded-md"
                 style={{
@@ -1099,7 +1267,7 @@ function JobDetailsPanelContent(props: {
                   background: 'color-mix(in srgb, ' + matchScoreColor + ' 10%, transparent)',
                 }}
               >
-                {String(jobMatch.overallMatchScore)}/100 Match
+                {headerSecondaryValue}
               </span>
             ) : null}
           </div>
@@ -1309,7 +1477,22 @@ function JobDetailsPanelContent(props: {
            * Match for this job: readiness ↔ job breakdown with dimensions.
            * Preserves all Job Search-specific match intelligence while
            * following the Saved Jobs section density and seriousness. */}
-          {jobMatch !== undefined ? (
+          {props.isLiveAdvisorMode ? (
+            <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--p-border)' }}>
+              <h3
+                className="text-xs font-semibold uppercase tracking-wider mb-3 flex items-center gap-1.5"
+                style={{ color: 'var(--p-text-dim)' }}
+              >
+                <BarChart2 className="w-3.5 h-3.5" style={{ color: 'var(--p-accent)' }} aria-hidden />
+                Match for this job
+              </h3>
+              <SavedJobsLiveAdvisorPanel
+                jobTitle={job.title}
+                state={liveAdvisorState}
+                onRetry={props.onRetryLiveEvaluation}
+              />
+            </div>
+          ) : jobMatch !== undefined ? (
             <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--p-border)' }}>
               <h3
                 className="text-xs font-semibold uppercase tracking-wider mb-3 flex items-center gap-1.5"
@@ -1451,7 +1634,13 @@ function JobDetailsPanelContent(props: {
             aria-labelledby={getSearchSectionTabId('pathosBrief')}
           >
             <div className="space-y-4">
-              {brief !== null ? (
+              {props.isLiveAdvisorMode ? (
+                <SavedJobsLiveAdvisorPanel
+                  jobTitle={job.title}
+                  state={liveAdvisorState}
+                  onRetry={props.onRetryLiveEvaluation}
+                />
+              ) : brief !== null ? (
                 <>
                   <div className="flex flex-wrap gap-2 items-center">
                     <FitStarsRow fitAssessment={brief.fitAssessment} />
@@ -1505,7 +1694,7 @@ function JobDetailsPanelContent(props: {
                     Save this job to generate a PathOS Brief with fit assessment, risk analysis, and recommended next actions.
                   </p>
                   <p className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
-                    The brief combines your career readiness profile with this announcement's requirements to produce tailored decision intelligence.
+                    The brief combines your career readiness profile with this announcement&apos;s requirements to produce tailored decision intelligence.
                   </p>
                 </div>
               )}
@@ -1729,6 +1918,10 @@ function AppliedFromPromptViewPanel(props: { promptText: string; onClose: () => 
 export function JobSearchScreen(props: JobSearchScreenProps) {
   const nav = useNav();
   const store = useJobSearchV1Store();
+  const liveAdvisor = props.liveAdvisor;
+  const liveSearch = props.liveSearch;
+  const isLiveAdvisorMode = liveAdvisor !== undefined;
+  const isLiveSearchMode = liveSearch !== undefined;
   const setOverrides = usePathAdvisorScreenOverridesStore(function (s) {
     return s.setOverrides;
   });
@@ -1752,21 +1945,83 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
   const [filterGuideKind, setFilterGuideKind] = useState<FilterGuideKind | null>(null);
   /** Ref for results pane scroll container (scroll to top on filter/sort reset). */
   const resultsScrollRef = useRef<HTMLDivElement>(null);
+  /** Cache live evaluations by job id so revisiting a selected result does not refetch immediately. */
+  const liveEvaluationCacheRef = useRef<Record<string, SavedJobsLiveEvaluation | null>>({});
+  /** Monotonic request id + job id guard to prevent stale responses from overwriting a newer selection. */
+  const liveRequestRef = useRef<{ jobId: string | null; requestId: number }>({
+    jobId: null,
+    requestId: 0,
+  });
+  /**
+   * Prevent duplicate identical in-flight live-search requests and ignore
+   * stale search responses that complete after a newer query starts.
+   */
+  const liveSearchRequestRef = useRef<{
+    requestId: number;
+    inFlightSignature: string | null;
+  }>({
+    requestId: 0,
+    inFlightSignature: null,
+  });
+  const [liveAdvisorState, setLiveAdvisorState] =
+    useState<SavedJobsLiveEvaluationState>({
+      status: 'idle',
+      errorMessage: null,
+      evaluation: null,
+    });
 
+  /**
+   * IMPORTANT:
+   * This screen still reads broad store state objects for most rendering logic,
+   * but the mount-time hydration effect must use stable action selectors.
+   *
+   * If the effect depends on the full store objects, React sees changing object
+   * identities on rerender, which can produce dependency-array mismatches and
+   * render loops once the effect itself rehydrates persisted state.
+   */
+  const loadJobSearchFromStorage = useJobSearchV1Store(function (state) {
+    return state.loadFromStorage;
+  });
+  const setJobSearchLastQuery = useJobSearchV1Store(function (state) {
+    return state.setLastQuery;
+  });
+  const startLiveSearchInStore = useJobSearchV1Store(function (state) {
+    return state.startLiveSearch;
+  });
+  const completeLiveSearchInStore = useJobSearchV1Store(function (state) {
+    return state.completeLiveSearch;
+  });
+  const failLiveSearchInStore = useJobSearchV1Store(function (state) {
+    return state.failLiveSearch;
+  });
   const targetRoleStore = useTargetRoleV1Store();
   const decisionBriefsStore = useDecisionBriefsV1Store();
+  const loadTargetRoleFromStorage = useTargetRoleV1Store(function (state) {
+    return state.loadFromStorage;
+  });
+  const loadDecisionBriefsFromStorage = useDecisionBriefsV1Store(function (
+    state
+  ) {
+    return state.loadFromStorage;
+  });
 
   useEffect(function () {
-    store.loadFromStorage();
-    targetRoleStore.loadFromStorage();
-    decisionBriefsStore.loadFromStorage();
+    loadJobSearchFromStorage();
+    loadTargetRoleFromStorage();
+    loadDecisionBriefsFromStorage();
     if (props.initialQuery !== undefined && props.initialQuery !== '') {
-      store.setLastQuery({ keywords: props.initialQuery });
+      setJobSearchLastQuery({ keywords: props.initialQuery });
     }
     queueMicrotask(function () {
       setMounted(true);
     });
-  }, []);
+  }, [
+    loadDecisionBriefsFromStorage,
+    loadJobSearchFromStorage,
+    loadTargetRoleFromStorage,
+    props.initialQuery,
+    setJobSearchLastQuery,
+  ]);
 
   const openFitBriefing = usePathAdvisorBriefingStore(function (s) {
     return s.openBriefing;
@@ -1861,6 +2116,13 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
         })
       : undefined;
 
+  const liveSearchConstraintNotes = useMemo(
+    function () {
+      return getLiveSearchConstraintNotes(store.filters);
+    },
+    [store.filters]
+  );
+
   /** Qualification snapshot for the selected job (deterministic: stars, blocker, effort, reasons, risks). */
   const qualificationSnapshot = useMemo(
     function (): QualificationSnapshot | undefined {
@@ -1929,9 +2191,137 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
     [selectedJob, readinessInput]
   );
 
+  const runLiveEvaluation = useCallback(
+    async function (job: Job | JobWithOverview, forceRefresh: boolean) {
+      if (liveAdvisor === undefined) {
+        return;
+      }
+
+      if (!forceRefresh && liveEvaluationCacheRef.current[job.id] !== undefined) {
+        const cachedEvaluation = liveEvaluationCacheRef.current[job.id];
+        setLiveAdvisorState(
+          cachedEvaluation === null
+            ? {
+                status: 'empty',
+                errorMessage: null,
+                evaluation: null,
+              }
+            : {
+                status: 'success',
+                errorMessage: null,
+                evaluation: cachedEvaluation,
+              }
+        );
+        return;
+      }
+
+      const nextRequestId = liveRequestRef.current.requestId + 1;
+      liveRequestRef.current = {
+        jobId: job.id,
+        requestId: nextRequestId,
+      };
+      setLiveAdvisorState({
+        status: 'loading',
+        errorMessage: null,
+        evaluation: null,
+      });
+
+      try {
+        const evaluation = await liveAdvisor.evaluateJob(job);
+        if (
+          !shouldApplyJobSearchLiveResult(
+            liveRequestRef.current.jobId,
+            liveRequestRef.current.requestId,
+            job.id,
+            nextRequestId
+          )
+        ) {
+          return;
+        }
+
+        liveEvaluationCacheRef.current[job.id] = evaluation;
+        setLiveAdvisorState(
+          evaluation === null
+            ? {
+                status: 'empty',
+                errorMessage: null,
+                evaluation: null,
+              }
+            : {
+                status: 'success',
+                errorMessage: null,
+                evaluation: evaluation,
+              }
+        );
+      } catch (error) {
+        if (
+          !shouldApplyJobSearchLiveResult(
+            liveRequestRef.current.jobId,
+            liveRequestRef.current.requestId,
+            job.id,
+            nextRequestId
+          )
+        ) {
+          return;
+        }
+
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'The live advisor request failed for this selected job.';
+        setLiveAdvisorState({
+          status: 'error',
+          errorMessage: message,
+          evaluation: null,
+        });
+      }
+    },
+    [liveAdvisor]
+  );
+
+  const retryLiveEvaluation = useCallback(function () {
+    if (selectedJob === undefined) {
+      return;
+    }
+    delete liveEvaluationCacheRef.current[selectedJob.id];
+    void runLiveEvaluation(selectedJob, true);
+  }, [runLiveEvaluation, selectedJob]);
+
+  useEffect(function () {
+    if (!isLiveAdvisorMode) {
+      return;
+    }
+
+    if (selectedJob === undefined) {
+      const timeoutId = window.setTimeout(function () {
+        liveRequestRef.current = {
+          jobId: null,
+          requestId: liveRequestRef.current.requestId,
+        };
+        setLiveAdvisorState({
+          status: 'idle',
+          errorMessage: null,
+          evaluation: null,
+        });
+      }, 0);
+      return function () {
+        window.clearTimeout(timeoutId);
+      };
+    }
+
+    const timeoutId = window.setTimeout(function () {
+      void runLiveEvaluation(selectedJob, false);
+    }, 0);
+
+    return function () {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isLiveAdvisorMode, runLiveEvaluation, selectedJob]);
+
   /* Day 62: Append job match entry to PathAdvisor Context Log when user selects a job. */
   useEffect(
     function () {
+      if (isLiveAdvisorMode) return;
       if (selectedJob === undefined || jobMatchSnapshot === undefined) return;
       const job = selectedJob;
       const snap = jobMatchSnapshot;
@@ -1979,7 +2369,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
         dedupeKey: 'selectJob:' + job.id + ':' + String(snap.overallMatchScore),
       });
     },
-    [selectedJob, jobMatchSnapshot]
+    [isLiveAdvisorMode, selectedJob, jobMatchSnapshot]
   );
 
   useEffect(function () {
@@ -1988,7 +2378,13 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
       screenId: 'job-search',
       viewingLabel: 'Job Search',
       suggestedPrompts:
-        jobMatchSnapshot !== undefined
+        isLiveAdvisorMode
+          ? [
+              'Why did PathOS rate this job this way?',
+              'What evidence is missing for this result?',
+              'What should I do before applying?',
+            ]
+          : jobMatchSnapshot !== undefined
           ? [
               'Why is this a stretch for me?',
               'Show what evidence I\'m missing',
@@ -1997,9 +2393,11 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
           : JOB_SEARCH_SUGGESTED_PROMPTS,
       briefingLabel: 'From Job Search',
       briefingHelperText:
-        'Use this workspace to decode job requirements and decide your next best move. Ask about specialized experience, keywords, and what to do next.',
+        isLiveAdvisorMode
+          ? 'Use this workspace to review the live backend evaluation for the selected job. Ask about reasons, warnings, gaps, and missing evidence.'
+          : 'Use this workspace to decode job requirements and decide your next best move. Ask about specialized experience, keywords, and what to do next.',
       onRailNextBestActionClick:
-        jobMatchSnapshot !== undefined
+        !isLiveAdvisorMode && jobMatchSnapshot !== undefined
           ? function () {
               nav.push(CAREER_READINESS + '#action-plan');
             }
@@ -2035,7 +2433,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
       setOverrides(null);
       setHeroDoNow(null);
     };
-  }, [setOverrides, setHeroDoNow, nav, jobMatchSnapshot]);
+  }, [setOverrides, setHeroDoNow, nav, jobMatchSnapshot, isLiveAdvisorMode]);
 
   useEffect(function () {
     if (selectedJob !== undefined) {
@@ -2055,6 +2453,101 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
     setProposed(result);
   }, [promptInput]);
 
+  const runSearchRequest = useCallback(
+    async function (page: number, append: boolean) {
+      if (isLiveSearchMode && liveSearch !== undefined) {
+        const keyword = store.lastQuery.keywords.trim();
+        const location =
+          store.lastQuery.location !== undefined &&
+          store.lastQuery.location.trim() !== ''
+            ? store.lastQuery.location.trim()
+            : undefined;
+
+        if (keyword === '') {
+          failLiveSearchInStore(
+            'Enter keywords before running a live backend-backed search.',
+            false
+          );
+          return;
+        }
+
+        const requestInput = {
+          keyword: keyword,
+          location: location,
+          filters: store.filters,
+          page: page,
+          pageSize: store.pageSize,
+        };
+        const requestSignature = buildLiveSearchRequestSignature(requestInput);
+        if (liveSearchRequestRef.current.inFlightSignature === requestSignature) {
+          return;
+        }
+
+        const requestId = liveSearchRequestRef.current.requestId + 1;
+        liveSearchRequestRef.current = {
+          requestId: requestId,
+          inFlightSignature: requestSignature,
+        };
+
+        startLiveSearchInStore(append);
+        setLiveAdvisorState({
+          status: 'idle',
+          errorMessage: null,
+          evaluation: null,
+        });
+
+        try {
+          const response = await liveSearch.searchJobs(requestInput);
+          if (liveSearchRequestRef.current.requestId !== requestId) {
+            return;
+          }
+
+          liveSearchRequestRef.current = {
+            requestId: requestId,
+            inFlightSignature: null,
+          };
+          completeLiveSearchInStore({
+            results: response.results,
+            totalCount: response.total,
+            page: response.page,
+          });
+        } catch (error) {
+          if (liveSearchRequestRef.current.requestId !== requestId) {
+            return;
+          }
+
+          liveSearchRequestRef.current = {
+            requestId: requestId,
+            inFlightSignature: null,
+          };
+          failLiveSearchInStore(
+            error instanceof Error
+              ? error.message
+              : 'Live job search failed.',
+            append
+          );
+        }
+
+        return;
+      }
+
+      if (append) {
+        store.loadMore();
+        return;
+      }
+
+      store.runSearch();
+    },
+    [
+      completeLiveSearchInStore,
+      failLiveSearchInStore,
+      isLiveSearchMode,
+      liveSearch,
+      startLiveSearchInStore,
+      store,
+    ]
+  );
+
   const handleApplyProposed = useCallback(function () {
     if (proposed === null) return;
     store.applyProposedFiltersFromPrompt(promptInput.trim(), proposed.filters);
@@ -2072,28 +2565,37 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
     });
     setProposed(null);
     setDescribePanelExpanded(false);
-    store.runSearch();
+    void runSearchRequest(1, false);
     setShowUndoAppliedPrompt(true);
     setTimeout(function () {
       setShowUndoAppliedPrompt(false);
     }, 6000);
-  }, [proposed, promptInput, store]);
+  }, [proposed, promptInput, runSearchRequest, store]);
 
   const handleDiscardProposed = useCallback(function () {
     setProposed(null);
   }, []);
 
   const handleSearch = useCallback(function () {
-    store.runSearch();
-  }, [store]);
+    void runSearchRequest(1, false);
+  }, [runSearchRequest]);
 
   const handleReset = useCallback(function () {
+    liveSearchRequestRef.current = {
+      requestId: liveSearchRequestRef.current.requestId + 1,
+      inFlightSignature: null,
+    };
     store.setLastQuery({ keywords: '', location: '' });
     store.clearAllFilters();
     store.setAppliedFromPrompt(null);
     store.setFilters({});
     store.setSelectedJob(null);
     store.clearSearchResults();
+    setLiveAdvisorState({
+      status: 'idle',
+      errorMessage: null,
+      evaluation: null,
+    });
     setProposed(null);
     setDescribePanelExpanded(false);
     setViewAuditOpen(false);
@@ -2148,18 +2650,6 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
       }, 3000);
     },
     [store, targetRoleStore, decisionBriefsStore]
-  );
-
-  const handleStartGuidedApply = useCallback(
-    function () {
-      if (selectedJob === undefined) return;
-      const gaStore = loadGuidedApplyStore();
-      const session = createSession(selectedJob.title, selectedJob.url !== undefined ? selectedJob.url : '');
-      const updatedGaStore = addSession(gaStore, session);
-      saveGuidedApplyStore(updatedGaStore);
-      nav.push('/guided-apply');
-    },
-    [selectedJob, nav]
   );
 
   const interpretationParts: string[] = [];
@@ -2237,6 +2727,12 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
                 location: store.lastQuery.location,
               });
             }}
+            onKeyDown={function (e: React.KeyboardEvent<HTMLInputElement>) {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSearch();
+              }
+            }}
             className="w-full pl-9 pr-3 py-2 text-sm rounded border bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)] focus-visible:ring-inset transition-shadow"
             style={{
               borderColor: 'var(--p-border)',
@@ -2255,6 +2751,12 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
                 keywords: store.lastQuery.keywords,
                 location: e.target.value.trim() !== '' ? e.target.value : undefined,
               });
+            }}
+            onKeyDown={function (e: React.KeyboardEvent<HTMLInputElement>) {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSearch();
+              }
             }}
             className="flex-1 min-w-0 px-3 py-2 text-sm rounded border bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)] focus-visible:ring-inset transition-shadow"
             style={{
@@ -2726,6 +3228,25 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
         />
       ) : null}
 
+      {isLiveSearchMode && liveSearchConstraintNotes.length > 0 ? (
+        <div
+          className="mx-4 mt-2 px-3 py-2 rounded border text-xs"
+          style={{
+            background: 'var(--p-surface2)',
+            borderColor: 'var(--p-border)',
+            color: 'var(--p-text-dim)',
+          }}
+        >
+          {liveSearchConstraintNotes.map(function (note, index) {
+            return (
+              <p key={index}>
+                {note}
+              </p>
+            );
+          })}
+        </div>
+      ) : null}
+
       {/* Filter guide drawer: portaled to OverlayRoot. Series selection writes to store (single source of truth); dropdown reads store.filters.series so label updates immediately. */}
       {filterGuideKind !== null ? (
         <FilterGuideDrawer
@@ -2738,19 +3259,19 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
             const next = Object.assign({}, store.filters);
             next.series = seriesCode;
             store.setFilters(next);
-            store.runSearch();
+            void runSearchRequest(1, false);
           } : undefined}
           onApplyAgency={filterGuideKind === 'agency' ? function (agencyName) {
             const next = Object.assign({}, store.filters);
             next.agency = agencyName;
             store.setFilters(next);
-            store.runSearch();
+            void runSearchRequest(1, false);
           } : undefined}
           onApplyLocation={filterGuideKind === 'location' ? function (locationValue) {
             const next = Object.assign({}, store.filters);
             next.location = locationValue;
             store.setFilters(next);
-            store.runSearch();
+            void runSearchRequest(1, false);
           } : undefined}
         />
       ) : null}
@@ -2810,16 +3331,19 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
                   );
                 })}
               </div>
-            ) : !store.hasSearched ? (
+            ) : store.searchErrorMessage !== null &&
+              store.searchErrorMessage !== '' &&
+              store.results.length === 0 ? (
               <div
                 className="flex flex-col items-center justify-center gap-3 p-8 text-center"
                 style={{ color: 'var(--p-text-dim)' }}
               >
                 <Inbox className="w-10 h-10 opacity-40" />
-                <p className="text-sm">Run a search to view jobs.</p>
+                <p className="text-sm">Live search is unavailable for this request.</p>
+                <p className="text-xs">{store.searchErrorMessage}</p>
                 <button
                   type="button"
-                  onClick={function () { store.loadSampleJobs(); }}
+                  onClick={handleSearch}
                   className="px-4 py-2 text-sm font-medium rounded"
                   style={{
                     background: 'var(--p-surface2)',
@@ -2828,7 +3352,32 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
                     borderRadius: 'var(--p-radius)',
                   }}
                 >
-                  Load sample jobs
+                  Retry search
+                </button>
+              </div>
+            ) : !store.hasSearched ? (
+              <div
+                className="flex flex-col items-center justify-center gap-3 p-8 text-center"
+                style={{ color: 'var(--p-text-dim)' }}
+              >
+                <Inbox className="w-10 h-10 opacity-40" />
+                <p className="text-sm">
+                  {isLiveSearchMode
+                    ? 'Enter keywords and run a live search to view jobs.'
+                    : 'Run a search to view jobs.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleSearch}
+                  className="px-4 py-2 text-sm font-medium rounded"
+                  style={{
+                    background: 'var(--p-surface2)',
+                    color: 'var(--p-text)',
+                    border: '1px solid var(--p-border)',
+                    borderRadius: 'var(--p-radius)',
+                  }}
+                >
+                  {isLiveSearchMode ? 'Search live jobs' : 'Load sample jobs'}
                 </button>
               </div>
             ) : store.results.length === 0 ? (
@@ -2841,31 +3390,46 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
                 <p className="text-xs">Try broadening keywords or clearing filters.</p>
               </div>
             ) : (
-              sortedResults.map(function (job) {
-                const tag = MOCK_JOB_TAGS[job.id];
-                const matchInfo = matchByJobId[job.id] !== undefined ? matchByJobId[job.id] : { matchLevel: 'Moderate' as MatchLevel, overallMatchScore: 50 };
-                const riskFlags = getRiskFlagLabels(job);
-                return (
-                  <JobListItem
-                    key={job.id}
-                    job={job}
-                    isSelected={store.selectedJobId === job.id}
-                    isSaved={store.isJobSaved(job.id)}
-                    matchInfo={matchInfo}
-                    riskFlags={riskFlags}
-                    tag={tag}
-                    onSelect={handleSelectJob}
-                    onSave={function () {
-                      if (store.isJobSaved(job.id)) {
-                        store.removeSavedJob(job.id);
-                      } else {
-                        handleSaveJob(job);
-                      }
+              <>
+                {store.searchErrorMessage !== null && store.searchErrorMessage !== '' ? (
+                  <div
+                    className="mx-3 mt-3 mb-1 px-3 py-2 rounded border text-xs"
+                    style={{
+                      background: 'var(--p-surface2)',
+                      borderColor: 'var(--p-border)',
+                      color: 'var(--p-text-dim)',
                     }}
-                    onPeek={handleJobPeek}
-                  />
-                );
-              })
+                  >
+                    {store.searchErrorMessage}
+                  </div>
+                ) : null}
+                {sortedResults.map(function (job) {
+                  const tag =
+                    isLiveSearchMode ? undefined : MOCK_JOB_TAGS[job.id];
+                  const matchInfo = matchByJobId[job.id] !== undefined ? matchByJobId[job.id] : { matchLevel: 'Moderate' as MatchLevel, overallMatchScore: 50 };
+                  const riskFlags = getRiskFlagLabels(job);
+                  return (
+                    <JobListItem
+                      key={job.id}
+                      job={job}
+                      isSelected={store.selectedJobId === job.id}
+                      isSaved={store.isJobSaved(job.id)}
+                      matchInfo={matchInfo}
+                      riskFlags={riskFlags}
+                      tag={tag}
+                      onSelect={handleSelectJob}
+                      onSave={function () {
+                        if (store.isJobSaved(job.id)) {
+                          store.removeSavedJob(job.id);
+                        } else {
+                          handleSaveJob(job);
+                        }
+                      }}
+                      onPeek={handleJobPeek}
+                    />
+                  );
+                })}
+              </>
             )}
             {/* Load more footer: full-width secondary button when hasMore; loading state; or "End of results". */}
             {store.hasSearched && store.results.length > 0 ? (
@@ -2877,7 +3441,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
                 ) : store.hasMore ? (
                   <button
                     type="button"
-                    onClick={function () { store.loadMore(); }}
+                    onClick={function () { void runSearchRequest(store.page + 1, true); }}
                     className={INTERACTIVE_HOVER_CLASS + ' w-full py-2 text-sm font-medium rounded border'}
                     style={{
                       background: 'var(--p-surface2)',
@@ -2910,11 +3474,13 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
           <JobDetailsPanel
             job={selectedJob}
             isSaved={selectedJob !== undefined ? store.isJobSaved(selectedJob.id) : false}
+            isLiveAdvisorMode={isLiveAdvisorMode}
             activeTab={detailsTab}
             onTabChange={setDetailsTab}
             decisionBrief={selectedJob !== undefined ? decisionBriefsStore.getBrief(selectedJob.id) : null}
             snapshot={qualificationSnapshot}
             jobMatchSnapshot={jobMatchSnapshot}
+            liveAdvisorState={liveAdvisorState}
             onSave={function () {
               if (selectedJob !== undefined) handleSaveJob(selectedJob);
             }}
@@ -2922,6 +3488,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
               nav.push(RESUME_BUILDER);
             }}
             onAskPathAdvisor={function () {}}
+            onRetryLiveEvaluation={retryLiveEvaluation}
             onOpenCareerReadinessActionPlan={function () {
               nav.push(CAREER_READINESS + '#action-plan');
             }}

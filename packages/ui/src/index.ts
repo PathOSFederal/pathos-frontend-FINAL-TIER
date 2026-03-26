@@ -39,10 +39,30 @@ export { CareerReadinessScreen } from './screens/CareerReadinessScreen';
 export { CareerScreen, type CareerScreenProps } from './screens/CareerScreen';
 export { SettingsScreen, type SettingsScreenProps } from './screens/SettingsScreen';
 export { GuidedApplyScreen, type GuidedApplyScreenProps } from './screens/GuidedApplyScreen';
-export { JobSearchScreen, type JobSearchScreenProps } from './screens/JobSearchScreen';
-export { SavedJobsScreen, type SavedJobsScreenProps } from './screens/SavedJobsScreen';
+export {
+  JobSearchScreen,
+  type JobSearchScreenProps,
+  type JobSearchLiveAdvisorIntegration,
+  type JobSearchLiveSearchIntegration,
+} from './screens/JobSearchScreen';
+export {
+  SavedJobsScreen,
+  type SavedJobsScreenProps,
+  type SavedJobsLiveAdvisorIntegration,
+} from './screens/SavedJobsScreen';
 export { ResumeBuilderScreen, type ResumeBuilderScreenProps } from './screens/ResumeBuilderScreen';
 export { PlaceholderScreen, type PlaceholderScreenProps } from './screens/PlaceholderScreen';
+export {
+  SavedJobsLiveAdvisorPanel,
+  type SavedJobsLiveStoredJob,
+  type SavedJobsLiveEvidenceRef,
+  type SavedJobsLiveReasonLikeItem,
+  type SavedJobsLiveNextAction,
+  type SavedJobsLiveBlockingIssue,
+  type SavedJobsLiveApplicationDecision,
+  type SavedJobsLiveEvaluation,
+  type SavedJobsLiveEvaluationState,
+} from './screens/_components/SavedJobsLiveAdvisorPanel';
 export { mockDashboardData } from './screens/dashboard/mockDashboardData';
 export type { DashboardViewModel, FocusItem, ActiveTrack, SignalItem } from './screens/dashboard/dashboardModel';
 export { buildDashboardViewModel } from './screens/dashboard/buildDashboardViewModel';

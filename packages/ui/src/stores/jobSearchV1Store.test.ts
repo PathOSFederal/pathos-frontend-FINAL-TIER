@@ -24,6 +24,7 @@ describe('jobSearchV1Store', function () {
       totalCount: 0,
       hasMore: false,
       isLoadingMore: false,
+      searchErrorMessage: null,
     });
   });
 
@@ -181,5 +182,109 @@ describe('jobSearchV1Store', function () {
       const coreStore = loadSavedJobsStore();
       expect(coreStore.jobs.some(function (j) { return j.id === job.id; })).toBe(true);
     }
+  });
+
+  it('completeLiveSearch replaces results and preserves selection when the job still exists', function () {
+    const store = useJobSearchV1Store.getState();
+    store.completeLiveSearch({
+      results: [
+        {
+          id: 'live-1',
+          title: 'Program Analyst',
+          agency: 'Department of Veterans Affairs',
+          location: 'Washington, DC',
+          savedAt: '2026-03-26T10:00:00Z',
+        },
+        {
+          id: 'live-2',
+          title: 'Management Analyst',
+          agency: 'Office of Personnel Management',
+          location: 'Washington, DC',
+          savedAt: '2026-03-26T10:00:00Z',
+        },
+      ],
+      totalCount: 24,
+      page: 1,
+    });
+    useJobSearchV1Store.getState().setSelectedJob('live-2');
+
+    store.completeLiveSearch({
+      results: [
+        {
+          id: 'live-2',
+          title: 'Management Analyst',
+          agency: 'Office of Personnel Management',
+          location: 'Washington, DC',
+          savedAt: '2026-03-26T10:00:00Z',
+        },
+      ],
+      totalCount: 1,
+      page: 1,
+    });
+
+    const after = useJobSearchV1Store.getState();
+    expect(after.selectedJobId).toBe('live-2');
+    expect(after.results.length).toBe(1);
+    expect(after.searchErrorMessage).toBe(null);
+  });
+
+  it('completeLiveSearch clears stale selection when a new search removes the old job', function () {
+    const store = useJobSearchV1Store.getState();
+    store.completeLiveSearch({
+      results: [
+        {
+          id: 'live-old',
+          title: 'Budget Analyst',
+          agency: 'Department of Defense',
+          location: 'Arlington, VA',
+          savedAt: '2026-03-26T10:00:00Z',
+        },
+      ],
+      totalCount: 1,
+      page: 1,
+    });
+    store.setSelectedJob('live-old');
+
+    store.completeLiveSearch({
+      results: [
+        {
+          id: 'live-new',
+          title: 'Program Analyst',
+          agency: 'Department of Veterans Affairs',
+          location: 'Remote',
+          savedAt: '2026-03-26T10:00:00Z',
+        },
+      ],
+      totalCount: 1,
+      page: 1,
+    });
+
+    const after = useJobSearchV1Store.getState();
+    expect(after.selectedJobId).toBe('live-new');
+  });
+
+  it('failLiveSearch clears results for a primary search failure', function () {
+    const store = useJobSearchV1Store.getState();
+    store.completeLiveSearch({
+      results: [
+        {
+          id: 'live-existing',
+          title: 'Program Analyst',
+          agency: 'Department of Veterans Affairs',
+          location: 'Remote',
+          savedAt: '2026-03-26T10:00:00Z',
+        },
+      ],
+      totalCount: 1,
+      page: 1,
+    });
+
+    store.failLiveSearch('Backend search failed.', false);
+
+    const after = useJobSearchV1Store.getState();
+    expect(after.results).toEqual([]);
+    expect(after.selectedJobId).toBe(null);
+    expect(after.searchErrorMessage).toBe('Backend search failed.');
+    expect(after.hasSearched).toBe(true);
   });
 });

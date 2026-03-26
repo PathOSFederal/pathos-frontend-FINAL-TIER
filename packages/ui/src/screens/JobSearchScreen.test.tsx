@@ -23,12 +23,12 @@ import {
   buildDimensionBriefingPayload,
 } from '../lib/jobMatchSnapshot';
 import { CAREER_READINESS_MOCK } from './careerReadiness/careerReadinessMockData';
-import { JobSearchScreen } from './JobSearchScreen';
+import { JobDetailsPanel, JobSearchScreen } from './JobSearchScreen';
 import { MOCK_JOBS } from './jobSearchMockJobs';
 import { usePathAdvisorContextLogStore, getAnchorKeysForScreen, getEntriesForAnchor } from '../stores/pathAdvisorContextLogStore';
 import { publishScreenContext, publishDimensionExplainContext } from '../lib/pathAdvisorPublish';
 
-function noop(_x?: string) {
+function noop() {
   /* mock */
 }
 
@@ -50,10 +50,173 @@ function TestLink(props: NavLinkProps) {
 }
 
 function renderJobSearch() {
+  return renderInNavigation(<JobSearchScreen />);
+}
+
+function renderLiveJobSearch() {
+  return renderInNavigation(
+    <JobSearchScreen
+      liveSearch={{
+        searchJobs: async function () {
+          return {
+            results: [],
+            total: 0,
+            page: 1,
+            pageSize: 20,
+            requestId: 'request-1',
+          };
+        },
+      }}
+    />
+  );
+}
+
+function renderInNavigation(element: React.ReactNode) {
   return renderToString(
     <NavigationProvider adapter={testAdapter} linkComponent={TestLink}>
-      <JobSearchScreen />
+      {element}
     </NavigationProvider>
+  );
+}
+
+function renderJobDetailsWithLiveState(state: {
+  status: 'idle' | 'loading' | 'error' | 'empty' | 'success';
+  errorMessage: string | null;
+  evaluation: null | {
+    recommendation: string;
+    decisionBand: string;
+    confidenceBand: string;
+    overallScore: number;
+    reasons: Array<{
+      code: string | null;
+      ruleId: string | null;
+      basis: string | null;
+      text: string;
+      severity: string | null;
+      suggestion: string | null;
+      importance: string | null;
+      evidenceRefs: Array<{
+        label: string | null;
+        sourceCategory: string | null;
+        factStatus: string | null;
+      }>;
+    }>;
+    gaps: Array<{
+      code: string | null;
+      ruleId: string | null;
+      basis: string | null;
+      text: string;
+      severity: string | null;
+      suggestion: string | null;
+      importance: string | null;
+      evidenceRefs: Array<{
+        label: string | null;
+        sourceCategory: string | null;
+        factStatus: string | null;
+      }>;
+    }>;
+    warnings: Array<{
+      code: string | null;
+      ruleId: string | null;
+      basis: string | null;
+      text: string;
+      severity: string | null;
+      suggestion: string | null;
+      importance: string | null;
+      evidenceRefs: Array<{
+        label: string | null;
+        sourceCategory: string | null;
+        factStatus: string | null;
+      }>;
+    }>;
+    missingEvidence: Array<{
+      code: string | null;
+      ruleId: string | null;
+      basis: string | null;
+      text: string;
+      severity: string | null;
+      suggestion: string | null;
+      importance: string | null;
+      evidenceRefs: Array<{
+        label: string | null;
+        sourceCategory: string | null;
+        factStatus: string | null;
+      }>;
+    }>;
+    nextActions: Array<{
+      code: string | null;
+      action: string;
+      priority: number;
+    }>;
+    applicationDecision: null | {
+      decisionBand: string;
+      priorityLevel: string;
+      alertImportance: string;
+      rationaleSummary: string;
+      blockingIssues: Array<{
+        code: string | null;
+        ruleId: string | null;
+        sourceType: string | null;
+        severity: string | null;
+        text: string;
+        evidenceRefs: Array<{
+          label: string | null;
+          sourceCategory: string | null;
+          factStatus: string | null;
+        }>;
+      }>;
+      recommendedNextActions: Array<{
+        code: string | null;
+        action: string;
+        priority: number;
+      }>;
+      decisionRuleIds: string[];
+      decisionVersion: string | null;
+    };
+    explainabilityVersion: string | null;
+    engineVersion: string | null;
+  };
+}) {
+  const job = MOCK_JOBS[0];
+  if (job === undefined) {
+    throw new Error('Missing mock job for live Job Search panel test.');
+  }
+
+  return renderInNavigation(
+    <JobDetailsPanel
+      job={job}
+      isSaved={false}
+      isLiveAdvisorMode={true}
+      activeTab="overview"
+      onTabChange={function () {
+        /* noop */
+      }}
+      decisionBrief={null}
+      snapshot={undefined}
+      jobMatchSnapshot={undefined}
+      liveAdvisorState={state}
+      onSave={function () {
+        /* noop */
+      }}
+      onTailor={function () {
+        /* noop */
+      }}
+      onAskPathAdvisor={function () {
+        /* noop */
+      }}
+      onRetryLiveEvaluation={function () {
+        /* noop */
+      }}
+      onExplainInPathAdvisor={function () {
+        /* noop */
+      }}
+      onOpenCareerReadinessActionPlan={function () {
+        /* noop */
+      }}
+      onOpenDimensionBriefing={function () {
+        /* noop */
+      }}
+    />
   );
 }
 
@@ -61,6 +224,9 @@ describe('JobSearchScreen', function () {
   beforeEach(function () {
     useJobSearchV1Store.getState().loadFromStorage();
     usePathAdvisorContextLogStore.getState().clearAll();
+    useJobSearchV1Store.setState({
+      searchErrorMessage: null,
+    });
   });
 
   it('renders loading or Job Search content', function () {
@@ -73,9 +239,42 @@ describe('JobSearchScreen', function () {
       hasSearched: false,
       results: [],
       loading: false,
+      searchErrorMessage: null,
     });
     const output = renderJobSearch();
     expect(output.indexOf('Explore roles') !== -1 || output.indexOf('Loading') !== -1).toBe(true);
+  });
+
+  it('live search mode does not expose sample-job fallback copy on server render', function () {
+    useJobSearchV1Store.setState({
+      hasSearched: false,
+      results: [],
+      loading: false,
+      searchErrorMessage: null,
+    });
+
+    const output = renderLiveJobSearch();
+    expect(
+      output.indexOf('Search live jobs') !== -1 ||
+      output.indexOf('Loading job search') !== -1
+    ).toBe(true);
+    expect(output.indexOf('Load sample jobs')).toBe(-1);
+  });
+
+  it('live search error state does not regress server render', function () {
+    useJobSearchV1Store.setState({
+      hasSearched: true,
+      results: [],
+      allResults: [],
+      loading: false,
+      searchErrorMessage: 'Backend live search failed.',
+    });
+
+    const output = renderLiveJobSearch();
+    expect(
+      output.indexOf('Live search is unavailable for this request.') !== -1 ||
+      output.indexOf('Loading job search') !== -1
+    ).toBe(true);
   });
 
   it('after loadSampleJobs store has results and first job selected for details pane', function () {
@@ -604,5 +803,127 @@ describe('JobSearchScreen', function () {
     const entries = getEntriesForAnchor(usePathAdvisorContextLogStore.getState().entriesByAnchor, keys[0]);
     expect(entries.length).toBeGreaterThanOrEqual(1);
     expect(entries[entries.length - 1].title).toContain('Match breakdown');
+  });
+});
+
+describe('JobSearchScreen live advisor integration', function () {
+  it('renders live loading state for the selected job panel', function () {
+    const output = renderJobDetailsWithLiveState({
+      status: 'loading',
+      errorMessage: null,
+      evaluation: null,
+    });
+
+    expect(output).toContain('Loading live advisor evaluation');
+    expect(output).toContain('Evaluation');
+  });
+
+  it('renders live error state honestly', function () {
+    const output = renderJobDetailsWithLiveState({
+      status: 'error',
+      errorMessage: 'Backend evaluation is unavailable.',
+      evaluation: null,
+    });
+
+    expect(output).toContain('Live advisor evaluation is unavailable');
+    expect(output).toContain('Backend evaluation is unavailable.');
+  });
+
+  it('renders live partial-evidence output in the selected job panel', function () {
+    const output = renderJobDetailsWithLiveState({
+      status: 'success',
+      errorMessage: null,
+      evaluation: {
+        recommendation: 'consider',
+        decisionBand: 'caution',
+        confidenceBand: 'medium',
+        overallScore: 71,
+        reasons: [
+          {
+            code: 'ROLE_ALIGNMENT',
+            ruleId: 'role_alignment_positive',
+            basis: 'known',
+            text: 'The role aligns with your target series.',
+            severity: null,
+            suggestion: null,
+            importance: null,
+            evidenceRefs: [
+              {
+                label: 'profile.goals.targetSeries',
+                sourceCategory: 'profile',
+                factStatus: 'known',
+              },
+            ],
+          },
+        ],
+        gaps: [],
+        warnings: [
+          {
+            code: 'LOW_CONFIDENCE',
+            ruleId: 'confidence_medium',
+            basis: 'missing',
+            text: 'Confidence is reduced because profile evidence is incomplete.',
+            severity: null,
+            suggestion: null,
+            importance: null,
+            evidenceRefs: [
+              {
+                label: 'profile.skills',
+                sourceCategory: 'missing',
+                factStatus: 'missing',
+              },
+            ],
+          },
+        ],
+        missingEvidence: [
+          {
+            code: 'MISSING_SKILLS',
+            ruleId: 'missing_skill_signal',
+            basis: 'missing',
+            text: 'No skills evidence was provided.',
+            severity: null,
+            suggestion: null,
+            importance: 'medium',
+            evidenceRefs: [
+              {
+                label: 'profile.skills',
+                sourceCategory: 'missing',
+                factStatus: 'missing',
+              },
+            ],
+          },
+        ],
+        nextActions: [
+          {
+            code: 'ADD_SKILLS',
+            action: 'Add profile skills before treating this as a strong fit.',
+            priority: 1,
+          },
+        ],
+        applicationDecision: {
+          decisionBand: 'consider',
+          priorityLevel: 'medium',
+          alertImportance: 'medium',
+          rationaleSummary: 'There is enough signal to review this job closely.',
+          blockingIssues: [],
+          recommendedNextActions: [
+            {
+              code: 'REVIEW_EVIDENCE',
+              action: 'Review missing profile evidence before applying.',
+              priority: 1,
+            },
+          ],
+          decisionRuleIds: ['decision_consider_partial'],
+          decisionVersion: 'decision-v1',
+        },
+        explainabilityVersion: 'explainability-v1',
+        engineVersion: 'qualification-v1',
+      },
+    });
+
+    expect(output).toContain('Partial evidence');
+    expect(output).toContain('The role aligns with your target series.');
+    expect(output).toContain('No skills evidence was provided.');
+    expect(output).toContain('qualification-v1');
   });
 });

@@ -39,6 +39,40 @@ pnpm dev
 
 See `docs/dev-docs/desktop-workflows.md` for packaged QA and installer flows.
 
+## Local Live Frontend And Backend Integration
+
+PathOS Job Search and Saved Jobs live advisor flows now rely on frontend proxy
+routes that call the local backend. The browser does not call USAJOBS directly.
+
+### Frontend env setup
+
+1. Copy `.env.local.example` to `.env.local`.
+2. Set `PATHOS_BACKEND_BASE_URL` to your local backend URL.
+   Local default: `http://127.0.0.1:8000`
+3. Set `PATHOS_BACKEND_API_KEY` to a backend API key accepted by the local
+   backend.
+4. Restart the Next.js dev server after any env change.
+
+### Backend alignment
+
+- The backend must be running locally at the URL used by
+  `PATHOS_BACKEND_BASE_URL`.
+- The backend must accept the same key through its `PATHOS_API_KEYS`
+  configuration.
+- Frontend live proxy routes can fall back to the first value in
+  `PATHOS_API_KEYS`, but local frontend setup should prefer
+  `PATHOS_BACKEND_API_KEY` so the integration is explicit.
+
+### Local verification
+
+1. Start the backend locally.
+2. Start the frontend locally.
+3. In Job Search, enter keywords and run `Search`.
+4. Confirm the results list comes from live backend-backed search data.
+5. Select a Job Search result and confirm the advisor panel evaluates it.
+6. Open Saved Jobs and confirm the live stored-job list and evaluation panel
+   still load through the frontend proxy routes.
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More
