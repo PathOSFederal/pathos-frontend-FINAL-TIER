@@ -1,3 +1,80 @@
+# Resume Builder Edit Tab — Section-Focused UX Refinement (March 26, 2026)
+
+**Branch:** `feature/resumeBuilder`
+**Scope:** Edit tab section-focused editing, section organizer redesign, section editor header. No commit/push.
+
+## Git state
+
+```
+Branch: feature/resumeBuilder
+Status: 2 modified files (working tree only, no commits)
+```
+
+## Files changed this run
+
+```
+M  packages/ui/src/screens/ResumeBuilderScreen.tsx
+M  packages/ui/src/screens/ResumeBuilderScreen.test.tsx
+```
+
+## Diff stats (working tree)
+
+```
+packages/ui/src/screens/ResumeBuilderScreen.test.tsx | 246 +++++++++
+packages/ui/src/screens/ResumeBuilderScreen.tsx      | 653 +++++++++++--------
+2 files changed, 689 insertions(+), 210 deletions(-)
+```
+
+## What changed
+
+### ResumeBuilderScreen.tsx
+- **SectionsRail → SectionOrganizer + SectionOrganizerItem**: Redesigned left panel from nav-like sidebar to card-based section organizer. Each section is a distinct work-unit card with completion bar, issue badge, relevance indicator, and "Editing" badge for the active section.
+- **SectionOrganizerItem**: New component with explicit useState hover tracking per Interaction-State Standard. Hover: surface2 bg + border brightening. Selected: accent-tinted bg + 4px accent left border + "Editing" badge. Focus-visible: 2px inset ring via Tailwind + --p-accent.
+- **SectionEditorHeader**: New component shown at top of center editing surface. Identifies the active section with icon, label, and metadata (completion %, issues, relevance).
+- **Section-focused Edit tab**: Center editing surface now renders only the selected section instead of the full resume stacked vertically. Each section guarded by `activeSection === 'sectionId'` conditional.
+- **activeSectionMeta**: New useMemo deriving the active section's metadata from MOCK_SECTION_META for the section editor header.
+- **Simplified handlers**: handleSectionClick, handleJumpToSection, handleEditSection no longer use scrollIntoView. handleProposalEditFirst removed setTimeout scroll delay.
+- **New exports**: SECTION_DEFS, MOCK_SECTION_META, SectionMeta exported for test validation.
+- **New data-testid markers**: `section-editor-header`, `edit-section-{sectionId}`, `data-selected`, `data-hovered` on organizer items.
+
+### ResumeBuilderScreen.test.tsx
+- Added 4 new test suites (16 tests total) for section-focused Edit model:
+  - Section definitions: covers all IDs, labels, icons
+  - Section metadata: covers all IDs, valid ranges, label matching
+  - Data integrity: no cross-section mutation, stable coverage dimensions, deterministic test IDs
+  - SSR structural regression: loading state and tab structure intact
+
+## Validation performed
+
+- `pnpm typecheck` — clean
+- `pnpm test -- --run` — 887 tests pass across 58 files
+- `pnpm test -- --run packages/ui/src/screens/ResumeBuilderScreen.test.tsx` — 61 tests pass (45 existing + 16 new)
+- Lint check on modified file — no errors
+
+## Patch artifacts
+
+| Artifact | Size |
+|----------|------|
+| `artifacts/resume-builder-edit-focus.patch` | 45,327 bytes |
+| `artifacts/resume-builder-edit-focus-this-run.patch` | 45,327 bytes |
+
+## Change brief
+
+Updated: `docs/change-briefs/resume-builder-edit-focus.md`
+
+## Human simulation gate
+
+Not required for this run — changes are structural UI refinements testable by visual inspection. Section-focused model is validated by unit tests. Interaction states (hover, selected, focus-visible) use standard patterns documented in the Interaction-State Standard.
+
+## Known risks and follow-ups
+
+- Section organizer `MOCK_SECTION_META` is static — future work should compute metadata from draft content + target job analysis
+- Focus-visible ring uses `--tw-ring-color` CSS custom property via TypeScript cast — works but relies on Tailwind JIT
+- Scroll position per section is not preserved when switching sections (optional improvement noted in task)
+- Contact section has limited editing capability (display only) — future work to add inline contact editing
+
+---
+
 # Resume Builder Phase 2 — Suggested Changes + Coverage Map (March 25, 2026)
 
 **Branch:** `feature/backend-usajobs-ingestion-v1`

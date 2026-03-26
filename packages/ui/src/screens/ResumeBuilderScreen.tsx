@@ -169,7 +169,7 @@ interface InlineSuggestionDef {
  * Metadata for a resume section shown in the left rail.
  * Includes completion percentage, issue count, and target relevance.
  */
-interface SectionMeta {
+export interface SectionMeta {
   id: SectionId;
   label: string;
   completionPct: number;
@@ -298,7 +298,7 @@ const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string; badge?: number }>
  * Section definitions for the left rail. Each section maps to a canvas
  * region. Icons are from lucide-react to stay consistent with PathOS.
  */
-const SECTION_DEFS: Array<{ id: SectionId; label: string; icon: typeof FileText }> = [
+export const SECTION_DEFS: Array<{ id: SectionId; label: string; icon: typeof FileText }> = [
   { id: 'contact', label: 'Contact Information', icon: User },
   { id: 'summary', label: 'Professional Summary', icon: FileText },
   { id: 'experience', label: 'Work Experience', icon: Briefcase },
@@ -414,7 +414,7 @@ const MOCK_INLINE_SUGGESTION: InlineSuggestionDef = {
  * the mock resume state. A real implementation would compute these
  * from the draft content + target job analysis.
  */
-const MOCK_SECTION_META: SectionMeta[] = [
+export const MOCK_SECTION_META: SectionMeta[] = [
   { id: 'contact', label: 'Contact Information', completionPct: 100, issueCount: 0, relevancePct: 0 },
   { id: 'summary', label: 'Professional Summary', completionPct: 0, issueCount: 0, relevancePct: 0 },
   { id: 'experience', label: 'Work Experience', completionPct: 75, issueCount: 2, relevancePct: 85 },
@@ -1168,117 +1168,226 @@ function ContextStrip(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-component: Left resume sections rail
+// Sub-component: Section organizer — workspace-style section control panel
 // ---------------------------------------------------------------------------
+//
+// Replaces the previous SectionsRail (which felt like a second navigation
+// sidebar) with a calmer, card-based section organizer panel. Each section
+// appears as a distinct work-unit card showing completion, issues, and
+// relevance. The organizer stays visually subordinate to the center editing
+// surface while providing whole-resume awareness at a glance.
+//
 
 /**
- * Left rail listing all resume sections with completion indicators,
- * issue counts, and target relevance. The active section is highlighted
- * with an accent left border. Clicking a section scrolls the canvas
- * and updates the active section state.
+ * Individual card in the section organizer. Renders one resume section
+ * as a compact work-unit card with completion bar, issues badge, and
+ * relevance indicator.
  *
- * This rail communicates PathOS intelligence — not just a document outline.
- * Completion bars use tier colors; issue badges signal actionable items.
+ * Uses explicit useState hover tracking so the selected state survives
+ * hover without visual conflict (per Interaction-State Standard for
+ * list row / card controls). Selected state uses accent-tinted background
+ * plus a 4px accent left border, which is visually stronger than hover.
+ *
+ * Focus-visible uses a 2px inset ring via Tailwind utilities with the
+ * --tw-ring-color custom property set to --p-accent.
  */
-function SectionsRail(props: {
+function SectionOrganizerItem(props: {
+  section: SectionMeta;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+
+  /* Find the matching icon from SECTION_DEFS for this section. */
+  let IconComponent = FileText;
+  for (let i = 0; i < SECTION_DEFS.length; i++) {
+    if (SECTION_DEFS[i].id === props.section.id) {
+      IconComponent = SECTION_DEFS[i].icon;
+      break;
+    }
+  }
+
+  /* Determine completion bar color using the shared score tier system. */
+  const barColor = scoreTierColor(props.section.completionPct);
+
+  /*
+   * Build dynamic visual styles based on active (selected) and hovered
+   * states. Selected always takes precedence over hovered to prevent
+   * hover from making the active item look deselected.
+   */
+  let bgStyle = 'transparent';
+  let borderStyle = '1px solid transparent';
+  let leftBorderStyle = '3px solid transparent';
+  let titleColor = 'var(--p-text-muted)';
+  let iconColor = 'var(--p-text-dim)';
+
+  if (props.isActive) {
+    /* Selected state: accent tint + accent left border, stronger than hover */
+    bgStyle = 'color-mix(in srgb, var(--p-accent) 8%, var(--p-surface))';
+    borderStyle = '1px solid color-mix(in srgb, var(--p-accent) 30%, var(--p-border))';
+    leftBorderStyle = '4px solid var(--p-accent)';
+    titleColor = 'var(--p-text)';
+    iconColor = 'var(--p-accent)';
+  } else if (isHovered) {
+    /* Hover state: subtle background lift + border brightening */
+    bgStyle = 'var(--p-surface2)';
+    borderStyle = '1px solid var(--p-text-dim)';
+    leftBorderStyle = '3px solid var(--p-text-dim)';
+    titleColor = 'var(--p-text)';
+    iconColor = 'var(--p-text-muted)';
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      onMouseEnter={function () { setIsHovered(true); }}
+      onMouseLeave={function () { setIsHovered(false); }}
+      className="w-full text-left rounded-lg transition-all outline-none focus-visible:ring-2 focus-visible:ring-inset"
+      style={Object.assign(
+        {
+          padding: '10px 12px',
+          background: bgStyle,
+          border: borderStyle,
+          borderLeft: leftBorderStyle,
+          color: titleColor,
+          cursor: 'pointer',
+        },
+        /* Tailwind ring color for focus-visible — uses PathOS accent token */
+        { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
+      )}
+      aria-current={props.isActive ? 'true' : undefined}
+      data-testid={'section-rail-' + props.section.id}
+      data-selected={props.isActive ? 'true' : undefined}
+      data-hovered={isHovered ? 'true' : undefined}
+    >
+      {/* Title row: icon, section name, issue badge */}
+      <div className="flex items-center gap-2 mb-1.5">
+        <IconComponent
+          className="w-4 h-4 flex-shrink-0"
+          style={{ color: iconColor }}
+        />
+        <span className={'text-xs truncate' + (props.isActive ? ' font-semibold' : ' font-medium')}>
+          {props.section.label}
+        </span>
+        {props.section.issueCount > 0 && (
+          <span
+            className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
+            style={{
+              background: 'color-mix(in srgb, var(--p-danger, #ef4444) 15%, transparent)',
+              color: 'var(--p-danger, #ef4444)',
+            }}
+          >
+            {props.section.issueCount}
+          </span>
+        )}
+      </div>
+
+      {/* Completion progress bar */}
+      <div style={{ marginLeft: '24px' }}>
+        <div
+          className="h-1.5 rounded-full overflow-hidden"
+          style={{ background: 'var(--p-surface2)', width: '100%' }}
+          role="progressbar"
+          aria-valuenow={props.section.completionPct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={props.section.label + ' completion'}
+        >
+          <div
+            className="h-full rounded-full transition-all"
+            style={{
+              width: props.section.completionPct + '%',
+              background: barColor,
+            }}
+          />
+        </div>
+        {/* Secondary metadata: completion percentage + relevance */}
+        <div className="flex items-center gap-1 mt-1">
+          <span className="text-[10px]" style={{ color: 'var(--p-text-dim)' }}>
+            {props.section.completionPct}%
+          </span>
+          {props.section.relevancePct > 0 && (
+            <span className="text-[10px]" style={{ color: 'var(--p-text-dim)' }}>
+              · {props.section.relevancePct}% relevant
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Active indicator: "Editing" badge for the selected section */}
+      {props.isActive && (
+        <div className="mt-1.5" style={{ marginLeft: '24px' }}>
+          <span
+            className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+            style={{
+              background: 'color-mix(in srgb, var(--p-accent) 15%, transparent)',
+              color: 'var(--p-accent)',
+            }}
+          >
+            Editing
+          </span>
+        </div>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Section organizer panel — lists all resume sections as interactive
+ * cards in a quieter, workspace-style layout. Replaces the previous
+ * SectionsRail to feel more like a work organizer than a second nav.
+ *
+ * Uses wider spacing (248px width, gap between cards) and a quieter
+ * --p-bg background to stay visually subordinate to the center editing
+ * surface. Each card shows completion status, issue counts, and target
+ * relevance so the user maintains whole-resume awareness while editing
+ * one section at a time.
+ *
+ * Clicking a section updates the center editing surface to show only
+ * that section's content (section-focused editing model).
+ */
+function SectionOrganizer(props: {
   sections: SectionMeta[];
   activeSection: SectionId;
   onSectionClick: (id: SectionId) => void;
 }) {
   return (
     <nav
-      className="flex flex-col py-2 overflow-y-auto flex-shrink-0"
+      className="flex flex-col py-3 px-2.5 overflow-y-auto flex-shrink-0"
       style={{
-        width: '220px',
-        minWidth: '220px',
+        width: '248px',
+        minWidth: '248px',
         borderRight: '1px solid var(--p-border)',
-        background: 'var(--p-surface)',
+        background: 'var(--p-bg)',
       }}
       aria-label="Resume sections"
       data-testid="resume-sections-rail"
     >
-      <div className="px-3 py-1.5 mb-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
-          Resume Sections
+      {/* Organizer heading — quieter than nav sidebar headings */}
+      <div className="px-2 py-1 mb-2">
+        <span
+          className="text-[10px] font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--p-text-dim)' }}
+        >
+          Section Organizer
         </span>
       </div>
-      {props.sections.map(function (section) {
-        const isActive = section.id === props.activeSection;
-        /* Find the matching icon from SECTION_DEFS. */
-        let IconComponent = FileText;
-        for (let i = 0; i < SECTION_DEFS.length; i++) {
-          if (SECTION_DEFS[i].id === section.id) {
-            IconComponent = SECTION_DEFS[i].icon;
-            break;
-          }
-        }
 
-        /* Determine completion bar color using score tier logic. */
-        const barColor = scoreTierColor(section.completionPct);
-
-        return (
-          <button
-            key={section.id}
-            type="button"
-            onClick={function () { props.onSectionClick(section.id); }}
-            className="w-full text-left px-3 py-2 transition-colors"
-            style={{
-              background: isActive
-                ? 'color-mix(in srgb, var(--p-accent) 10%, transparent)'
-                : 'transparent',
-              borderLeft: isActive
-                ? '3px solid var(--p-accent)'
-                : '3px solid transparent',
-              color: isActive ? 'var(--p-text)' : 'var(--p-text-muted)',
-            }}
-            aria-current={isActive ? 'true' : undefined}
-            data-testid={'section-rail-' + section.id}
-          >
-            <div className="flex items-center gap-2 mb-1">
-              <IconComponent className="w-3.5 h-3.5 flex-shrink-0" />
-              <span className="text-xs font-medium truncate">{section.label}</span>
-              {/* Issue count badge */}
-              {section.issueCount > 0 && (
-                <span
-                  className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
-                  style={{
-                    background: 'color-mix(in srgb, var(--p-danger, #ef4444) 15%, transparent)',
-                    color: 'var(--p-danger, #ef4444)',
-                  }}
-                >
-                  {section.issueCount}
-                </span>
-              )}
-            </div>
-            {/* Completion bar */}
-            <div className="ml-5.5 mt-0.5" style={{ marginLeft: '22px' }}>
-              <div
-                className="h-1 rounded-full overflow-hidden"
-                style={{ background: 'var(--p-surface2)', width: '100%' }}
-                role="progressbar"
-                aria-valuenow={section.completionPct}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-label={section.label + ' completion'}
-              >
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{
-                    width: section.completionPct + '%',
-                    background: barColor,
-                  }}
-                />
-              </div>
-              {/* Target relevance (shown when > 0) */}
-              {section.relevancePct > 0 && (
-                <span className="text-[10px] mt-0.5 block" style={{ color: 'var(--p-text-dim)' }}>
-                  {section.relevancePct}% relevant to target
-                </span>
-              )}
-            </div>
-          </button>
-        );
-      })}
+      {/* Section cards — separated with gap for visual clarity */}
+      <div className="flex flex-col gap-1.5">
+        {props.sections.map(function (section) {
+          const isActive = section.id === props.activeSection;
+          return (
+            <SectionOrganizerItem
+              key={section.id}
+              section={section}
+              isActive={isActive}
+              onClick={function () { props.onSectionClick(section.id); }}
+            />
+          );
+        })}
+      </div>
     </nav>
   );
 }
@@ -1391,6 +1500,91 @@ function IntelligenceStrip(props: {
       pendingProposalCount={props.proposalCount}
       activeJob={props.activeJob}
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: Section editor header — active section context bar
+// ---------------------------------------------------------------------------
+//
+// Shown at the top of the center editing surface when a section is
+// selected. Provides clear identification of what section is open for
+// focused editing. Includes the section icon, label, and key metadata
+// (completion, issues, relevance) so the user always knows their context.
+//
+
+/**
+ * Section editor header — identifies the active section in the center
+ * editing surface. Renders the section icon, full label, and contextual
+ * metadata (completion %, issue count, relevance to target).
+ *
+ * Calmer than the main workspace top bar — this is a section-level
+ * context bar, not a workspace-level control surface.
+ */
+function SectionEditorHeader(props: {
+  sectionId: SectionId;
+  sectionMeta: SectionMeta | null;
+}) {
+  /* Look up the section definition for icon and full label. */
+  let sectionDef = SECTION_DEFS[0];
+  for (let i = 0; i < SECTION_DEFS.length; i++) {
+    if (SECTION_DEFS[i].id === props.sectionId) {
+      sectionDef = SECTION_DEFS[i];
+      break;
+    }
+  }
+  const IconComponent = sectionDef.icon;
+
+  /* Extract metadata values with explicit null checks (no ?. operator). */
+  const completionPct = props.sectionMeta ? props.sectionMeta.completionPct : 0;
+  const issueCount = props.sectionMeta ? props.sectionMeta.issueCount : 0;
+  const relevancePct = props.sectionMeta ? props.sectionMeta.relevancePct : 0;
+
+  return (
+    <div
+      className="px-8 py-3.5 flex items-center gap-3 flex-shrink-0"
+      style={{
+        borderBottom: '1px solid var(--p-border)',
+        background: 'var(--p-surface)',
+      }}
+      data-testid="section-editor-header"
+    >
+      <IconComponent
+        className="w-5 h-5 flex-shrink-0"
+        style={{ color: 'var(--p-accent)' }}
+      />
+      <div className="flex-1">
+        <h2
+          className="text-sm font-semibold"
+          style={{ color: 'var(--p-text)' }}
+        >
+          {sectionDef.label}
+        </h2>
+        {props.sectionMeta && (
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
+              {completionPct}% complete
+            </span>
+            {issueCount > 0 && (
+              <>
+                <span style={{ color: 'var(--p-border)' }}>·</span>
+                <span className="text-[11px]" style={{ color: 'var(--p-danger, #ef4444)' }}>
+                  {issueCount} {issueCount === 1 ? 'issue' : 'issues'}
+                </span>
+              </>
+            )}
+            {relevancePct > 0 && (
+              <>
+                <span style={{ color: 'var(--p-border)' }}>·</span>
+                <span className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
+                  {relevancePct}% relevant to target
+                </span>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -3490,6 +3684,21 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     return 'All proposals reviewed';
   }, [activeJob, proposals]);
 
+  /*
+   * ---- Active section metadata for the section editor header ----
+   * Finds the SectionMeta entry matching the currently selected section
+   * so the center editing header can display contextual information
+   * (completion, issues, relevance) alongside the section label.
+   */
+  const activeSectionMeta = useMemo(function (): SectionMeta | null {
+    for (let i = 0; i < MOCK_SECTION_META.length; i++) {
+      if (MOCK_SECTION_META[i].id === activeSection) {
+        return MOCK_SECTION_META[i];
+      }
+    }
+    return null;
+  }, [activeSection]);
+
   /* ---- Handler: change target job ---- */
   /*
    * Phase 2 hardening: switching target jobs now explicitly regenerates
@@ -3515,13 +3724,14 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     setProposals(newProposals);
   }, [savedJobs, store.draft]);
 
-  /* ---- Handler: section click in left rail — scroll canvas to section ---- */
+  /*
+   * ---- Handler: section click in left organizer ----
+   * Sets the active section which controls which section is rendered
+   * in the center editing surface. No scroll needed because the new
+   * section-focused model renders only the selected section.
+   */
   const handleSectionClick = useCallback(function (sectionId: SectionId) {
     setActiveSection(sectionId);
-    const ref = sectionRefs.current[sectionId];
-    if (ref) {
-      ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
   }, []);
 
   /* ---- Handler: start editing a bullet ---- */
@@ -3919,48 +4129,32 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     }
 
     /*
-     * Scroll to the target section after a short delay to let the
-     * Edit tab render and the section refs populate.
+     * Section-focused model: setting activeSection above is sufficient
+     * because the center editing surface renders only the selected
+     * section. No delayed scroll is needed.
      */
-    const targetSection = targetProposal.sectionKey;
-    setTimeout(function () {
-      const ref = sectionRefs.current[targetSection];
-      if (ref) {
-        ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 100);
   }, [proposals, bulletMap]);
 
   /*
    * ---- Handler: jump to section from Coverage Map ----
-   * Switches to the Edit tab and scrolls to the specified section.
+   * Switches to the Edit tab and sets the active section. The
+   * section-focused model renders only the selected section, so
+   * no scrollIntoView is needed.
    */
   const handleJumpToSection = useCallback(function (sectionId: SectionId) {
     setActiveTab('edit');
     setActiveSection(sectionId);
-    setTimeout(function () {
-      const ref = sectionRefs.current[sectionId];
-      if (ref) {
-        ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 100);
   }, []);
 
   /*
    * ---- Handler: edit section from Coverage Map ----
-   * Same as jump to section — switches to Edit and scrolls.
-   * In a future phase this could also activate editing mode for
-   * the specific section.
+   * Switches to the Edit tab and sets the active section. The
+   * section-focused model renders only the selected section so
+   * the transition is immediate.
    */
   const handleEditSection = useCallback(function (sectionId: SectionId) {
     setActiveTab('edit');
     setActiveSection(sectionId);
-    setTimeout(function () {
-      const ref = sectionRefs.current[sectionId];
-      if (ref) {
-        ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 100);
   }, []);
 
   /*
@@ -4057,8 +4251,8 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
 
       {/* 3) Main body: left rail + center panel */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left resume sections rail */}
-        <SectionsRail
+        {/* Left section organizer — workspace-style section panel */}
+        <SectionOrganizer
           sections={MOCK_SECTION_META}
           activeSection={activeSection}
           onSectionClick={handleSectionClick}
@@ -4075,7 +4269,18 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
 
           {/* Tab content */}
           {activeTab === 'edit' ? (
-            /* ---- Edit tab: intelligence strip + resume canvas ---- */
+            /* ---- Edit tab: section-focused editing surface ----
+             *
+             * Core UX change: instead of rendering the entire resume as a
+             * stacked scroll, the center editing surface shows only the
+             * section selected in the left organizer. This makes the user
+             * feel like they have "opened" one section for focused work.
+             *
+             * Structure:
+             *   1. Resume Brief — compact metrics strip
+             *   2. Section Editor Header — identifies the active section
+             *   3. Section content — only the selected section is rendered
+             */
             <div
               className="flex-1 flex flex-col overflow-hidden"
               role="tabpanel"
@@ -4083,7 +4288,7 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
               aria-labelledby="resume-tab-edit"
               data-testid="resume-tabpanel-edit"
             >
-              {/* Resume Brief — compact summary-first layer replacing dense intel strip */}
+              {/* Resume Brief — compact summary-first metrics layer */}
               <IntelligenceStrip
                 activeJob={activeJob}
                 matchScore={computedMatchScore}
@@ -4093,103 +4298,131 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
                 fastestWin={computedFastestWin}
               />
 
-              {/* Resume canvas — scrollable document */}
+              {/* Section editor header — identifies what is being edited */}
+              <SectionEditorHeader
+                sectionId={activeSection}
+                sectionMeta={activeSectionMeta}
+              />
+
+              {/* Section editing surface — renders only the active section */}
               <div
                 ref={canvasScrollRef}
                 className="flex-1 overflow-y-auto"
                 style={{ background: 'var(--p-bg)' }}
               >
                 <div className="max-w-[820px] mx-auto px-8 py-6">
-                  {/* Contact header */}
-                  <div ref={function (el) { sectionRefs.current['contact'] = el; }}>
-                    <ContactHeader draft={store.draft} />
-                  </div>
 
-                  {/* Professional Summary */}
-                  <div ref={function (el) { sectionRefs.current['summary'] = el; }}>
-                    <ProfessionalSummaryBlock
-                      summary={store.draft.summary}
-                      onEdit={handleSummaryEditChange}
-                      isEditing={editingSummary}
-                      editText={editingSummaryText}
-                      onEditStart={handleSummaryEditStart}
-                      onEditChange={handleSummaryEditChange}
-                      onEditSave={handleSummaryEditSave}
-                    />
-                  </div>
-
-                  {/* Work Experience */}
-                  <div ref={function (el) { sectionRefs.current['experience'] = el; }}>
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--p-text)' }}>
-                        Work Experience
-                      </h3>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px]" style={{ color: 'var(--p-text-dim)' }}>
-                          85% relevant
-                        </span>
-                        <span
-                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-                          style={{
-                            background: 'color-mix(in srgb, var(--p-danger, #ef4444) 15%, transparent)',
-                            color: 'var(--p-danger, #ef4444)',
-                          }}
-                        >
-                          2 issues
-                        </span>
-                      </div>
+                  {/* ---- Contact Information ---- */}
+                  {activeSection === 'contact' && (
+                    <div
+                      ref={function (el) { sectionRefs.current['contact'] = el; }}
+                      data-testid="edit-section-contact"
+                    >
+                      <ContactHeader draft={store.draft} />
                     </div>
+                  )}
 
-                    {store.draft.experience.map(function (exp) {
-                      const bullets = bulletMap[exp.id] || [];
-                      return (
-                        <ExperienceBlock
-                          key={exp.id}
-                          experience={exp}
-                          bullets={bullets}
-                          editingBulletId={editingBulletId}
-                          editingBulletText={editingBulletText}
-                          activeSuggestionBulletId={activeSuggestionBulletId}
-                          activeSuggestion={MOCK_INLINE_SUGGESTION}
-                          autonomyMode={autonomyMode}
-                          proposalCount={pendingProposalCount}
-                          onBulletEditStart={handleBulletEditStart}
-                          onBulletEditChange={handleBulletEditChange}
-                          onBulletEditSave={handleBulletEditSave}
-                          onBulletRewrite={handleBulletRewrite}
-                          onSuggestionAccept={handleSuggestionAccept}
-                          onSuggestionEditFirst={handleSuggestionEditFirst}
-                          onSuggestionDismiss={handleSuggestionDismiss}
-                          onAddBullet={handleAddBullet}
-                        />
-                      );
-                    })}
-                  </div>
+                  {/* ---- Professional Summary ---- */}
+                  {activeSection === 'summary' && (
+                    <div
+                      ref={function (el) { sectionRefs.current['summary'] = el; }}
+                      data-testid="edit-section-summary"
+                    >
+                      <ProfessionalSummaryBlock
+                        summary={store.draft.summary}
+                        onEdit={handleSummaryEditChange}
+                        isEditing={editingSummary}
+                        editText={editingSummaryText}
+                        onEditStart={handleSummaryEditStart}
+                        onEditChange={handleSummaryEditChange}
+                        onEditSave={handleSummaryEditSave}
+                      />
+                    </div>
+                  )}
 
-                  {/* Education */}
-                  <div ref={function (el) { sectionRefs.current['education'] = el; }}>
-                    <EducationSection draft={store.draft} />
-                  </div>
+                  {/* ---- Work Experience ---- */}
+                  {activeSection === 'experience' && (
+                    <div
+                      ref={function (el) { sectionRefs.current['experience'] = el; }}
+                      data-testid="edit-section-experience"
+                    >
+                      {store.draft.experience.map(function (exp) {
+                        const bullets = bulletMap[exp.id] || [];
+                        return (
+                          <ExperienceBlock
+                            key={exp.id}
+                            experience={exp}
+                            bullets={bullets}
+                            editingBulletId={editingBulletId}
+                            editingBulletText={editingBulletText}
+                            activeSuggestionBulletId={activeSuggestionBulletId}
+                            activeSuggestion={MOCK_INLINE_SUGGESTION}
+                            autonomyMode={autonomyMode}
+                            proposalCount={pendingProposalCount}
+                            onBulletEditStart={handleBulletEditStart}
+                            onBulletEditChange={handleBulletEditChange}
+                            onBulletEditSave={handleBulletEditSave}
+                            onBulletRewrite={handleBulletRewrite}
+                            onSuggestionAccept={handleSuggestionAccept}
+                            onSuggestionEditFirst={handleSuggestionEditFirst}
+                            onSuggestionDismiss={handleSuggestionDismiss}
+                            onAddBullet={handleAddBullet}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
 
-                  {/* Skills */}
-                  <div ref={function (el) { sectionRefs.current['skills'] = el; }}>
-                    <SkillsSection draft={store.draft} />
-                  </div>
+                  {/* ---- Education ---- */}
+                  {activeSection === 'education' && (
+                    <div
+                      ref={function (el) { sectionRefs.current['education'] = el; }}
+                      data-testid="edit-section-education"
+                    >
+                      <EducationSection draft={store.draft} />
+                    </div>
+                  )}
 
-                  {/* Federal Details */}
-                  <div ref={function (el) { sectionRefs.current['federal-details'] = el; }}>
-                    <FederalDetailsSection />
-                  </div>
+                  {/* ---- Skills ---- */}
+                  {activeSection === 'skills' && (
+                    <div
+                      ref={function (el) { sectionRefs.current['skills'] = el; }}
+                      data-testid="edit-section-skills"
+                    >
+                      <SkillsSection draft={store.draft} />
+                    </div>
+                  )}
 
-                  {/* Certifications */}
-                  <div ref={function (el) { sectionRefs.current['certifications'] = el; }}>
-                    <CertificationsSection />
-                  </div>
+                  {/* ---- Federal Details ---- */}
+                  {activeSection === 'federal-details' && (
+                    <div
+                      ref={function (el) { sectionRefs.current['federal-details'] = el; }}
+                      data-testid="edit-section-federal-details"
+                    >
+                      <FederalDetailsSection />
+                    </div>
+                  )}
 
-                  {/* Supporting Evidence */}
-                  <div ref={function (el) { sectionRefs.current['supporting-evidence'] = el; }}>
-                    <SupportingEvidenceSection />
-                  </div>
+                  {/* ---- Certifications ---- */}
+                  {activeSection === 'certifications' && (
+                    <div
+                      ref={function (el) { sectionRefs.current['certifications'] = el; }}
+                      data-testid="edit-section-certifications"
+                    >
+                      <CertificationsSection />
+                    </div>
+                  )}
+
+                  {/* ---- Supporting Evidence ---- */}
+                  {activeSection === 'supporting-evidence' && (
+                    <div
+                      ref={function (el) { sectionRefs.current['supporting-evidence'] = el; }}
+                      data-testid="edit-section-supporting-evidence"
+                    >
+                      <SupportingEvidenceSection />
+                    </div>
+                  )}
+
                 </div>
               </div>
             </div>
