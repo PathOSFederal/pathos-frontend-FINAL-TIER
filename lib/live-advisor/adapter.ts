@@ -226,6 +226,38 @@ export interface LiveJobSearchResponse {
   requestId: string;
 }
 
+/**
+ * USAJOBS search requires agency subelement codes, not display labels.
+ *
+ * We only map the curated agencies the frontend explicitly offers. Unknown
+ * labels stay unsupported so the UI can surface that honestly instead of
+ * silently sending invalid values.
+ */
+const AGENCY_CODE_BY_NAME: Record<string, string> = {
+  'Department of Homeland Security': 'HS00',
+  'Department of Veterans Affairs': 'VA00',
+  'Department of Defense': 'DD00',
+  'Department of Health and Human Services': 'HE00',
+  'Department of Justice': 'DJ00',
+  'General Services Administration': 'GS00',
+  'Office of Personnel Management': 'OM00',
+};
+
+/**
+ * USAJOBS appointment filtering expects PositionOfferingTypeCode values.
+ *
+ * The old UI labels implied service categories like "Competitive", which are
+ * not the same thing. This map keeps the request aligned to the actual live
+ * contract.
+ */
+const APPOINTMENT_TYPE_CODE_BY_LABEL: Record<string, string> = {
+  Permanent: '15317',
+  Temporary: '15318',
+  Term: '15319',
+  Detail: '15320',
+  Intermittent: '15522',
+};
+
 function normalizeEvidenceRefs(
   refs: BackendEvidenceRef[] | null | undefined
 ): SavedJobsLiveEvidenceRef[] {
@@ -513,6 +545,40 @@ function deriveRemoteOnlyFilter(remoteType: string | undefined): boolean | null 
   return null;
 }
 
+function parseAgencyCodes(agencyValue: string | undefined): string[] | null {
+  if (agencyValue === undefined || agencyValue.trim() === '') {
+    return null;
+  }
+
+  const normalized = agencyValue.trim();
+  const code = AGENCY_CODE_BY_NAME[normalized];
+  if (code === undefined || code === '') {
+    return null;
+  }
+
+  return [code];
+}
+
+function parseAppointmentTypeCode(
+  appointmentType: string | undefined
+): string | null {
+  if (appointmentType === undefined || appointmentType.trim() === '') {
+    return null;
+  }
+
+  const normalized = appointmentType.trim();
+  const code = APPOINTMENT_TYPE_CODE_BY_LABEL[normalized];
+  if (code === undefined || code === '') {
+    return null;
+  }
+
+  return code;
+}
+
+function formatCurrencyValue(value: number): string {
+  return value.toLocaleString('en-US');
+}
+
 function formatGradeLabel(
   compensation: BackendCanonicalCompensation
 ): string | undefined {
@@ -553,14 +619,14 @@ function formatSalaryLabel(
     compensation.salary_max === null ||
     compensation.salary_max === undefined
   ) {
-    return '$' + String(compensation.salary_min);
+    return '$' + formatCurrencyValue(compensation.salary_min);
   }
 
   return (
     '$' +
-    String(compensation.salary_min) +
+    formatCurrencyValue(compensation.salary_min) +
     ' - $' +
-    String(compensation.salary_max)
+    formatCurrencyValue(compensation.salary_max)
   );
 }
 
@@ -757,19 +823,8 @@ export function buildLiveJobSearchRequest(
     grade_min: gradeRange.minGrade,
     grade_max: gradeRange.maxGrade,
     series: parseSeriesFilters(input.filters.series),
-    /**
-     * Intentionally omitted for now.
-     *
-     * The frontend filter currently stores agency display names, while the
-     * backend search contract expects official USAJOBS organization codes.
-     * Passing names here would be misleading.
-     */
-    agency_codes: null,
-    appointment_type:
-      input.filters.appointmentType !== undefined &&
-      input.filters.appointmentType.trim() !== ''
-        ? input.filters.appointmentType.trim()
-        : null,
+    agency_codes: parseAgencyCodes(input.filters.agency),
+    appointment_type: parseAppointmentTypeCode(input.filters.appointmentType),
     work_schedule: null,
     salary_min: null,
     page: input.page,
@@ -790,6 +845,16 @@ export function adaptLiveJobSearchResponse(
       location: formatLocationLabel(row.locations),
       grade: formatGradeLabel(row.compensation),
       salaryRange: formatSalaryLabel(row.compensation),
+      salaryMin:
+        row.compensation.salary_min !== null &&
+        row.compensation.salary_min !== undefined
+          ? row.compensation.salary_min
+          : undefined,
+      salaryMax:
+        row.compensation.salary_max !== null &&
+        row.compensation.salary_max !== undefined
+          ? row.compensation.salary_max
+          : undefined,
       url: row.apply_url,
       savedAt: row.source.retrieved_at,
       closeDate:

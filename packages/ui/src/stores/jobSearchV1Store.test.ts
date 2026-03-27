@@ -165,6 +165,9 @@ describe('jobSearchV1Store', function () {
     store.applyFilters({ location: 'Washington, DC' });
     const after = useJobSearchV1Store.getState();
     expect(after.filters.location).toBe('Washington, DC');
+    store.clearAllFilters();
+    const afterClear = useJobSearchV1Store.getState();
+    expect(afterClear.filters.location === undefined || afterClear.filters.location === '').toBe(true);
   });
 
   it('saveJob adds job to core saved-jobs and isJobSaved returns true', function () {

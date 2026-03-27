@@ -108,6 +108,18 @@ const JOB_SEARCH_SUGGESTED_PROMPTS = [
 const PLACEHOLDER_PROMPT =
   'Remote GS-12 cybersecurity roles at DHS or VA near DC, open for 2+ weeks';
 
+const DEFAULT_LIVE_RESET_KEYWORD = 'federal';
+
+export function getResetSearchQuery(isLiveSearchMode: boolean): {
+  keywords: string;
+  location: string;
+} {
+  return {
+    keywords: isLiveSearchMode ? DEFAULT_LIVE_RESET_KEYWORD : '',
+    location: '',
+  };
+}
+
 /** Filter dropdown options: Grades (GS-9..GS-15 + All). */
 const GRADE_OPTIONS = [
   { value: '', label: 'All Grades' },
@@ -131,10 +143,12 @@ const SERIES_OPTIONS = [
 
 /** Filter dropdown options: Types = appointment type (Competitive, Excepted, Term + All). */
 const TYPES_OPTIONS = [
-  { value: '', label: 'All Types' },
-  { value: 'Competitive', label: 'Competitive' },
-  { value: 'Excepted', label: 'Excepted' },
+  { value: '', label: 'All Appointment Types' },
+  { value: 'Permanent', label: 'Permanent' },
+  { value: 'Temporary', label: 'Temporary' },
   { value: 'Term', label: 'Term' },
+  { value: 'Detail', label: 'Detail' },
+  { value: 'Intermittent', label: 'Intermittent' },
 ];
 
 /**
@@ -154,14 +168,23 @@ const AGENCY_OPTIONS = [
   { value: 'Office of Personnel Management', label: 'Office of Personnel Management' },
 ];
 
-const LOCATION_OPTIONS = [
-  { value: '', label: 'Any Location' },
-  { value: 'Washington, DC', label: 'Washington, DC' },
-  { value: 'Arlington, VA', label: 'Arlington, VA' },
-  { value: 'Kansas City, MO', label: 'Kansas City, MO' },
-  { value: 'Denver, CO', label: 'Denver, CO' },
-  { value: 'Remote', label: 'Remote' },
-];
+const LIVE_SUPPORTED_AGENCY_FILTERS: Record<string, boolean> = {
+  'Department of Homeland Security': true,
+  'Department of Veterans Affairs': true,
+  'Department of Defense': true,
+  'Department of Health and Human Services': true,
+  'Department of Justice': true,
+  'General Services Administration': true,
+  'Office of Personnel Management': true,
+};
+
+const LIVE_SUPPORTED_APPOINTMENT_TYPES: Record<string, boolean> = {
+  Permanent: true,
+  Temporary: true,
+  Term: true,
+  Detail: true,
+  Intermittent: true,
+};
 
 /** Sort option for results list (deterministic, explainable). */
 export type JobSearchSortKind = 'likelihood' | 'effortToReward' | 'strategic' | 'urgency';
@@ -304,9 +327,23 @@ function buildLiveSearchRequestSignature(input: {
 function getLiveSearchConstraintNotes(filters: JobSearchFilters): string[] {
   const notes: string[] = [];
 
-  if (filters.agency !== undefined && filters.agency !== '') {
+  if (
+    filters.agency !== undefined &&
+    filters.agency !== '' &&
+    LIVE_SUPPORTED_AGENCY_FILTERS[filters.agency] !== true
+  ) {
     notes.push(
-      'Agency filter is not yet applied in live search because this UI still stores agency display names instead of official USAJOBS organization codes.'
+      'Agency filter can only be live-mapped for the curated agencies in this screen. The current agency value is not wired to a USAJOBS agency code yet.'
+    );
+  }
+
+  if (
+    filters.appointmentType !== undefined &&
+    filters.appointmentType !== '' &&
+    LIVE_SUPPORTED_APPOINTMENT_TYPES[filters.appointmentType] !== true
+  ) {
+    notes.push(
+      'Appointment type uses USAJOBS appointment categories like Permanent or Term. The current value is not mapped to the live backend contract.'
     );
   }
 
@@ -323,6 +360,315 @@ function getLiveSearchConstraintNotes(filters: JobSearchFilters): string[] {
   return notes;
 }
 
+interface QueryAwareLocationPart {
+  text: string;
+  matched: boolean;
+}
+
+interface QueryAwareLocationDisplay {
+  visibleParts: QueryAwareLocationPart[];
+  remainingCount: number;
+  hasMatch: boolean;
+}
+
+function buildLocationQueryTerms(query: string | undefined): string[] {
+  if (query === undefined) {
+    return [];
+  }
+
+  const trimmed = query.trim().toLowerCase();
+  if (trimmed === '') {
+    return [];
+  }
+
+  const seen: Record<string, boolean> = {};
+  const out: string[] = [];
+  const rawTerms = trimmed.split(/[\s,;/]+/);
+
+  if (seen[trimmed] !== true) {
+    seen[trimmed] = true;
+    out.push(trimmed);
+  }
+
+  for (let i = 0; i < rawTerms.length; i++) {
+    const rawTerm = rawTerms[i];
+    if (rawTerm === undefined || rawTerm.length < 3) {
+      continue;
+    }
+    if (seen[rawTerm] === true) {
+      continue;
+    }
+    seen[rawTerm] = true;
+    out.push(rawTerm);
+  }
+
+  return out;
+}
+
+function splitLocationParts(locationValue: string | undefined): string[] {
+  if (locationValue === undefined) {
+    return [];
+  }
+
+  const trimmed = locationValue.trim();
+  if (trimmed === '') {
+    return [];
+  }
+
+  if (trimmed.indexOf('|') === -1 && trimmed.indexOf(';') === -1) {
+    return [trimmed];
+  }
+
+  const parts = trimmed.split(/[|;]+/);
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part === undefined) {
+      continue;
+    }
+    const normalized = part.trim();
+    if (normalized === '') {
+      continue;
+    }
+    out.push(normalized);
+  }
+  return out;
+}
+
+export function buildQueryAwareLocationDisplay(
+  locationValue: string | undefined,
+  locationQuery: string | undefined,
+  maxVisible: number = 3
+): QueryAwareLocationDisplay {
+  const parts = splitLocationParts(locationValue);
+  if (parts.length === 0) {
+    return {
+      visibleParts: [],
+      remainingCount: 0,
+      hasMatch: false,
+    };
+  }
+
+  const queryTerms = buildLocationQueryTerms(locationQuery);
+  const matchedParts: QueryAwareLocationPart[] = [];
+  const unmatchedParts: QueryAwareLocationPart[] = [];
+
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    const normalizedPart = part.toLowerCase();
+    let matched = false;
+    for (let t = 0; t < queryTerms.length; t++) {
+      const term = queryTerms[t];
+      if (term !== undefined && normalizedPart.indexOf(term) !== -1) {
+        matched = true;
+        break;
+      }
+    }
+
+    const nextPart = {
+      text: part,
+      matched: matched,
+    };
+
+    if (matched) {
+      matchedParts.push(nextPart);
+      continue;
+    }
+
+    unmatchedParts.push(nextPart);
+  }
+
+  const orderedParts = matchedParts.concat(unmatchedParts);
+  const visibleParts: QueryAwareLocationPart[] = [];
+  const visibleLimit = maxVisible > 0 ? maxVisible : 3;
+
+  for (let i = 0; i < orderedParts.length && i < visibleLimit; i++) {
+    const part = orderedParts[i];
+    if (part !== undefined) {
+      visibleParts.push(part);
+    }
+  }
+
+  return {
+    visibleParts: visibleParts,
+    remainingCount: orderedParts.length > visibleLimit ? orderedParts.length - visibleLimit : 0,
+    hasMatch: matchedParts.length > 0,
+  };
+}
+
+function renderQueryAwareLocationText(
+  locationValue: string | undefined,
+  locationQuery: string | undefined,
+  maxVisible: number
+): React.ReactNode {
+  const display = buildQueryAwareLocationDisplay(locationValue, locationQuery, maxVisible);
+  if (display.visibleParts.length === 0) {
+    return 'Location TBD';
+  }
+
+  return (
+    <>
+      {display.visibleParts.map(function (part, index) {
+        return (
+          <span key={part.text + ':' + String(index)}>
+            {index > 0 ? ', ' : ''}
+            {part.matched ? (
+              <mark
+                style={{
+                  background: 'color-mix(in srgb, var(--p-accent) 18%, transparent)',
+                  color: 'var(--p-text)',
+                  padding: '0 1px',
+                  borderRadius: '2px',
+                }}
+              >
+                {part.text}
+              </mark>
+            ) : (
+              part.text
+            )}
+          </span>
+        );
+      })}
+      {display.remainingCount > 0 ? ' +' + String(display.remainingCount) + ' more' : ''}
+    </>
+  );
+}
+
+export function resolveUsaJobsUrl(job: Job | JobWithOverview): string {
+  if (job.url !== undefined && job.url !== '') {
+    return job.url;
+  }
+
+  const trimmedId = job.id.trim();
+  if (/^\d+$/.test(trimmedId)) {
+    return 'https://www.usajobs.gov/job/' + trimmedId;
+  }
+
+  if (trimmedId.indexOf('usajobs-') === 0) {
+    const candidate = trimmedId.slice('usajobs-'.length);
+    if (/^\d+$/.test(candidate)) {
+      return 'https://www.usajobs.gov/job/' + candidate;
+    }
+  }
+
+  return 'https://www.usajobs.gov/Search/Results?k=' + encodeURIComponent(job.title);
+}
+
+function formatSalaryCurrencyValue(value: number): string {
+  return '$' + value.toLocaleString('en-US');
+}
+
+function isMeaningfulSalaryText(value: string | undefined): boolean {
+  if (value === undefined) {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return false;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (
+    normalized === 'see announcement' ||
+    normalized === 'salary not specified' ||
+    normalized === 'salary varies'
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildSalaryContextLabel(job: Job | JobWithOverview): string | null {
+  const parts: string[] = [];
+
+  if (job.payPlan !== undefined && job.payPlan !== '') {
+    parts.push(job.payPlan);
+  }
+  if (job.grade !== undefined && job.grade !== '') {
+    parts.push(job.grade);
+  }
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  return parts.join(' • ');
+}
+
+function buildSalaryDisplay(job: Job | JobWithOverview): {
+  primary: string;
+  secondary: string | null;
+  usesStructuredRange: boolean;
+} {
+  const salaryMin = job.salaryMin;
+  const salaryMax = job.salaryMax;
+  const contextLabel = buildSalaryContextLabel(job);
+  const ov = 'overview' in job && job.overview !== undefined ? job.overview : undefined;
+
+  if (salaryMin !== undefined && salaryMax !== undefined) {
+    return {
+      primary: formatSalaryCurrencyValue(salaryMin) + ' - ' + formatSalaryCurrencyValue(salaryMax),
+      secondary:
+        contextLabel !== null
+          ? contextLabel + ' pay context from the live result.'
+          : 'Structured salary from the live result.',
+      usesStructuredRange: true,
+    };
+  }
+
+  if (salaryMin !== undefined) {
+    return {
+      primary: formatSalaryCurrencyValue(salaryMin) + '+',
+      secondary:
+        contextLabel !== null
+          ? contextLabel + ' minimum pay from the live result.'
+          : 'Structured minimum salary from the live result.',
+      usesStructuredRange: true,
+    };
+  }
+
+  if (salaryMax !== undefined) {
+    return {
+      primary: 'Up to ' + formatSalaryCurrencyValue(salaryMax),
+      secondary:
+        contextLabel !== null
+          ? contextLabel + ' maximum pay from the live result.'
+          : 'Structured maximum salary from the live result.',
+      usesStructuredRange: true,
+    };
+  }
+
+  if (isMeaningfulSalaryText(job.salaryRange)) {
+    return {
+      primary: job.salaryRange as string,
+      secondary:
+        contextLabel !== null
+          ? contextLabel
+          : 'Salary text carried from the result.',
+      usesStructuredRange: false,
+    };
+  }
+
+  if (ov !== undefined && ov.payRange !== undefined && ov.payRange !== '') {
+    return {
+      primary: ov.payRange,
+      secondary:
+        contextLabel !== null
+          ? contextLabel
+          : 'Salary text carried from the announcement summary.',
+      usesStructuredRange: false,
+    };
+  }
+
+  return {
+    primary: 'Structured salary was not included in this result.',
+    secondary: 'Open the full USAJOBS announcement for the compensation section.',
+    usesStructuredRange: false,
+  };
+}
+
 /**
  * Single row: entire row is click target for selection; hover and selected styles (token-only).
  * Option A2: Left-edge 2px match bar (scan-first signal) by matchLevel; selection is background-only (no double bar).
@@ -336,6 +682,7 @@ function JobListItem(props: {
   matchInfo: { matchLevel: MatchLevel; overallMatchScore: number };
   riskFlags: string[];
   tag?: 'New' | 'Close date updated';
+  locationQuery?: string;
   onSelect: (id: string) => void;
   onSave: () => void;
   /** Optional: append job summary to PathAdvisor context log (Quick preview). */
@@ -421,7 +768,12 @@ function JobListItem(props: {
         </div>
         <p className="text-xs truncate mt-0.5" style={{ color: 'var(--p-text-muted)' }}>
           {props.job.agency}
-          {props.job.location ? ' • ' + props.job.location : ''}
+          {props.job.location ? (
+            <>
+              {' • '}
+              {renderQueryAwareLocationText(props.job.location, props.locationQuery, 2)}
+            </>
+          ) : null}
         </p>
         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
           {props.job.grade !== undefined && props.job.grade !== '' ? (
@@ -997,6 +1349,7 @@ type DetailsTab = 'overview' | 'requirements' | 'pathosBrief';
 
 export function JobDetailsPanel(props: {
   job: Job | JobWithOverview | undefined;
+  locationQuery?: string;
   isSaved: boolean;
   isLiveAdvisorMode: boolean;
   activeTab: DetailsTab;
@@ -1042,6 +1395,7 @@ export function JobDetailsPanel(props: {
     <JobDetailsPanelContent
       key={props.job.id}
       job={props.job}
+      locationQuery={props.locationQuery}
       isSaved={props.isSaved}
       isLiveAdvisorMode={props.isLiveAdvisorMode}
       activeTab={props.activeTab}
@@ -1082,6 +1436,7 @@ export function JobDetailsPanel(props: {
  */
 function JobDetailsPanelContent(props: {
   job: Job | JobWithOverview;
+  locationQuery?: string;
   isSaved: boolean;
   isLiveAdvisorMode: boolean;
   activeTab: DetailsTab;
@@ -1099,12 +1454,13 @@ function JobDetailsPanelContent(props: {
   onOpenDimensionBriefing: (dim: JobMatchDimension) => void;
 }) {
   const job = props.job;
-  const usajobsUrl = job.url !== undefined && job.url !== '' ? job.url : 'https://www.usajobs.gov';
+  const usajobsUrl = resolveUsaJobsUrl(job);
   const brief = props.decisionBrief;
   const snapshot = props.snapshot;
   const jobMatch = props.jobMatchSnapshot;
   const liveAdvisorState = props.liveAdvisorState;
   const hasOverview = 'overview' in job && job.overview !== undefined;
+  const salaryDisplay = buildSalaryDisplay(job);
 
   /* View mode: 'match' shows job info + match intelligence (default);
    * 'listing' shows announcement section navigation (parity with Saved Jobs). */
@@ -1373,9 +1729,17 @@ function JobDetailsPanelContent(props: {
                   className="text-xs font-bold leading-snug block"
                   style={{ color: 'var(--p-success)' }}
                 >
-                  {ov !== undefined && ov.payRange !== undefined && ov.payRange !== ''
-                    ? ov.payRange
-                    : 'See announcement'}
+                  {salaryDisplay.primary}
+                </span>
+                <span
+                  className="text-[10px] leading-snug block mt-1"
+                  style={{
+                    color: salaryDisplay.usesStructuredRange
+                      ? 'var(--p-text-dim)'
+                      : 'var(--p-text-muted)',
+                  }}
+                >
+                  {salaryDisplay.secondary !== null ? salaryDisplay.secondary : 'Structured salary from the result.'}
                 </span>
               </div>
 
@@ -1396,15 +1760,28 @@ function JobDetailsPanelContent(props: {
                   style={{ color: 'var(--p-text)' }}
                 >
                   {(function () {
-                    if (job.grade === undefined || job.grade === '') return 'See announcement';
-                    const gradeMatch = job.grade.match(/GS-(\d+)/);
-                    if (gradeMatch) {
-                      const current = parseInt(gradeMatch[1], 10);
-                      const next = current + 1;
-                      if (next <= 15) return job.grade + ' \u2192 GS-' + String(next);
-                      return job.grade + ' (at ceiling)';
+                    if (job.grade === undefined || job.grade === '') {
+                      return 'Grade not structured';
                     }
                     return job.grade;
+                  })()}
+                </span>
+                <span
+                  className="text-[10px] leading-snug block mt-1"
+                  style={{ color: 'var(--p-text-dim)' }}
+                >
+                  {(function () {
+                    if (
+                      ov !== undefined &&
+                      ov.promotionPotential !== undefined &&
+                      ov.promotionPotential !== ''
+                    ) {
+                      return 'Promotion potential: ' + ov.promotionPotential;
+                    }
+                    if (job.grade !== undefined && job.grade !== '') {
+                      return 'Promotion details unavailable in this result.';
+                    }
+                    return 'No promotion details provided.';
                   })()}
                 </span>
               </div>
@@ -1456,7 +1833,7 @@ function JobDetailsPanelContent(props: {
             >
               <span className="flex items-center gap-1">
                 <MapPin className="w-3 h-3 flex-shrink-0" />
-                {job.location !== undefined && job.location !== '' ? job.location : 'Location TBD'}
+                {renderQueryAwareLocationText(job.location, props.locationQuery, 2)}
               </span>
               {ov !== undefined && ov.workSchedule !== undefined && ov.workSchedule !== '' ? (
                 <span>{ov.workSchedule}</span>
@@ -2123,6 +2500,32 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
     [store.filters]
   );
 
+  /**
+   * Keep location input and location filter in one place for the live search
+   * contract. The backend only accepts one location field, so the search row
+   * and the filter bar must not drift into conflicting values.
+   */
+  const syncLocationFilterValue = useCallback(
+    function (nextValue: string) {
+      const trimmedValue = nextValue.trim();
+      const normalizedValue = trimmedValue !== '' ? trimmedValue : undefined;
+
+      setJobSearchLastQuery({
+        keywords: store.lastQuery.keywords,
+        location: normalizedValue,
+      });
+
+      const nextFilters = Object.assign({}, store.filters);
+      if (normalizedValue === undefined) {
+        delete nextFilters.location;
+      } else {
+        nextFilters.location = normalizedValue;
+      }
+      store.setFilters(nextFilters);
+    },
+    [setJobSearchLastQuery, store]
+  );
+
   /** Qualification snapshot for the selected job (deterministic: stars, blocker, effort, reasons, risks). */
   const qualificationSnapshot = useMemo(
     function (): QualificationSnapshot | undefined {
@@ -2554,8 +2957,18 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
     if (proposed.keywords.trim() !== '') {
       store.setLastQuery({
         keywords: proposed.keywords.trim(),
-        location: store.lastQuery.location,
+        location:
+          proposed.filters.location !== undefined &&
+          proposed.filters.location.trim() !== ''
+            ? proposed.filters.location.trim()
+            : store.lastQuery.location,
       });
+    }
+    if (
+      proposed.filters.location !== undefined &&
+      proposed.filters.location.trim() !== ''
+    ) {
+      syncLocationFilterValue(proposed.filters.location);
     }
     storageSetJSON(PROMPT_TO_FILTERS_AUDIT_KEY, {
       promptText: promptInput.trim(),
@@ -2570,7 +2983,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
     setTimeout(function () {
       setShowUndoAppliedPrompt(false);
     }, 6000);
-  }, [proposed, promptInput, runSearchRequest, store]);
+  }, [proposed, promptInput, runSearchRequest, store, syncLocationFilterValue]);
 
   const handleDiscardProposed = useCallback(function () {
     setProposed(null);
@@ -2585,12 +2998,12 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
       requestId: liveSearchRequestRef.current.requestId + 1,
       inFlightSignature: null,
     };
-    store.setLastQuery({ keywords: '', location: '' });
+    const resetQuery = getResetSearchQuery(isLiveSearchMode && liveSearch !== undefined);
+    store.setLastQuery(resetQuery);
     store.clearAllFilters();
     store.setAppliedFromPrompt(null);
     store.setFilters({});
     store.setSelectedJob(null);
-    store.clearSearchResults();
     setLiveAdvisorState({
       status: 'idle',
       errorMessage: null,
@@ -2600,7 +3013,12 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
     setDescribePanelExpanded(false);
     setViewAuditOpen(false);
     setShowUndoAppliedPrompt(false);
-  }, [store]);
+    if (isLiveSearchMode && liveSearch !== undefined) {
+      void runSearchRequest(1, false);
+      return;
+    }
+    store.clearSearchResults();
+  }, [isLiveSearchMode, liveSearch, runSearchRequest, store]);
 
   const handleSelectJob = useCallback(
     function (id: string) {
@@ -2747,10 +3165,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
             placeholder="Location (optional)"
             value={store.lastQuery.location !== undefined ? store.lastQuery.location : ''}
             onChange={function (e: React.ChangeEvent<HTMLInputElement>) {
-              store.setLastQuery({
-                keywords: store.lastQuery.keywords,
-                location: e.target.value.trim() !== '' ? e.target.value : undefined,
-              });
+              syncLocationFilterValue(e.target.value);
             }}
             onKeyDown={function (e: React.KeyboardEvent<HTMLInputElement>) {
               if (e.key === 'Enter') {
@@ -3148,18 +3563,29 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
           </Tooltip>
         </span>
         <span className="flex items-center gap-1">
-          <FilterDropdown
-            label="Location"
-            value={store.filters.location !== undefined ? store.filters.location : ''}
-            options={LOCATION_OPTIONS}
-            onSelect={function (v) {
-              const next = Object.assign({}, store.filters);
-              if (v === '') delete next.location;
-              else next.location = v;
-              store.setFilters(next);
-            }}
-            tooltip={getFilterGroupTooltip('Location')}
-          />
+          <Tooltip content={getFilterGroupTooltip('Location')} contentId="location-filter-input">
+            <input
+              type="text"
+              placeholder="Location filter"
+              value={store.lastQuery.location !== undefined ? store.lastQuery.location : ''}
+              onChange={function (e: React.ChangeEvent<HTMLInputElement>) {
+                syncLocationFilterValue(e.target.value);
+              }}
+              onKeyDown={function (e: React.KeyboardEvent<HTMLInputElement>) {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleSearch();
+                }
+              }}
+              className="min-w-[9rem] px-3 py-1.5 text-sm rounded border bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)] focus-visible:ring-inset hover:border-[var(--p-text-dim)] transition-colors"
+              style={{
+                borderColor: 'var(--p-border)',
+                color: 'var(--p-text)',
+                borderRadius: 'var(--p-radius)',
+              }}
+              aria-label="Location filter"
+            />
+          </Tooltip>
           <Tooltip content="Browse locations and apply one to your search." contentId="location-guide-btn">
             <button
               type="button"
@@ -3177,7 +3603,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
           </Tooltip>
         </span>
         <FilterDropdown
-          label="Types"
+          label="Appointment"
           value={store.filters.appointmentType !== undefined ? store.filters.appointmentType : ''}
           options={TYPES_OPTIONS}
           onSelect={function (v) {
@@ -3186,7 +3612,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
             else next.appointmentType = v;
             store.setFilters(next);
           }}
-          tooltip={getFilterGroupTooltip('Types')}
+          tooltip="Filter by USAJOBS appointment type such as Permanent, Temporary, or Term."
         />
         <Tooltip content="Remove all filter selections (grades, series, agency, location, type)" contentId="clear-all-filters">
         <button
@@ -3194,6 +3620,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
           onClick={function () {
               store.resetPaging();
               if (resultsScrollRef.current) resultsScrollRef.current.scrollTop = 0;
+              syncLocationFilterValue('');
               store.clearAllFilters();
             }}
           className={INTERACTIVE_HOVER_CLASS + ' text-xs px-2 py-1 rounded'}
@@ -3268,9 +3695,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
             void runSearchRequest(1, false);
           } : undefined}
           onApplyLocation={filterGuideKind === 'location' ? function (locationValue) {
-            const next = Object.assign({}, store.filters);
-            next.location = locationValue;
-            store.setFilters(next);
+            syncLocationFilterValue(locationValue);
             void runSearchRequest(1, false);
           } : undefined}
         />
@@ -3412,6 +3837,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
                     <JobListItem
                       key={job.id}
                       job={job}
+                      locationQuery={store.lastQuery.location}
                       isSelected={store.selectedJobId === job.id}
                       isSaved={store.isJobSaved(job.id)}
                       matchInfo={matchInfo}
@@ -3473,6 +3899,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
         >
           <JobDetailsPanel
             job={selectedJob}
+            locationQuery={store.lastQuery.location}
             isSaved={selectedJob !== undefined ? store.isJobSaved(selectedJob.id) : false}
             isLiveAdvisorMode={isLiveAdvisorMode}
             activeTab={detailsTab}
