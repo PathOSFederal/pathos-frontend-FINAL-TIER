@@ -298,7 +298,7 @@ describe('live advisor adapter', function () {
         gradeBand: 'GS-12',
         series: '0343',
         agency: 'Department of Veterans Affairs',
-        appointmentType: 'Competitive',
+        appointmentType: 'Permanent',
         remoteType: 'Remote',
       },
       page: 2,
@@ -311,10 +311,38 @@ describe('live advisor adapter', function () {
     expect(result.grade_min).toBe(12);
     expect(result.grade_max).toBe(12);
     expect(result.series).toEqual(['0343']);
-    expect(result.agency_codes).toBe(null);
-    expect(result.appointment_type).toBe('Competitive');
+    expect(result.agency_codes).toEqual(['VA00']);
+    expect(result.appointment_type).toBe('15317');
     expect(result.page).toBe(2);
     expect(result.page_size).toBe(10);
+  });
+
+  it('leaves unsupported live filter values unmapped instead of faking the request', function () {
+    const result = buildLiveJobSearchRequest({
+      keyword: 'program analyst',
+      filters: {
+        agency: 'Unknown Agency',
+        appointmentType: 'Competitive',
+      },
+      page: 1,
+      pageSize: 20,
+    });
+
+    expect(result.agency_codes).toBe(null);
+    expect(result.appointment_type).toBe(null);
+  });
+
+  it('uses the synced location filter when the main search location is empty', function () {
+    const result = buildLiveJobSearchRequest({
+      keyword: 'program analyst',
+      filters: {
+        location: 'Chicago, IL',
+      },
+      page: 1,
+      pageSize: 20,
+    });
+
+    expect(result.location).toBe('Chicago, IL');
   });
 
   it('adapts canonical backend search results into frontend Job rows', function () {
@@ -358,7 +386,9 @@ describe('live advisor adapter', function () {
         agency: 'Department of Veterans Affairs',
         location: 'Washington, DC | Remote',
         grade: 'GS-11 - GS-12',
-        salaryRange: '$82000 - $111000',
+        salaryRange: '$82,000 - $111,000',
+        salaryMin: 82000,
+        salaryMax: 111000,
         url: 'https://www.usajobs.gov/job/123456',
         savedAt: '2026-03-26T10:00:00Z',
         closeDate: '2026-03-31',

@@ -14,6 +14,7 @@ import {
   type NavigationAdapter,
   type NavLinkProps,
 } from '@pathos/adapters';
+import type { Job } from '@pathos/core';
 import { useJobSearchV1Store } from '../stores/jobSearchV1Store';
 import { useDecisionBriefsV1Store, buildDecisionBriefRecord } from '../stores/decisionBriefsV1Store';
 import { usePathAdvisorBriefingStore } from '../stores/pathAdvisorBriefingStore';
@@ -23,7 +24,13 @@ import {
   buildDimensionBriefingPayload,
 } from '../lib/jobMatchSnapshot';
 import { CAREER_READINESS_MOCK } from './careerReadiness/careerReadinessMockData';
-import { JobDetailsPanel, JobSearchScreen } from './JobSearchScreen';
+import {
+  buildQueryAwareLocationDisplay,
+  getResetSearchQuery,
+  JobDetailsPanel,
+  JobSearchScreen,
+  resolveUsaJobsUrl,
+} from './JobSearchScreen';
 import { MOCK_JOBS } from './jobSearchMockJobs';
 import { usePathAdvisorContextLogStore, getAnchorKeysForScreen, getEntriesForAnchor } from '../stores/pathAdvisorContextLogStore';
 import { publishScreenContext, publishDimensionExplainContext } from '../lib/pathAdvisorPublish';
@@ -220,6 +227,50 @@ function renderJobDetailsWithLiveState(state: {
   );
 }
 
+function renderJobDetails(job: Job, locationQuery?: string) {
+  return renderInNavigation(
+    <JobDetailsPanel
+      job={job}
+      locationQuery={locationQuery}
+      isSaved={false}
+      isLiveAdvisorMode={true}
+      activeTab="overview"
+      onTabChange={function () {
+        /* noop */
+      }}
+      decisionBrief={null}
+      snapshot={undefined}
+      jobMatchSnapshot={undefined}
+      liveAdvisorState={{
+        status: 'idle',
+        errorMessage: null,
+        evaluation: null,
+      }}
+      onSave={function () {
+        /* noop */
+      }}
+      onTailor={function () {
+        /* noop */
+      }}
+      onAskPathAdvisor={function () {
+        /* noop */
+      }}
+      onRetryLiveEvaluation={function () {
+        /* noop */
+      }}
+      onExplainInPathAdvisor={function () {
+        /* noop */
+      }}
+      onOpenCareerReadinessActionPlan={function () {
+        /* noop */
+      }}
+      onOpenDimensionBriefing={function () {
+        /* noop */
+      }}
+    />
+  );
+}
+
 describe('JobSearchScreen', function () {
   beforeEach(function () {
     useJobSearchV1Store.getState().loadFromStorage();
@@ -275,6 +326,107 @@ describe('JobSearchScreen', function () {
       output.indexOf('Live search is unavailable for this request.') !== -1 ||
       output.indexOf('Loading job search') !== -1
     ).toBe(true);
+  });
+
+  it('renders structured live salary in the decision band instead of See announcement', function () {
+    const output = renderJobDetails({
+      id: 'live-salary-1',
+      title: 'Contract Specialist',
+      agency: 'General Services Administration',
+      location: 'Remote',
+      grade: 'GS-12',
+      salaryMin: 101234,
+      salaryMax: 132456,
+      savedAt: '2026-03-26T12:00:00Z',
+      url: 'https://www.usajobs.gov/job/123456789',
+    });
+
+    expect(output).toContain('$101,234 - $132,456');
+    expect(output).toContain('GS-12 pay context from the live result.');
+    expect(output).not.toContain('See announcement');
+  });
+
+  it('renders an honest salary fallback when structured compensation is missing', function () {
+    const output = renderJobDetails({
+      id: 'live-salary-2',
+      title: 'Program Analyst',
+      agency: 'Department of Veterans Affairs',
+      location: 'Washington, DC',
+      grade: 'GS-11',
+      savedAt: '2026-03-26T12:00:00Z',
+      url: 'https://www.usajobs.gov/job/223456789',
+    });
+
+    expect(output).toContain('Structured salary was not included in this result.');
+    expect(output).toContain('Open the full USAJOBS announcement for the compensation section.');
+    expect(output).toContain('Promotion details unavailable in this result.');
+    expect(output).not.toContain('Promotion potential was not structured in this result.');
+  });
+
+  it('buildQueryAwareLocationDisplay brings matched locations to the front and collapses the remainder', function () {
+    const display = buildQueryAwareLocationDisplay(
+      'Denver, Colorado | Miami, Florida | Tampa, Florida | Remote',
+      'Florida',
+      2
+    );
+
+    expect(display.hasMatch).toBe(true);
+    expect(display.visibleParts[0].text).toBe('Miami, Florida');
+    expect(display.visibleParts[0].matched).toBe(true);
+    expect(display.visibleParts[1].text).toBe('Tampa, Florida');
+    expect(display.remainingCount).toBe(2);
+  });
+
+  it('resolveUsaJobsUrl keeps the selected job linked to the current announcement and falls back from a numeric job id', function () {
+    expect(
+      resolveUsaJobsUrl({
+        id: '123456789',
+        title: 'Program Analyst',
+        agency: 'General Services Administration',
+        location: 'Washington, DC',
+        savedAt: '2026-03-26T12:00:00Z',
+      })
+    ).toBe('https://www.usajobs.gov/job/123456789');
+
+    expect(
+      resolveUsaJobsUrl({
+        id: 'selected-job-1',
+        title: 'Contract Specialist',
+        agency: 'Department of Veterans Affairs',
+        location: 'Remote',
+        savedAt: '2026-03-26T12:00:00Z',
+        url: 'https://www.usajobs.gov/job/987654321',
+      })
+    ).toBe('https://www.usajobs.gov/job/987654321');
+  });
+
+  it('selected job detail renders the current USAJOBS link and highlights matching locations first', function () {
+    const output = renderJobDetails(
+      {
+        id: '555001',
+        title: 'Regional Program Analyst',
+        agency: 'Department of Homeland Security',
+        location: 'Denver, Colorado | Miami, Florida | Tampa, Florida | Remote',
+        savedAt: '2026-03-26T12:00:00Z',
+      },
+      'Florida'
+    );
+
+    expect(output).toContain('href="https://www.usajobs.gov/job/555001"');
+    expect(output).toContain('<mark');
+    expect(output).toContain('Miami, Florida');
+    expect(output).toContain('+2 more');
+  });
+
+  it('getResetSearchQuery restores a sensible live default instead of an empty live keyword', function () {
+    expect(getResetSearchQuery(true)).toEqual({
+      keywords: 'federal',
+      location: '',
+    });
+    expect(getResetSearchQuery(false)).toEqual({
+      keywords: '',
+      location: '',
+    });
   });
 
   it('after loadSampleJobs store has results and first job selected for details pane', function () {

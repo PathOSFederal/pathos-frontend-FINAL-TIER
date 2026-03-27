@@ -32,6 +32,12 @@ export interface Job {
   grade?: string;
   /** Salary range string (optional) */
   salaryRange?: string;
+  /** Structured minimum salary when live results include pay data. Optional. */
+  salaryMin?: number;
+  /** Structured maximum salary when live results include pay data. Optional. */
+  salaryMax?: number;
+  /** Federal pay plan when the live source exposes it. Optional. */
+  payPlan?: string;
   /** USAJOBS URL or announcement link (optional) */
   url?: string;
   /** Short summary or description (optional) */

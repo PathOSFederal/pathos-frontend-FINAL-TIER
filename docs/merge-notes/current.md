@@ -6456,3 +6456,197 @@ UX compression and decision-first refinement pass for Resume Builder. Shifted th
   - yes for the scoped ticket, with the honest limitation that unrelated parallel work is still present in the wider working tree
 - Remaining honest limitation:
   - the Job Search agency filter still is not fully code-mapped to backend organization codes, and the repo still lacks a usable local `develop` ref for baseline diff commands
+
+## Day 10 — Job Search Contract Hardening v1 (2026-03-26)
+
+## Summary
+
+- Hardened Job Search salary rendering so the selected-job summary band prefers structured live compensation data and uses an explicit fallback when structured salary is missing.
+- Corrected live filter contract mapping in the frontend adapter for curated agency filters and real USAJOBS appointment-type codes.
+- Replaced the tiny location dropdown in the filter bar with free-text location input that stays aligned with the one backend location field.
+- Removed invented promotion-ladder copy from the selected-job panel when promotion potential is not actually structured in the result.
+
+## Files changed
+
+- `lib/live-advisor/adapter.ts`
+- `lib/live-advisor/adapter.test.ts`
+- `packages/core/src/job-types.ts`
+- `packages/ui/src/screens/JobSearchScreen.tsx`
+- `packages/ui/src/screens/JobSearchScreen.test.tsx`
+- `packages/ui/src/stores/jobSearchV1Store.test.ts`
+- `docs/change-briefs/job-search-contract-hardening-v1.md`
+- `docs/change-briefs/day-10.md`
+- `docs/merge-notes/current.md`
+
+## Job Search contract hardening assessment
+
+- Salary rendering is now materially better: live results with structured pay data render formatted salary ranges in the main salary tile, and missing salary now falls back to explicit trust-first copy instead of `See announcement`.
+- Filters now correctly live-map for:
+  - agency values in the curated frontend list through official USAJOBS agency subelement codes
+  - grade filters through `grade_min` and `grade_max`
+  - series filters through USAJOBS series arrays
+  - appointment type filters through real USAJOBS `PositionOfferingTypeCode` values
+  - location filtering through one shared free-text location field
+- Remaining limits or deferrals:
+  - agency live mapping is bounded to the curated agency set exposed in this screen
+  - telework and hybrid semantics still do not have a fuller live filter beyond `Remote`
+  - pay-plan context is only shown when the result actually carries it
+- Job Search is now substantially more usable with live data because salary, location, and filter behavior are more honest and materially closer to the backend contract.
+
+## Commands run
+
+- `git checkout -b feature/job-search-contract-hardening-v1`
+  - failed exactly with: `fatal: a branch named 'feature/job-search-contract-hardening-v1' already exists`
+- `pnpm test -- lib/live-advisor/adapter.test.ts packages/ui/src/screens/JobSearchScreen.test.tsx packages/ui/src/stores/jobSearchV1Store.test.ts`
+  - pass after replacing two SSR-only assertions with contract-level tests
+- `pnpm eslint lib/live-advisor/adapter.ts lib/live-advisor/adapter.test.ts packages/ui/src/screens/JobSearchScreen.tsx packages/ui/src/screens/JobSearchScreen.test.tsx packages/ui/src/stores/jobSearchV1Store.test.ts packages/core/src/job-types.ts`
+  - pass
+- `pnpm typecheck`
+  - pass
+- `pnpm test`
+  - pass
+- `pnpm build`
+  - pass with existing `baseline-browser-mapping` staleness warnings
+- `pnpm ci:validate`
+  - first attempt failed because legacy day-based artifacts were missing
+- `pnpm docs:day-patches --day 10`
+  - pass
+- `$env:DAY='10'; pnpm ci:validate`
+  - pass with existing day-label warnings from historical docs
+
+## Results
+
+- Live search results now carry structured salary min and max values into the frontend job model, and the selected-job salary tile formats those values with real currency separators.
+- Appointment type labels now match actual USAJOBS appointment semantics instead of the incorrect `Competitive` and `Excepted` labels that were previously being sent to the backend.
+- The filter-bar location control is now free-text and synchronized with the live search request field, which removes the previous hard-coded location bottleneck.
+- Selected-job live evaluation, live Search button behavior, live results loading, and Saved Jobs live paths were preserved through the hardening pass.
+
+## Known issues
+
+- The named cumulative patch artifact required by this run is empty because the exact requested command `git diff develop...HEAD` reports no committed delta on this branch; the actual uncommitted work appears in the incremental patch artifact.
+- Agency live mapping is intentionally limited to the curated agencies exposed in the current screen; unsupported agency names still need additional code-list coverage if the UI broadens later.
+- Telework and hybrid filtering remain more limited than remote-only filtering in the live backend contract.
+- `pnpm build` still emits the existing `baseline-browser-mapping` age warnings, but the build completed successfully.
+
+## Git state
+
+- `git status --short`
+  - `M docs/merge-notes/current.md`
+  - `M lib/live-advisor/adapter.test.ts`
+  - `M lib/live-advisor/adapter.ts`
+  - `M packages/core/src/job-types.ts`
+  - `M packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - `M packages/ui/src/screens/JobSearchScreen.tsx`
+  - `M packages/ui/src/stores/jobSearchV1Store.test.ts`
+  - `A docs/change-briefs/day-10.md`
+  - `A docs/change-briefs/job-search-contract-hardening-v1.md`
+- `git branch --show-current`
+  - `feature/job-search-contract-hardening-v1`
+- `git diff --name-status develop...HEAD`
+  - `NO_DIFF_NAME_STATUS`
+- `git diff --stat develop...HEAD`
+  - `NO_DIFF_STAT`
+
+## Patch artifacts
+
+- Required custom artifacts:
+  - `artifacts/job-search-contract-hardening-v1.patch`
+  - `artifacts/job-search-contract-hardening-v1-this-run.patch`
+- Repo compatibility artifacts:
+  - `artifacts/day-10.patch`
+  - `artifacts/day-10-run.patch`
+- `ls -lh` outputs:
+  - `artifacts/job-search-contract-hardening-v1.patch`
+    - `-rwxrwxrwx 1 joriel joriel 0 Mar 26 17:25 artifacts/job-search-contract-hardening-v1.patch`
+  - `artifacts/job-search-contract-hardening-v1-this-run.patch`
+    - `-rwxrwxrwx 1 joriel joriel 35K Mar 26 17:25 artifacts/job-search-contract-hardening-v1-this-run.patch`
+
+## Day 10 — Job Search Contract Hardening v1 Follow-up (2026-03-26)
+
+## Summary
+
+- Hardened Job Search truth and usability around live results without broadening scope beyond the frontend surface.
+- Reset now restores a sensible live default search instead of leaving the user on a blank post-reset state.
+- Multi-location rendering is now query-aware, so searched locations are surfaced first and long lists collapse cleanly.
+- The Grade & Promotion card remains in place, but missing promotion data now uses compact fallback copy instead of filler text.
+- The selected-job USAJOBS button now resolves from the active job with a safer fallback path for numeric USAJOBS ids.
+
+## Job Search contract hardening assessment
+
+- Salary rendering remains materially better from the earlier pass and is still using structured live pay data when it exists.
+- Filters now correctly live-map for grade, series, curated agency values, appointment type, and the shared free-text location field.
+- Remaining limits or deferrals:
+  - agency mapping is still intentionally bounded to the curated agencies surfaced in this screen
+  - telework and hybrid semantics are still more limited than remote-only filtering in the live backend contract
+  - sort remains a frontend ordering control rather than a backend sort contract
+- Job Search is now substantially more usable with live data because reset, location reading, and selected-job announcement fidelity are less misleading.
+
+## Commands run
+
+- `pnpm vitest run packages/ui/src/screens/JobSearchScreen.test.tsx lib/live-advisor/adapter.test.ts packages/ui/src/stores/jobSearchV1Store.test.ts`
+  - pass after one assertion update for the compacted multi-location detail rendering
+- `pnpm eslint packages/ui/src/screens/JobSearchScreen.tsx packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - pass
+- `pnpm typecheck`
+  - pass
+- `pnpm test`
+  - pass
+- `pnpm build`
+  - pass with existing `baseline-browser-mapping` staleness warnings
+- `pnpm ci:validate`
+  - failed exactly with: `ERROR: DAY environment variable is required`
+- `$env:DAY='10'; pnpm ci:validate`
+  - pass with existing historical day-label warnings
+- `git status --short`
+- `git branch --show-current`
+- `git diff --name-status develop...HEAD`
+  - produced no output
+- `git diff --stat develop...HEAD`
+  - produced no output
+- `git diff develop...HEAD > artifacts/job-search-contract-hardening-v1.patch`
+  - wrote an empty cumulative patch because the requested diff produced no output
+- `git diff > artifacts/job-search-contract-hardening-v1-this-run.patch`
+  - pass
+- `bash -lc "ls -lh artifacts/job-search-contract-hardening-v1.patch artifacts/job-search-contract-hardening-v1-this-run.patch"`
+  - pass
+
+## Results
+
+- Reset now clears filters and inputs, restores a broad live keyword, and re-runs live search instead of leaving the workspace empty.
+- Multi-location jobs now move matched searched locations to the front, highlight them, and collapse the remaining locations behind a compact count.
+- The selected-job location line and the USAJOBS action both now stay anchored to the current selected job contract instead of relying on a generic fallback.
+- The Grade & Promotion card still shows grade when available, only shows promotion potential when structured data exists, and no longer uses the previous filler sentence.
+
+## Known issues
+
+- The exact required command `pnpm ci:validate` still fails in this repo unless `DAY` is provided in the environment; the compatibility run with `DAY=10` passes.
+- `git diff develop...HEAD` and `git diff --stat develop...HEAD` both produced no output on this branch, so the cumulative named patch remains empty.
+- `pnpm build` still emits the existing `baseline-browser-mapping` age warnings, but the build completed successfully.
+
+## Git state
+
+- `git status --short`
+  - `A docs/change-briefs/day-10.md`
+  - `A docs/change-briefs/job-search-contract-hardening-v1.md`
+  - `M docs/merge-notes/current.md`
+  - `M lib/live-advisor/adapter.test.ts`
+  - `M lib/live-advisor/adapter.ts`
+  - `M packages/core/src/job-types.ts`
+  - `M packages/ui/src/screens/JobSearchScreen.test.tsx`
+  - `M packages/ui/src/screens/JobSearchScreen.tsx`
+  - `M packages/ui/src/stores/jobSearchV1Store.test.ts`
+- `git branch --show-current`
+  - `feature/job-search-contract-hardening-v1`
+- `git diff --name-status develop...HEAD`
+  - no output
+- `git diff --stat develop...HEAD`
+  - no output
+
+## Patch artifacts
+
+- Required custom artifacts:
+  - `artifacts/job-search-contract-hardening-v1.patch`
+  - `artifacts/job-search-contract-hardening-v1-this-run.patch`
+- `ls -lh` outputs:
+  - `-rwxrwxrwx 1 joriel joriel 57K Mar 26 18:06 artifacts/job-search-contract-hardening-v1-this-run.patch`
+  - `-rwxrwxrwx 1 joriel joriel 0 Mar 26 18:06 artifacts/job-search-contract-hardening-v1.patch`
