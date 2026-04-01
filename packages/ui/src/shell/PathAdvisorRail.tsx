@@ -18,6 +18,10 @@ import {
   PathAdvisorCard,
   type PathAdvisorMessage,
 } from './PathAdvisorCard';
+import type {
+  PathAdvisorGovernedDraft,
+  PathAdvisorGovernedResultState,
+} from './pathadvisor-governed-types';
 import { usePathAdvisorScreenOverridesStore } from '../stores/pathAdvisorScreenOverridesStore';
 
 /** Stub anchor context for PathAdvisor (e.g. selected application in Confidence Center). */
@@ -47,6 +51,16 @@ export interface PathAdvisorRailProps {
   messages?: PathAdvisorMessage[];
   /** When provided with messages, app handles send (e.g. append user + simulated reply). */
   onSend?: (text: string) => void;
+  /** Optional: app-level clear handler for shared chat history. */
+  onClearMessages?: () => void;
+  /** Optional governed request draft for the shared PathAdvisor rail. */
+  governedDraft?: PathAdvisorGovernedDraft;
+  /** Optional governed response state for the shared PathAdvisor rail. */
+  governedResult?: PathAdvisorGovernedResultState;
+  /** Optional callback when the governed request draft changes. */
+  onGovernedDraftChange?: (draft: PathAdvisorGovernedDraft) => void;
+  /** Optional callback when the governed request is submitted. */
+  onGovernedSubmit?: () => void;
 }
 
 /** Default suggested prompts when no screen overrides (dashboard context). */
@@ -148,6 +162,7 @@ export function PathAdvisorRail(props: PathAdvisorRailProps) {
         messages={messages}
         suggestedPrompts={suggestedPrompts}
         onSend={onSend}
+        onClearMessages={props.onClearMessages}
         viewingLabel={viewingLabel}
         currentScreen={currentScreen}
         briefingLabel={briefingLabel}
@@ -156,6 +171,10 @@ export function PathAdvisorRail(props: PathAdvisorRailProps) {
         onRailNextBestActionClick={onRailNextBestActionClick}
         onRailSkipClick={onRailSkipClick}
         composerPlaceholder={composerPlaceholder}
+        governedDraft={props.governedDraft}
+        governedResult={props.governedResult}
+        onGovernedDraftChange={props.onGovernedDraftChange}
+        onGovernedSubmit={props.onGovernedSubmit}
       />
     </div>
   );

@@ -957,7 +957,7 @@ artifacts/resume-builder-editor-integrity-pass-this-run.patch — 583.3 KB (incr
 
 ---
 
-## 2026-04-01 — Resume Builder Clean Print/Export Path
+## 2026-04-01 - Resume Builder Clean Print/Export Path
 
 ### Branch
 `feature/resumeBuilderv2`
@@ -1063,6 +1063,124 @@ New (this run):
 ### Patch Artifacts
 
 ```
-artifacts/resume-builder-clean-print-export.patch           — 1,826.9 KB (cumulative, develop to working tree)
-artifacts/resume-builder-clean-print-export-this-run.patch  — 93.1 KB (incremental, this run only)
+artifacts/resume-builder-clean-print-export.patch           - 1,826.9 KB (cumulative, develop to working tree)
+artifacts/resume-builder-clean-print-export-this-run.patch  - 93.1 KB (incremental, this run only)
+```
+
+---
+
+## Run: PathAdvisor Frontend Governed API Integration (2026-04-01)
+
+### Branch
+
+`feature/pathadvisor-frontend-governed-api-integration`
+
+### Summary
+
+Replaced the shared dashboard rail's local-only PathAdvisor simulation with the real governed PathAdvisor frontend integration path. The rail now:
+
+- sends bounded qualification, FEHB, and cross-domain requests through same-origin proxy routes
+- renders the shaped governed response contract structurally instead of as ad hoc text
+- shows grounded, partial, refused, loading, empty, and technical-error states distinctly
+- surfaces compact trust metadata without hiding backend truth boundaries
+
+### Why this change was made
+
+- The previous shared PathAdvisor rail still used a simulated frontend reply loop and did not reflect backend truth.
+- The new backend slices already expose governed qualification, FEHB, and cross-domain explain endpoints with a standardized shaped response.
+- The rail now follows the same frontend integration doctrine already used elsewhere in this repo: thin proxy routes, a typed browser client boundary, and presentational UI components that do not invent certainty.
+
+### Files changed
+
+- `app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx`
+- `app/api/pathadvisor/_shared.ts`
+- `app/api/pathadvisor/qualification/explain/route.ts`
+- `app/api/pathadvisor/fehb/explain/route.ts`
+- `app/api/pathadvisor/cross-domain/explain/route.ts`
+- `lib/pathadvisor-governed/client.ts`
+- `lib/pathadvisor-governed/client.test.ts`
+- `packages/ui/src/index.ts`
+- `packages/ui/src/shell/PathAdvisorCard.tsx`
+- `packages/ui/src/shell/PathAdvisorCard.test.tsx`
+- `packages/ui/src/shell/PathAdvisorRail.tsx`
+- `packages/ui/src/shell/PathAdvisorGovernedPanel.tsx`
+- `packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx`
+- `packages/ui/src/shell/pathadvisor-governed-types.ts`
+- `docs/change-briefs/pathadvisor-frontend-governed-api-integration.md`
+
+### Behavior changes
+
+- The right-rail PathAdvisor experience is no longer a canned local-only preview on shared dashboard routes.
+- Users can choose a bounded domain: qualification, FEHB, or cross-domain.
+- The rail captures the minimum bounded inputs needed for those endpoints.
+- Responses now render Summary, Explanation, Key factors, Missing inputs, Next steps, and a compact Grounding and status footer.
+- Refusal from the backend is shown as a governed trust boundary, not as a technical failure.
+- Technical API failure remains visible as a separate error state.
+
+### Validation performed
+
+- `pnpm test -- packages/ui/src/shell/PathAdvisorCard.test.tsx packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx lib/pathadvisor-governed/client.test.ts`
+  - 17 tests passed
+- `pnpm eslint 'app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx' 'packages/ui/src/shell/PathAdvisorCard.tsx' 'packages/ui/src/shell/PathAdvisorRail.tsx' 'packages/ui/src/shell/PathAdvisorGovernedPanel.tsx' 'packages/ui/src/shell/PathAdvisorCard.test.tsx' 'packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx' 'lib/pathadvisor-governed/client.ts' 'lib/pathadvisor-governed/client.test.ts' 'app/api/pathadvisor/_shared.ts' 'app/api/pathadvisor/qualification/explain/route.ts' 'app/api/pathadvisor/fehb/explain/route.ts' 'app/api/pathadvisor/cross-domain/explain/route.ts'`
+  - no errors, no warnings in touched files
+- `pnpm typecheck`
+  - failed because of pre-existing `packages/ui/src/resume-builder/__tests__/*` errors unrelated to this slice
+  - filtered output did not surface errors from the touched PathAdvisor files in this run
+- `pnpm lint`
+  - failed because of pre-existing repo-wide lint errors in unrelated resume-builder and legacy files
+
+### Known risks / follow-ups
+
+- The governed rail currently keeps history only in local component state; there is still no thread persistence.
+- The old `app/api/pathadvisor/insights/route.ts` mock path remains in the repo for legacy surfaces that still reference the older insights contract.
+- The bounded form seeds from the frontend profile's current in-memory defaults; deeper profile-to-backend PathAdvisor context synchronization remains future work.
+
+### git status
+
+```text
+On branch feature/pathadvisor-frontend-governed-api-integration
+Changes not staged for commit:
+  modified:   app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx
+  modified:   packages/ui/src/index.ts
+  modified:   packages/ui/src/shell/PathAdvisorCard.test.tsx
+  modified:   packages/ui/src/shell/PathAdvisorCard.tsx
+  modified:   packages/ui/src/shell/PathAdvisorRail.tsx
+
+Untracked files:
+  app/api/pathadvisor/_shared.ts
+  app/api/pathadvisor/cross-domain/
+  app/api/pathadvisor/fehb/
+  app/api/pathadvisor/qualification/
+  docs/change-briefs/pathadvisor-frontend-governed-api-integration.md
+  lib/pathadvisor-governed/
+  packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx
+  packages/ui/src/shell/PathAdvisorGovernedPanel.tsx
+  packages/ui/src/shell/pathadvisor-governed-types.ts
+```
+
+### git branch --show-current
+
+```text
+feature/pathadvisor-frontend-governed-api-integration
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+Note: the branch-level `develop...HEAD` diff is empty because this work remains uncommitted in the working tree. The generated patch artifacts capture the actual working-tree changes and exclude `artifacts/` from their contents.
+
+```text
+pathadvisor-frontend-governed-api-integration.patch                 22128 bytes   2026-04-01 4:59:53 PM
+pathadvisor-frontend-governed-api-integration-this-run.patch        22128 bytes   2026-04-01 4:59:53 PM
 ```

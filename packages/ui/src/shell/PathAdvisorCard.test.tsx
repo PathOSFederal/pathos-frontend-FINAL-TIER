@@ -21,7 +21,7 @@ import {
 import { PathAdvisorCard } from './PathAdvisorCard';
 import { usePathAdvisorContextLogStore } from '../stores/pathAdvisorContextLogStore';
 
-function noop(_text: string) {
+function noop() {
   /* mock */
 }
 
@@ -166,5 +166,101 @@ describe('PathAdvisorCard', function () {
     const clearChatMatches = output.match(/aria-label="Clear chat"/g);
     expect(clearChatMatches !== null ? clearChatMatches.length : 0).toBe(1);
     expect(output).not.toContain('aria-label="Clear context log for this screen"');
+  });
+
+  it('renders the governed PathAdvisor panel when the governed contract props are provided', function () {
+    const output = renderCard(
+      <PathAdvisorCard
+        messages={[]}
+        suggestedPrompts={['Why did my readiness score change?']}
+        onSend={noop}
+        governedDraft={{
+          domain: 'qualification',
+          qualification: {
+            yearsExperience: '5',
+            targetRoles: 'Program Analyst',
+            skills: 'analysis',
+            authorizedToWork: true,
+          },
+          fehb: {
+            enrollmentType: '',
+            coverageType: 'family',
+            expectedUtilization: 'high',
+            householdSize: '',
+            planPreferences: '',
+            comparisonTargets: '',
+          },
+        }}
+        governedResult={{
+          status: 'success',
+          errorMessage: null,
+          response: {
+            domain: 'qualification',
+            responseState: 'grounded',
+            grounded: true,
+            summary: 'Governed summary',
+            explanation: 'Governed explanation',
+            keyFactors: [],
+            missingInputs: [],
+            nextSteps: [],
+            refusalReason: null,
+            packVersionId: 'pack-version-1',
+            freshnessState: 'fresh',
+            grounding: {
+              domain: 'qualification',
+              responseState: 'grounded',
+              grounded: true,
+              partial: false,
+              refusalReason: null,
+              missingInputs: [],
+              packId: 'pack-1',
+              packKey: 'qualification.pack',
+              versionId: 'pack-version-1',
+              version: 1,
+              freshnessState: 'fresh',
+              freshnessReason: 'Fresh.',
+              effectiveAt: null,
+              reviewedAt: null,
+              reviewBy: null,
+              expiresAt: null,
+              servingEligible: true,
+              sourceSummary: null,
+              conversationProvider: 'fake-provider',
+              providerUsed: true,
+              refusalDomain: null,
+              domains: [
+                {
+                  domain: 'qualification',
+                  responseState: 'grounded',
+                  grounded: true,
+                  partial: false,
+                  refusalReason: null,
+                  missingInputs: [],
+                  packId: 'pack-1',
+                  packKey: 'qualification.pack',
+                  versionId: 'pack-version-1',
+                  version: 1,
+                  freshnessState: 'fresh',
+                  freshnessReason: 'Fresh.',
+                },
+              ],
+            },
+            servedAt: '2026-04-01T12:00:00Z',
+          },
+        }}
+        onGovernedDraftChange={function () {
+          /* noop */
+        }}
+        onGovernedSubmit={function () {
+          /* noop */
+        }}
+      />
+    );
+
+    expect(output).toContain('pathadvisor-governed-panel');
+    expect(output).toContain('Governed request');
+    expect(output).toContain('Governed summary');
+    expect(output).toContain('Grounding and status');
+    expect(output).not.toContain('Quick Prompts');
   });
 });
