@@ -670,6 +670,19 @@ function detectFederalDetailsIssues(
 /**
  * Detect issues for Certifications. Since certifications are not yet in
  * the core ResumeDraft model, uses optional external data.
+ *
+ * BLANK-RESUME SCORING FIX: When no certifications exist at all, this
+ * is classified as a missing_field (low severity) rather than an
+ * optional_enhancement. The distinction matters because
+ * computeFieldCompletionScore only counts missing_field and
+ * federal_requirement issues — optional_enhancement issues are invisible
+ * to it. Without this, an empty certifications section scores 100% on
+ * field completion (no field checks found = nothing to miss), which
+ * inflates blank-resume readiness from ~18% to ~32%.
+ *
+ * When certifications ARE present, quality improvements (e.g. adding
+ * expiry dates, matching to announcement keywords) would use
+ * optional_enhancement or weak_evidence categories.
  */
 function detectCertificationsIssues(certifications: string[]): SectionIssue[] {
   const issues: SectionIssue[] = [];
@@ -678,12 +691,12 @@ function detectCertificationsIssues(certifications: string[]): SectionIssue[] {
     issues.push({
       id: 'certs-none-listed',
       sectionId: 'certifications',
-      category: 'optional_enhancement',
+      category: 'missing_field',
       severity: 'low',
       label: 'No certifications listed',
       rationale: 'Relevant certifications strengthen many federal applications. Required for credentialed positions.',
       resolved: false,
-      scoringPenalty: getBasePenalty('optional_enhancement', 'low'),
+      scoringPenalty: getBasePenalty('missing_field', 'low'),
     });
   }
 
@@ -695,22 +708,33 @@ function detectCertificationsIssues(certifications: string[]): SectionIssue[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Detect issues for Supporting Evidence. Currently a minimal check
- * since the core model does not yet include structured evidence fields.
+ * Detect issues for Supporting Evidence. Accepts the evidence array
+ * to distinguish between empty and populated states.
+ *
+ * BLANK-RESUME SCORING FIX: Same rationale as detectCertificationsIssues.
+ * When no evidence items exist, classified as missing_field so the field
+ * completion dimension reflects the section's emptiness. When evidence IS
+ * present, quality improvements use optional_enhancement.
  */
-function detectSupportingEvidenceIssues(): SectionIssue[] {
+function detectSupportingEvidenceIssues(
+  supportingEvidence?: Array<{ id: string; text: string }>
+): SectionIssue[] {
   const issues: SectionIssue[] = [];
 
-  issues.push({
-    id: 'evidence-not-populated',
-    sectionId: 'supporting-evidence',
-    category: 'optional_enhancement',
-    severity: 'low',
-    label: 'Supporting evidence section not populated',
-    rationale: 'Awards, projects, and quantified outcomes strengthen qualification claims.',
-    resolved: false,
-    scoringPenalty: getBasePenalty('optional_enhancement', 'low'),
-  });
+  const hasEvidence = supportingEvidence && supportingEvidence.length > 0;
+
+  if (!hasEvidence) {
+    issues.push({
+      id: 'evidence-not-populated',
+      sectionId: 'supporting-evidence',
+      category: 'missing_field',
+      severity: 'low',
+      label: 'Supporting evidence section not populated',
+      rationale: 'Awards, projects, and quantified outcomes strengthen qualification claims.',
+      resolved: false,
+      scoringPenalty: getBasePenalty('missing_field', 'low'),
+    });
+  }
 
   return issues;
 }
@@ -856,14 +880,17 @@ function computeCompositeScore(
  * Returns a prioritized list of SectionIssue objects. This is the
  * primary entry point for issue detection per section.
  *
- * The optional federalDetails and certifications parameters are needed
- * because those sections are not yet in the core ResumeDraft model.
+ * The optional federalDetails, certifications, and supportingEvidence
+ * parameters are needed because those sections use external data not
+ * yet fully modeled in the core ResumeDraft type (certifications and
+ * supportingEvidence were added later as optional arrays on ResumeDraft).
  */
 export function detectSectionIssues(
   sectionId: string,
   draft: ResumeDraft,
   federalDetails?: { securityClearance: string; veteranPreference: string; federalEmployee: boolean; highestGrade: string } | null,
-  certifications?: string[]
+  certifications?: string[],
+  supportingEvidence?: Array<{ id: string; text: string }>
 ): SectionIssue[] {
   if (sectionId === 'contact') return detectContactIssues(draft);
   if (sectionId === 'summary') return detectSummaryIssues(draft);
@@ -872,7 +899,7 @@ export function detectSectionIssues(
   if (sectionId === 'skills') return detectSkillsIssues(draft);
   if (sectionId === 'federal-details') return detectFederalDetailsIssues(federalDetails !== undefined ? federalDetails : null);
   if (sectionId === 'certifications') return detectCertificationsIssues(certifications !== undefined ? certifications : []);
-  if (sectionId === 'supporting-evidence') return detectSupportingEvidenceIssues();
+  if (sectionId === 'supporting-evidence') return detectSupportingEvidenceIssues(supportingEvidence);
   return [];
 }
 
@@ -897,10 +924,11 @@ export function scoreSection(
   draft: ResumeDraft,
   scoringMode: ScoringMode,
   federalDetails?: { securityClearance: string; veteranPreference: string; federalEmployee: boolean; highestGrade: string } | null,
-  certifications?: string[]
+  certifications?: string[],
+  supportingEvidence?: Array<{ id: string; text: string }>
 ): SectionEvidenceScore {
   /* Step 1: Detect all issues for this section */
-  const issues = detectSectionIssues(sectionId, draft, federalDetails, certifications);
+  const issues = detectSectionIssues(sectionId, draft, federalDetails, certifications, supportingEvidence);
 
   /* Step 2: Compute dimension sub-scores */
   const dimensions: ScoringDimensions = {
@@ -957,7 +985,8 @@ export function scoreSection(
 export function scoreAllSections(
   draft: ResumeDraft,
   federalDetails?: { securityClearance: string; veteranPreference: string; federalEmployee: boolean; highestGrade: string } | null,
-  certifications?: string[]
+  certifications?: string[],
+  supportingEvidence?: Array<{ id: string; text: string }>
 ): SectionEvidenceScore[] {
   const registry = buildFederalSectionMeta();
   const canonicalOrder = getCanonicalUIOrder(registry);
@@ -972,7 +1001,8 @@ export function scoreAllSections(
         draft,
         meta.scoringMode,
         federalDetails,
-        certifications
+        certifications,
+        supportingEvidence
       )
     );
   }

@@ -95,10 +95,10 @@ export function TopFixBanner(props: TopFixBannerProps) {
         background: isHovered
           ? 'color-mix(in srgb, ' + accentColor + ' 8%, var(--p-surface))'
           : 'color-mix(in srgb, ' + accentColor + ' 4%, var(--p-surface))',
+        borderTop: '1px solid var(--p-border)',
+        borderRight: '1px solid var(--p-border)',
+        borderBottom: '1px solid var(--p-border)',
         borderLeft: '2px solid ' + accentColor,
-        border: '1px solid var(--p-border)',
-        borderLeftColor: accentColor,
-        borderLeftWidth: '2px',
         transition: 'background 0.15s ease',
       }}
       onMouseEnter={function () { setIsHovered(true); }}

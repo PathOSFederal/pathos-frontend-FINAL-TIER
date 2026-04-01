@@ -291,6 +291,78 @@ export {
 } from './utils/conversation-adapter';
 
 // ---------------------------------------------------------------------------
+// Document block model — pagination-first layout types
+// ---------------------------------------------------------------------------
+
+export type {
+  DocumentBlockType,
+  DocumentBlock,
+  DocumentPage,
+  PaginatedDocument,
+} from './types/document-block-types';
+export {
+  PAGE_HEIGHT_PX,
+  PAGE_CONTENT_PX,
+  PAGE_GAP_PX,
+  PAGE_PADDING_TOP_PX,
+  PAGE_PADDING_BOTTOM_PX,
+  PAGE_SAFETY_MARGIN_PX,
+} from './types/document-block-types';
+
+// ---------------------------------------------------------------------------
+// Pagination engine — deterministic block-to-page assignment
+// ---------------------------------------------------------------------------
+
+export type {
+  BlockGroup,
+} from './utils/pagination-engine';
+export {
+  buildDocumentBlocks,
+  paginateBlocks,
+  paginateResume,
+  groupBlocksBySectionId,
+  getExperienceIdsFromBlocks,
+  groupContainsFirstBlock,
+  countBulletLines,
+  estimateContactHeight,
+  estimateSummaryHeight,
+  estimateExperienceEntryHeight,
+  estimateEducationHeight,
+  estimateCertificationsHeight,
+  estimateSkillsHeight,
+  estimateFederalDetailsHeight,
+  estimateSupportingEvidenceHeight,
+} from './utils/pagination-engine';
+
+// ---------------------------------------------------------------------------
+// Deterministic PDF export — application-owned resume PDF generation
+// ---------------------------------------------------------------------------
+
+export type {
+  PdfFederalDetails,
+  PdfExportInput,
+  PdfExportResult,
+} from './utils/pdf-export';
+export {
+  exportResumePdf,
+  downloadResumePdf,
+  MARGIN_TOP_PT,
+  MARGIN_BOTTOM_PT,
+  SPACING_AFTER_NAME_PT,
+  SPACING_AFTER_CONTACT_LINE_PT,
+  SPACING_BEFORE_HEADER_RULE_PT,
+  SPACING_AFTER_HEADER_RULE_PT,
+  SECTION_GAP_PT,
+  SPACING_HEADING_TO_UNDERLINE_PT,
+  SPACING_AFTER_HEADING_UNDERLINE_PT,
+  SPACING_AFTER_JOB_TITLE_ROW_PT,
+  SPACING_AFTER_EMPLOYER_ROW_PT,
+  SPACING_BETWEEN_ENTRIES_PT,
+  SPACING_BETWEEN_BULLETS_PT,
+  PAGE_CONTINUATION_TOP_EXTRA_PT,
+} from './utils/pdf-export';
+
+// ---------------------------------------------------------------------------
 // Hooks
 // ---------------------------------------------------------------------------
 

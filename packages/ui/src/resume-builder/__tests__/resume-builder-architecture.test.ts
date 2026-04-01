@@ -4067,6 +4067,8 @@ describe('getMissingContactFields — field-level evaluation', function () {
       experience: [],
       education: [],
       skills: [],
+      certifications: [],
+      supportingEvidence: [],
     };
   }
 
@@ -4178,6 +4180,8 @@ describe('filterCanonicalTargetsForContent — contact section', function () {
       experience: [],
       education: [],
       skills: [],
+      certifications: [],
+      supportingEvidence: [],
     };
   }
 
@@ -4862,6 +4866,12 @@ function buildTestDraft(overrides?: Partial<ResumeDraft>): ResumeDraft {
       { id: 's2', name: 'Python' },
       { id: 's3', name: 'Kubernetes' },
     ],
+    certifications: [
+      { id: 'c1', name: 'CISSP' },
+    ],
+    supportingEvidence: [
+      { id: 'ev1', text: 'Led cross-agency migration delivering $3M in cost savings.' },
+    ],
   };
 
   if (overrides) {
@@ -4886,6 +4896,8 @@ function buildEmptyDraft(): ResumeDraft {
     experience: [],
     education: [],
     skills: [],
+    certifications: [],
+    supportingEvidence: [],
   };
 }
 
@@ -5102,6 +5114,152 @@ describe('Evidence-based readiness — overall readiness derivation', function (
     const readiness = deriveEvidenceBasedReadiness(scores);
     expect(readiness).toBeGreaterThanOrEqual(0);
     expect(readiness).toBeLessThanOrEqual(100);
+  });
+});
+
+// ============================================================================
+// BLANK RESUME READINESS — scoring credibility for empty/template resumes
+// ============================================================================
+//
+// These tests verify that blank or template-only resumes do not show
+// inflated readiness scores. The scoring engine must distinguish between
+// "section scaffold exists" and "meaningful content is present."
+
+describe('Blank resume readiness — scoring credibility', function () {
+  it('blank resume (createDefaultDraft shape) scores below 25%', function () {
+    /* A brand-new blank resume has only citizenship set to "United States"
+     * and veteranStatus set to "N/A". Every other field is empty. The
+     * readiness must reflect this emptiness credibly. */
+    const blankDraft: ResumeDraft = {
+      contact: {
+        fullName: '',
+        email: '',
+        phone: '',
+        city: '',
+        state: '',
+        citizenship: 'United States',
+        veteranStatus: 'N/A',
+      },
+      summary: '',
+      experience: [],
+      education: [],
+      skills: [],
+      certifications: [],
+      supportingEvidence: [],
+    };
+
+    const scores = scoreAllSections(blankDraft);
+    const readiness = deriveEvidenceBasedReadiness(scores);
+    expect(readiness).toBeLessThan(25);
+    expect(readiness).toBeGreaterThanOrEqual(0);
+  });
+
+  it('empty certifications section does not score 100%', function () {
+    /* Before the fix, empty certifications scored 100% because the
+     * only issue was optional_enhancement, which fieldCompletion
+     * does not count. After the fix, it uses missing_field (low). */
+    const blankDraft = buildEmptyDraft();
+    const certScore = scoreSection(
+      'certifications', 'Certifications', blankDraft, 'hybrid',
+      null, []
+    );
+    expect(certScore.compositeScore).toBeLessThan(50);
+  });
+
+  it('empty supporting evidence section does not score 100%', function () {
+    const blankDraft = buildEmptyDraft();
+    const evScore = scoreSection(
+      'supporting-evidence', 'Supporting Evidence', blankDraft, 'hybrid',
+      null, [], []
+    );
+    expect(evScore.compositeScore).toBeLessThan(50);
+  });
+
+  it('template-only resume (only defaults) scores lower than partially populated', function () {
+    const templateDraft: ResumeDraft = {
+      contact: {
+        fullName: '',
+        email: '',
+        phone: '',
+        city: '',
+        state: '',
+        citizenship: 'United States',
+        veteranStatus: 'N/A',
+      },
+      summary: '',
+      experience: [],
+      education: [],
+      skills: [],
+      certifications: [],
+      supportingEvidence: [],
+    };
+
+    const partialDraft = buildTestDraft({
+      summary: '',
+      education: [],
+      skills: [],
+    });
+
+    const templateScores = scoreAllSections(templateDraft);
+    const partialScores = scoreAllSections(partialDraft);
+
+    const templateReadiness = deriveEvidenceBasedReadiness(templateScores);
+    const partialReadiness = deriveEvidenceBasedReadiness(partialScores);
+
+    expect(partialReadiness).toBeGreaterThan(templateReadiness);
+  });
+
+  it('fully populated resume scores above 70%', function () {
+    const draft = buildTestDraft();
+    const scores = scoreAllSections(draft, {
+      securityClearance: 'Secret',
+      veteranPreference: 'None',
+      federalEmployee: true,
+      highestGrade: 'GS-12',
+    }, ['CISSP'], [{ id: 'ev-1', text: 'Led team of 20 to deliver $5M project on time' }]);
+    const readiness = deriveEvidenceBasedReadiness(scores);
+    expect(readiness).toBeGreaterThan(70);
+  });
+
+  it('readiness increases monotonically as content is added to blank resume', function () {
+    /* Start blank, add contact, add summary, add experience — each step
+     * should increase readiness. This tests the monotonic improvement
+     * principle: adding real content should always improve the score. */
+    const blank: ResumeDraft = {
+      contact: { fullName: '', email: '', phone: '', city: '', state: '', citizenship: '', veteranStatus: '' },
+      summary: '',
+      experience: [],
+      education: [],
+      skills: [],
+      certifications: [],
+      supportingEvidence: [],
+    };
+
+    const withContact: ResumeDraft = Object.assign({}, blank, {
+      contact: { fullName: 'Jane', email: 'jane@gov.gov', phone: '(555) 123-4567', city: 'DC', state: 'DC', citizenship: 'US Citizen', veteranStatus: 'None' },
+    });
+
+    const withSummary: ResumeDraft = Object.assign({}, withContact, {
+      summary: 'Experienced IT program manager with 12+ years leading federal technology modernization initiatives.',
+    });
+
+    const withExperience: ResumeDraft = Object.assign({}, withSummary, {
+      experience: [{
+        id: 'e1', jobTitle: 'Program Manager', employer: 'DHS',
+        location: 'DC', startDate: '2019-01', endDate: 'Present',
+        hoursPerWeek: '40', grade: 'GS-13',
+        duties: 'Led teams of 15+ engineers. Managed $2.5M budget. Reduced response time by 40%.',
+      }],
+    });
+
+    const blankReadiness = deriveEvidenceBasedReadiness(scoreAllSections(blank));
+    const contactReadiness = deriveEvidenceBasedReadiness(scoreAllSections(withContact));
+    const summaryReadiness = deriveEvidenceBasedReadiness(scoreAllSections(withSummary));
+    const expReadiness = deriveEvidenceBasedReadiness(scoreAllSections(withExperience));
+
+    expect(contactReadiness).toBeGreaterThan(blankReadiness);
+    expect(summaryReadiness).toBeGreaterThan(contactReadiness);
+    expect(expReadiness).toBeGreaterThan(summaryReadiness);
   });
 });
 
@@ -6438,5 +6596,455 @@ describe('Conversation modal — no regression in deterministic modal open behav
     expect(labels[0]).toBe('Resume Builder / Resume Overview');
     expect(labels[1]).toBe('Resume Builder / Work Experience');
     expect(labels[2]).toBe('Resume Builder / Professional Summary');
+  });
+});
+
+// ============================================================================
+// Test suite: Multi-page rendering parity hardening
+// ============================================================================
+//
+// Validates the page-first rendering contract across preview, print, and
+// overview callout surfaces. These tests ensure that the pagination engine
+// output is consumed consistently by all rendering paths, and that text
+// wrapping, page assignment, and callout coverage remain correct when
+// the document spans multiple pages.
+
+import {
+  paginateResume as paginateResumeForTests,
+  groupBlocksBySectionId as groupBlocksBySectionIdForTests,
+  groupContainsFirstBlock as groupContainsFirstBlockForTests,
+  getExperienceIdsFromBlocks as getExperienceIdsFromBlocksForTests,
+  buildDocumentBlocks as buildDocumentBlocksForTests,
+  paginateBlocks as paginateBlocksForTests,
+} from '../utils/pagination-engine';
+import type { DocumentPage as TestDocumentPage, DocumentBlock as TestDocumentBlock } from '../types/document-block-types';
+import {
+  PAGE_HEIGHT_PX as TEST_PAGE_HEIGHT_PX,
+  PAGE_CONTENT_PX as TEST_PAGE_CONTENT_PX,
+  PAGE_SAFETY_MARGIN_PX as TEST_PAGE_SAFETY_MARGIN_PX,
+} from '../types/document-block-types';
+
+/**
+ * Helper: builds a multi-page draft with enough experience entries to
+ * push content onto page 2. Uses long duties strings to inflate height.
+ */
+function buildMultiPageDraft(): ResumeDraft {
+  const longDuties = [
+    '• Led cross-functional cybersecurity initiative spanning 6 divisions with over 200 personnel',
+    '• Managed annual operating budget of $12.5M for network defense and incident response programs',
+    '• Designed and implemented zero-trust architecture reducing unauthorized access by 94%',
+    '• Coordinated with CISA on federal vulnerability disclosure program affecting 30+ agencies',
+    '• Supervised team of 18 cybersecurity analysts including mentoring 4 junior GS-9 staff',
+    '• Authored 15 SOPs for incident response procedures adopted agency-wide',
+    '• Reduced mean time to detect security incidents from 72 hours to under 4 hours',
+    '• Briefed senior leadership quarterly on cyber risk posture with data-driven dashboards',
+  ].join('\n');
+
+  return {
+    contact: {
+      fullName: 'Jane Doe',
+      email: 'jane@agency.gov',
+      phone: '(555) 555-1234',
+      city: 'Washington',
+      state: 'DC',
+      citizenship: 'U.S. Citizen',
+      veteranStatus: 'N/A',
+    },
+    summary: 'Highly experienced federal cybersecurity specialist with 15+ years of progressive leadership in enterprise network defense, zero-trust architecture, and incident response across Department of Defense and civilian agencies. Proven track record of managing multi-million dollar programs, mentoring junior analysts, and delivering measurable security improvements.',
+    experience: [
+      {
+        id: 'exp-1',
+        jobTitle: 'Senior IT Specialist (Cybersecurity)',
+        employer: 'Department of Defense',
+        location: 'Arlington, VA',
+        startDate: '2018-01',
+        endDate: 'Present',
+        hoursPerWeek: '40',
+        grade: 'GS-14',
+        duties: longDuties,
+      },
+      {
+        id: 'exp-2',
+        jobTitle: 'IT Specialist (Network Security)',
+        employer: 'Department of Homeland Security',
+        location: 'Washington, DC',
+        startDate: '2014-06',
+        endDate: '2017-12',
+        hoursPerWeek: '40',
+        grade: 'GS-13',
+        duties: longDuties,
+      },
+      {
+        id: 'exp-3',
+        jobTitle: 'Information Security Analyst',
+        employer: 'General Services Administration',
+        location: 'Washington, DC',
+        startDate: '2010-03',
+        endDate: '2014-05',
+        hoursPerWeek: '40',
+        grade: 'GS-12',
+        duties: longDuties,
+      },
+    ],
+    education: [
+      {
+        id: 'edu-1',
+        degree: 'Master of Science',
+        field: 'Cybersecurity',
+        institution: 'George Washington University',
+        graduationDate: '2010',
+        gpa: '3.9',
+      },
+      {
+        id: 'edu-2',
+        degree: 'Bachelor of Science',
+        field: 'Computer Science',
+        institution: 'University of Maryland',
+        graduationDate: '2008',
+        gpa: '3.7',
+      },
+    ],
+    skills: [
+      { name: 'Zero Trust Architecture', id: 'sk-1' },
+      { name: 'NIST Cybersecurity Framework', id: 'sk-2' },
+      { name: 'Incident Response', id: 'sk-3' },
+      { name: 'Security Operations Center Management', id: 'sk-4' },
+      { name: 'Vulnerability Assessment', id: 'sk-5' },
+    ],
+    certifications: [
+      { id: 'cert-1', name: 'CISSP' },
+      { id: 'cert-2', name: 'CISM' },
+      { id: 'cert-3', name: 'CompTIA Security+' },
+    ],
+    supportingEvidence: [
+      { id: 'ev-1', text: 'Received Director Award for Excellence in Cybersecurity, 2021' },
+      { id: 'ev-2', text: 'Published peer-reviewed paper on zero-trust in Federal Computing Week, 2020' },
+      { id: 'ev-3', text: 'Led agency-wide migration to MFA reducing phishing success rate by 97%' },
+    ],
+  } as ResumeDraft;
+}
+
+const MULTI_PAGE_FED_DETAILS = {
+  securityClearance: 'TS/SCI',
+  veteranPreference: 'N/A',
+  federalEmployee: true,
+  highestGrade: 'GS-14',
+};
+
+// ---------------------------------------------------------------------------
+// Multi-page preview rendering contract
+// ---------------------------------------------------------------------------
+
+describe('Multi-page preview rendering — pagination engine contract', function () {
+
+  it('multi-page draft produces more than one page', function () {
+    /* The multi-page draft has enough content to span two pages. This
+     * confirms the test fixture is valid for multi-page testing. */
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+    expect(doc.totalPages).toBeGreaterThan(1);
+  });
+
+  it('each page in a multi-page document has at least one block', function () {
+    /* Every page must have content — no empty pages should be created
+     * by the pagination engine. */
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+    for (let i = 0; i < doc.pages.length; i++) {
+      expect(doc.pages[i].blocks.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('all sections are represented across pages — no section is dropped', function () {
+    /* Every section that exists in the draft must appear in at least
+     * one page's block list. This ensures the preview doesn't silently
+     * drop sections during pagination. */
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+
+    const allSectionIds: Record<string, boolean> = {};
+    for (let pi = 0; pi < doc.pages.length; pi++) {
+      for (let bi = 0; bi < doc.pages[pi].blocks.length; bi++) {
+        allSectionIds[doc.pages[pi].blocks[bi].sectionId] = true;
+      }
+    }
+
+    /* Expected sections for the multi-page draft */
+    expect(allSectionIds['contact']).toBe(true);
+    expect(allSectionIds['summary']).toBe(true);
+    expect(allSectionIds['experience']).toBe(true);
+    expect(allSectionIds['education']).toBe(true);
+    expect(allSectionIds['skills']).toBe(true);
+    expect(allSectionIds['certifications']).toBe(true);
+    expect(allSectionIds['federal-details']).toBe(true);
+    expect(allSectionIds['supporting-evidence']).toBe(true);
+  });
+
+  it('experience entries are correctly distributed across pages', function () {
+    /* Experience entries assigned to page 1 should not also appear on
+     * page 2. Each entry belongs to exactly one page. */
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+
+    const expIdsByPage: Record<number, string[]> = {};
+    for (let pi = 0; pi < doc.pages.length; pi++) {
+      const ids = getExperienceIdsFromBlocksForTests(doc.pages[pi].blocks);
+      expIdsByPage[doc.pages[pi].pageNumber] = ids;
+    }
+
+    /* Verify no overlap: each exp ID appears on exactly one page */
+    const seen: Record<string, number> = {};
+    const pageNumbers = Object.keys(expIdsByPage);
+    for (let i = 0; i < pageNumbers.length; i++) {
+      const pn = parseInt(pageNumbers[i], 10);
+      const ids = expIdsByPage[pn];
+      for (let j = 0; j < ids.length; j++) {
+        expect(seen[ids[j]]).toBeUndefined();
+        seen[ids[j]] = pn;
+      }
+    }
+  });
+
+  it('groupBlocksBySectionId produces correct groups for a page with mixed sections', function () {
+    /* When a page has both experience and education blocks, grouping
+     * should produce separate groups, not merge them. */
+    const blocks: TestDocumentBlock[] = [
+      { id: 'exp-a', sectionId: 'experience', blockType: 'experience-entry', keepTogether: true, estimatedHeight: 100, order: 0, isFirstInSection: true, experienceId: 'exp-a' },
+      { id: 'exp-b', sectionId: 'experience', blockType: 'experience-entry', keepTogether: true, estimatedHeight: 100, order: 1, isFirstInSection: false, experienceId: 'exp-b' },
+      { id: 'edu', sectionId: 'education', blockType: 'education', keepTogether: true, estimatedHeight: 80, order: 2, isFirstInSection: true },
+    ];
+
+    const groups = groupBlocksBySectionIdForTests(blocks);
+    expect(groups.length).toBe(2);
+    expect(groups[0].sectionId).toBe('experience');
+    expect(groups[0].blocks.length).toBe(2);
+    expect(groups[1].sectionId).toBe('education');
+    expect(groups[1].blocks.length).toBe(1);
+  });
+
+  it('groupContainsFirstBlock correctly identifies section heading pages', function () {
+    /* Preview renderer uses this to decide whether to show the section
+     * heading. Only the first block in a section carries isFirstInSection. */
+    const firstBlocks: TestDocumentBlock[] = [
+      { id: 'exp-a', sectionId: 'experience', blockType: 'experience-entry', keepTogether: true, estimatedHeight: 100, order: 0, isFirstInSection: true, experienceId: 'exp-a' },
+    ];
+    const continuationBlocks: TestDocumentBlock[] = [
+      { id: 'exp-c', sectionId: 'experience', blockType: 'experience-entry', keepTogether: true, estimatedHeight: 100, order: 2, isFirstInSection: false, experienceId: 'exp-c' },
+    ];
+
+    expect(groupContainsFirstBlockForTests(firstBlocks)).toBe(true);
+    expect(groupContainsFirstBlockForTests(continuationBlocks)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Print/export parity — all pages included
+// ---------------------------------------------------------------------------
+
+describe('Print/export parity — all pages represented in paginated output', function () {
+
+  it('single-page draft produces exactly one page', function () {
+    const draft: ResumeDraft = {
+      contact: { fullName: 'Test', email: '', phone: '', city: '', state: '', citizenship: '', veteranStatus: '' },
+      summary: 'Short summary.',
+      experience: [],
+      education: [],
+      skills: [],
+      certifications: [],
+      supportingEvidence: [],
+    } as ResumeDraft;
+    const doc = paginateResumeForTests(draft, null, [], []);
+    expect(doc.totalPages).toBe(1);
+    expect(doc.pages.length).toBe(1);
+  });
+
+  it('multi-page document page numbers are sequential starting at 1', function () {
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+
+    for (let i = 0; i < doc.pages.length; i++) {
+      expect(doc.pages[i].pageNumber).toBe(i + 1);
+    }
+  });
+
+  it('total block count matches sum of blocks across all pages', function () {
+    /* Print surface must render ALL blocks. Verify the pagination engine
+     * accounts for every block across every page. */
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+
+    let totalBlocks = 0;
+    for (let i = 0; i < doc.pages.length; i++) {
+      totalBlocks = totalBlocks + doc.pages[i].blocks.length;
+    }
+    expect(doc.blockCount).toBe(totalBlocks);
+  });
+
+  it('no page usedHeight exceeds the effective page content area', function () {
+    /* Content must not overflow a page surface. The safety margin
+     * should prevent height estimation errors from causing overflow. */
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+    const effectiveHeight = TEST_PAGE_CONTENT_PX - TEST_PAGE_SAFETY_MARGIN_PX;
+
+    for (let i = 0; i < doc.pages.length; i++) {
+      /* Allow the first block on a page to exceed (oversized single block) */
+      if (doc.pages[i].blocks.length > 1) {
+        expect(doc.pages[i].usedHeight).toBeLessThanOrEqual(effectiveHeight + TEST_PAGE_SAFETY_MARGIN_PX);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-page callout coverage — anchor resolution across pages
+// ---------------------------------------------------------------------------
+
+describe('Multi-page callout coverage — anchor target discoverability', function () {
+
+  it('canonical overview targets reference anchor IDs that exist in block sectionIds', function () {
+    /* Overview callout targets use anchorId values like "summary-text"
+     * and "experience-section-anchor". These must correspond to sections
+     * that appear in the paginated document. This test verifies that
+     * every overview target's sectionId is represented in the blocks. */
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+
+    /* Collect all section IDs from the paginated document */
+    const sectionIdsInDoc: Record<string, boolean> = {};
+    for (let pi = 0; pi < doc.pages.length; pi++) {
+      for (let bi = 0; bi < doc.pages[pi].blocks.length; bi++) {
+        sectionIdsInDoc[doc.pages[pi].blocks[bi].sectionId] = true;
+      }
+    }
+
+    /* The registry's overview targets should reference sections that
+     * exist in the document. Build the registry and check. */
+    const registry = buildCanonicalCalloutRegistry();
+    const overviewTargets = getOverviewCalloutTargets(registry);
+
+    for (let i = 0; i < overviewTargets.length; i++) {
+      const target = overviewTargets[i];
+      /* Only check sections that are actually rendered in the canvas.
+       * Training, language-skills, and publications are not rendered. */
+      const renderedSections: Record<string, boolean> = {
+        'contact': true,
+        'summary': true,
+        'experience': true,
+        'education': true,
+        'skills': true,
+        'certifications': true,
+        'federal-details': true,
+        'supporting-evidence': true,
+      };
+      if (renderedSections[target.sectionId]) {
+        expect(sectionIdsInDoc[target.sectionId]).toBe(true);
+      }
+    }
+  });
+
+  it('sections on page 2 are still findable via sectionId in the paginated document', function () {
+    /* When the document spans two pages, sections pushed to page 2
+     * must still be discoverable by iterating all pages. This mirrors
+     * how querySelector on the document panel finds page-2 anchors. */
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+
+    if (doc.totalPages < 2) {
+      /* Skip if fixture doesn't produce 2 pages */
+      return;
+    }
+
+    /* Verify page 2 has blocks with sectionIds */
+    const page2 = doc.pages[1];
+    expect(page2.blocks.length).toBeGreaterThan(0);
+
+    /* Verify at least one section on page 2 is different from page 1 */
+    const page1Sections: Record<string, boolean> = {};
+    for (let i = 0; i < doc.pages[0].blocks.length; i++) {
+      page1Sections[doc.pages[0].blocks[i].sectionId] = true;
+    }
+
+    let hasUniqueSection = false;
+    for (let i = 0; i < page2.blocks.length; i++) {
+      /* Some sections may span both pages (experience), but others
+       * like education or skills may only appear on page 2. */
+      if (!page1Sections[page2.blocks[i].sectionId]) {
+        hasUniqueSection = true;
+        break;
+      }
+    }
+
+    /* At minimum, page 2 should have content — whether unique or continuation */
+    expect(page2.blocks.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Text wrapping — content does not silently overflow page surfaces
+// ---------------------------------------------------------------------------
+
+describe('Text wrapping parity — long content handled by pagination engine', function () {
+
+  it('very long summary text produces a valid block height estimate', function () {
+    /* A very long summary should produce a proportionally larger height
+     * estimate. The pagination engine must not underestimate severely,
+     * which would cause text to overflow the page surface. */
+    const longSummary = 'A'.repeat(2000);
+    const draft: ResumeDraft = {
+      contact: { fullName: 'Test', email: '', phone: '', city: '', state: '', citizenship: '', veteranStatus: '' },
+      summary: longSummary,
+      experience: [],
+      education: [],
+      skills: [],
+      certifications: [],
+      supportingEvidence: [],
+    } as ResumeDraft;
+
+    const blocks = buildDocumentBlocksForTests(draft, null, [], []);
+    const summaryBlock = blocks.find(function (b) { return b.sectionId === 'summary'; });
+    expect(summaryBlock).toBeDefined();
+    if (summaryBlock) {
+      /* 2000 chars at ~85 chars/line = ~24 lines at 18px = ~432px.
+       * Plus heading + margins should be well over 400px. */
+      expect(summaryBlock.estimatedHeight).toBeGreaterThan(300);
+    }
+  });
+
+  it('long unbroken word in summary does not crash pagination', function () {
+    /* Regression test: a single very long word should not cause the
+     * pagination engine to produce invalid output. The text wrapping
+     * CSS handles visual wrapping, but the height estimate must still
+     * be reasonable. */
+    const longWord = 'Supercalifragilisticexpialidocious'.repeat(50);
+    const draft: ResumeDraft = {
+      contact: { fullName: 'Test', email: '', phone: '', city: '', state: '', citizenship: '', veteranStatus: '' },
+      summary: longWord,
+      experience: [],
+      education: [],
+      skills: [],
+      certifications: [],
+      supportingEvidence: [],
+    } as ResumeDraft;
+
+    const doc = paginateResumeForTests(draft, null, [], []);
+    expect(doc.totalPages).toBeGreaterThanOrEqual(1);
+    expect(doc.blockCount).toBeGreaterThan(0);
+  });
+
+  it('preview page-first rendering contract: each page gets only its assigned blocks', function () {
+    /* The preview renderer should NOT duplicate content across pages.
+     * Each block ID appears on exactly one page. */
+    const draft = buildMultiPageDraft();
+    const doc = paginateResumeForTests(draft, MULTI_PAGE_FED_DETAILS, draft.certifications || [], draft.supportingEvidence || []);
+
+    const blockPageMap: Record<string, number> = {};
+    for (let pi = 0; pi < doc.pages.length; pi++) {
+      for (let bi = 0; bi < doc.pages[pi].blocks.length; bi++) {
+        const blockId = doc.pages[pi].blocks[bi].id;
+        expect(blockPageMap[blockId]).toBeUndefined();
+        blockPageMap[blockId] = doc.pages[pi].pageNumber;
+      }
+    }
   });
 });

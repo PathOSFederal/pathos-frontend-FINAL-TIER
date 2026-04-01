@@ -40,6 +40,7 @@
 
 import type React from 'react';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   FileText,
   ShieldCheck,
@@ -77,6 +78,7 @@ import {
   listVersions,
   createVersion,
   restoreVersion,
+  deleteVersion,
   exportResumeJSON,
   loadSavedJobsStore,
   seedSavedJobsIfEmpty,
@@ -140,6 +142,16 @@ import type { PathAdvisorResumeContext, PathAdvisorTriggerIntent } from '../resu
 import { buildPathAdvisorPrompt } from '../resume-builder/types/pathadvisor-context';
 import { ResumeBuilderPathAdvisorModal } from '../resume-builder/components/ResumeBuilderPathAdvisorModal';
 import type { ConversationAction } from '../resume-builder/types/conversation-types';
+import {
+  paginateResume,
+  groupBlocksBySectionId,
+  groupContainsFirstBlock,
+  getExperienceIdsFromBlocks,
+} from '../resume-builder/utils/pagination-engine';
+import type { BlockGroup } from '../resume-builder/utils/pagination-engine';
+import type { DocumentPage } from '../resume-builder/types/document-block-types';
+import { downloadResumePdf } from '../resume-builder/utils/pdf-export';
+import type { PdfFederalDetails } from '../resume-builder/utils/pdf-export';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -588,6 +600,37 @@ export function deriveSectionMetric(meta: SectionMeta): string {
   }
   if (meta.completionPct >= 100) return '';
   return meta.completionPct + '% complete';
+}
+
+/**
+ * Format a phone number string into (xxx) xxx-xxxx display format.
+ * Extracts digits from the input, and if 10 or 11 digits are present,
+ * produces the formatted version. For 11-digit inputs, the leading 1
+ * (US country code) is stripped. If the input doesn't contain 10-11
+ * digits, returns the trimmed original so the user's input is preserved.
+ *
+ * This runs on every phone save, giving the resume a consistent
+ * professional appearance regardless of how the user typed the number.
+ */
+function formatPhoneForDisplay(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  const digits = trimmed.replace(/[^0-9]/g, '');
+
+  /* 11 digits starting with 1 → strip country code, format as 10-digit */
+  if (digits.length === 11 && digits.charAt(0) === '1') {
+    const local = digits.substring(1);
+    return '(' + local.substring(0, 3) + ') ' + local.substring(3, 6) + '-' + local.substring(6);
+  }
+
+  /* 10 digits → standard US format */
+  if (digits.length === 10) {
+    return '(' + digits.substring(0, 3) + ') ' + digits.substring(3, 6) + '-' + digits.substring(6);
+  }
+
+  /* Non-standard digit count → preserve user input as-is (trimmed) */
+  return trimmed;
 }
 
 /** Mock federal details for the canvas (not yet in core model). */
@@ -4769,7 +4812,14 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
    *     The user understands that editing happens directly on the
    *     document. The layout does NOT change — only affordances appear.
    */
-  const [isEditReady, setIsEditReady] = useState(false);
+  /* DOCUMENT-FIRST EDITING: Default to edit-ready so clicking any
+   * section in the document immediately shows the action bar and
+   * enables inline editing. This eliminates the need to toggle
+   * edit mode before interacting with the document. The user clicks
+   * a section → it activates → they can edit. The toggle in the top
+   * bar remains available for users who want to lock the document
+   * into a read-only "review" mode. */
+  const [isEditReady, setIsEditReady] = useState(true);
 
   /**
    * Preview overlay visibility. When true, a read-only clean presentation
@@ -4810,6 +4860,14 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
    * to reflect which version's data is currently loaded.
    */
   const [selectedResumeId, setSelectedResumeId] = useState<string>('master');
+
+  /**
+   * CANVAS-MEASURED PAGE COUNT: Receives the real page count from the
+   * LiveResumeCanvas measurement effect. When available, this replaces
+   * the heuristic-based computedPageCount for the top bar and preflight.
+   * Falls back to null when the canvas hasn't reported yet.
+   */
+  const [canvasMeasuredPageCount, setCanvasMeasuredPageCount] = useState<number | null>(null);
 
   /**
    * MASTER DRAFT BACKUP — stores a snapshot of the default resume draft
@@ -5074,7 +5132,8 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     return scoreAllSections(
       store.draft,
       MOCK_FEDERAL_DETAILS,
-      MOCK_CERTIFICATIONS
+      MOCK_CERTIFICATIONS,
+      store.draft.supportingEvidence
     );
   }, [store]);
 
@@ -5310,6 +5369,20 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     canvasScrollContainerRef
   );
 
+  /* MULTI-PAGE CALLOUT COVERAGE: When the canvas page count changes
+   * (e.g. content grows from 1 page to 2), new page surfaces mount
+   * with new anchor elements. Trigger a delayed remeasure so the
+   * callout hook discovers anchors on newly-rendered pages. Without
+   * this, overview callout lines for sections pushed to page 2+ may
+   * not resolve until the user scrolls or resizes. */
+  useEffect(function () {
+    if (canvasMeasuredPageCount === null) return;
+    const timer = setTimeout(function () {
+      calloutLinesHook.remeasure();
+    }, 150);
+    return function () { clearTimeout(timer); };
+  }, [canvasMeasuredPageCount]); /* eslint-disable-line react-hooks/exhaustive-deps -- intentional: remeasure only when page count changes */
+
   /**
    * Scroll-to-section effect. When the selected section changes (from
    * the rail or from clicking in the canvas), the document scrolls the
@@ -5399,6 +5472,17 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
    * 0.5 and 5.0 for display sanity.
    */
   const computedPageCount = useMemo(function () {
+    /* CANVAS-MEASURED FIRST: When the LiveResumeCanvas has reported its
+     * real measurement-based page count, use it directly. This is far
+     * more accurate than the heuristic below because it's derived from
+     * actual rendered DOM height. */
+    if (canvasMeasuredPageCount !== null) {
+      return canvasMeasuredPageCount;
+    }
+
+    /* HEURISTIC FALLBACK: Estimate page count from content volume using
+     * federal resume conventions (~45 lines/page for 11pt body text).
+     * Only used before the canvas mounts and reports its measurement. */
     if (!store) return 1.0;
     const draft = store.draft;
     const LINES_PER_PAGE = 45;
@@ -5448,7 +5532,7 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     /* Clamp between 0.5 and 5.0, round to 1 decimal */
     const clamped = Math.max(0.5, Math.min(5.0, rawPages));
     return Math.round(clamped * 10) / 10;
-  }, [store]);
+  }, [store, canvasMeasuredPageCount]);
 
   /**
    * Preflight state — computed from resume state for validation stage.
@@ -5910,6 +5994,8 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
       experience: newExperience,
       education: store.draft.education,
       skills: store.draft.skills,
+      certifications: store.draft.certifications || [],
+      supportingEvidence: store.draft.supportingEvidence || [],
     };
     persist(updateDraft(store, newDraft));
 
@@ -6011,6 +6097,8 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
       experience: newExperience,
       education: store.draft.education,
       skills: store.draft.skills,
+      certifications: store.draft.certifications || [],
+      supportingEvidence: store.draft.supportingEvidence || [],
     };
     persist(updateDraft(store, newDraft));
 
@@ -6081,6 +6169,8 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
         experience: store.draft.experience,
         education: store.draft.education,
         skills: store.draft.skills,
+        certifications: store.draft.certifications || [],
+        supportingEvidence: store.draft.supportingEvidence || [],
       };
       persist(updateDraft(store, newDraft));
     } else if (
@@ -6125,6 +6215,8 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
           experience: newExperience,
           education: store.draft.education,
           skills: store.draft.skills,
+          certifications: store.draft.certifications || [],
+          supportingEvidence: store.draft.supportingEvidence || [],
         };
         const newStore = updateDraft(store, newDraft);
         persist(newStore);
@@ -6307,6 +6399,8 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
       experience: store.draft.experience,
       education: store.draft.education,
       skills: store.draft.skills,
+      certifications: store.draft.certifications || [],
+      supportingEvidence: store.draft.supportingEvidence || [],
     };
     persist(updateDraft(store, newDraft));
     setEditingSummary(false);
@@ -6432,6 +6526,9 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
           } else if (field.fieldName === 'employer') {
             updated.employer = newValue;
           } else if (field.fieldName === 'dateRange') {
+            /* Legacy combined date range handler — kept for backward
+             * compatibility. New split-field UI sends 'startDate' and
+             * 'endDate' separately. */
             const dashIdx = newValue.indexOf('\u2013');
             const hyphenIdx = dashIdx >= 0 ? dashIdx : newValue.indexOf('-');
             if (hyphenIdx >= 0) {
@@ -6441,6 +6538,10 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
               updated.startDate = newValue.trim();
               updated.endDate = '';
             }
+          } else if (field.fieldName === 'startDate') {
+            updated.startDate = newValue.trim();
+          } else if (field.fieldName === 'endDate') {
+            updated.endDate = newValue.trim();
           } else if (field.fieldName === 'hoursPerWeek') {
             updated.hoursPerWeek = newValue.trim();
           }
@@ -6453,14 +6554,22 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     }
     else if (field.type === 'contact-field' && field.fieldName) {
       /* Update a specific contact field. Handles location as a special
-       * case (parses "City, State" into separate city/state fields). */
+       * case (parses "City, State" into separate city/state fields).
+       *
+       * EMAIL CLEANUP: Trims leading/trailing whitespace so pasted emails
+       * with accidental spaces don't silently produce invalid addresses.
+       *
+       * PHONE FORMATTING: Normalizes US phone numbers to (xxx) xxx-xxxx
+       * format when the input contains 10 or 11 digits. This gives the
+       * resume a consistent, professional appearance without requiring
+       * the user to type the parentheses and dashes themselves. */
       const contactCopy = Object.assign({}, store.draft.contact);
       if (field.fieldName === 'fullName') {
         contactCopy.fullName = newValue;
       } else if (field.fieldName === 'email') {
-        contactCopy.email = newValue;
+        contactCopy.email = newValue.trim();
       } else if (field.fieldName === 'phone') {
-        contactCopy.phone = newValue;
+        contactCopy.phone = formatPhoneForDisplay(newValue);
       } else if (field.fieldName === 'location') {
         const commaIdx = newValue.indexOf(',');
         if (commaIdx >= 0) {
@@ -6470,6 +6579,15 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
           contactCopy.city = newValue.trim();
           contactCopy.state = '';
         }
+      } else if (field.fieldName === 'citizenship') {
+        /* Citizenship is a string on the contact model (e.g.
+         * "United States"). The UI displays it as "U.S. Citizen"
+         * but stores the raw text the user enters. */
+        contactCopy.citizenship = newValue.trim();
+      } else if (field.fieldName === 'veteranStatus') {
+        /* Veteran status is a free-text string on the contact model.
+         * Common values: "5-Point", "10-Point", "N/A", or empty. */
+        contactCopy.veteranStatus = newValue.trim() || '';
       }
       persist(updateDraft(store, makeDraft({ contact: contactCopy })));
     }
@@ -7418,6 +7536,7 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
           highlightedAnchors={highlightedAnchors}
           onAnchorHover={handleAnchorHover}
           scrollContainerRef={canvasScrollContainerRef}
+          onPageCountChange={function (count) { setCanvasMeasuredPageCount(count); }}
         />
 
         {/* Legacy tab-based center panel has been removed. The document-
@@ -7676,9 +7795,11 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
       {showPreview && store && (
         <ResumePreviewOverlay
           draft={store.draft}
+          federalDetails={MOCK_FEDERAL_DETAILS}
           onClose={function () { setShowPreview(false); }}
-          onPrint={function () { window.print(); }}
-          onExportJSON={handleExportJSON}
+          onPrint={function () { assertSinglePrintableRoot(); window.print(); }}
+          /* JSON export handler kept internally for dev/debug use but not
+           * exposed in the user-facing preview overlay action bar. */
         />
       )}
 
@@ -7697,6 +7818,17 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
           onRestoreVersion={function (versionId: string) {
             const restored = restoreVersion(store, versionId);
             persist(restored);
+          }}
+          onDeleteVersion={function (versionId: string) {
+            /* Delete a saved version. If the deleted version was the
+             * actively selected resume, fall back to 'master'. The
+             * default/master resume is never in the versions array
+             * so it cannot be deleted through this path. */
+            const updated = deleteVersion(store, versionId);
+            persist(updated);
+            if (selectedResumeId === versionId) {
+              setSelectedResumeId('master');
+            }
           }}
         />
       )}
@@ -7824,6 +7956,37 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
 
 /**
  * ============================================================================
+ * DEV-MODE PRINT INVARIANT — single printable resume root assertion
+ * ============================================================================
+ *
+ * INVARIANT: At print time, exactly one printable resume root may exist.
+ *
+ * The printable root is identified by the [data-resume-print-source]
+ * attribute. Only the #resume-print-root portal content should carry
+ * this attribute. The preview overlay renders resume content for
+ * on-screen review but must NOT be a print source.
+ *
+ * Multiple printable roots cause duplicate/fragmented pages in the
+ * exported PDF. This function checks the invariant and logs a console
+ * warning if violated. It runs only in development mode (tree-shaken
+ * out of production builds by the NODE_ENV check).
+ */
+function assertSinglePrintableRoot(): void {
+  if (process.env.NODE_ENV !== 'development') return;
+  const printSources = document.querySelectorAll('[data-resume-print-source]');
+  if (printSources.length !== 1) {
+    console.warn(
+      '[Resume Export] INVARIANT VIOLATION: Expected exactly 1 printable ' +
+      'resume root ([data-resume-print-source]), found ' +
+      printSources.length + '. Multiple printable roots cause duplicate ' +
+      'pages in PDF export. Check that the preview overlay does not carry ' +
+      'data-resume-print-source.'
+    );
+  }
+}
+
+/**
+ * ============================================================================
  * RESUME PREVIEW OVERLAY — Print-ready final review surface
  * ============================================================================
  *
@@ -7833,11 +7996,13 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
  * using the browser's native print dialog.
  *
  * EXPORT STRATEGY:
- *   Primary: "Print / Save as PDF" — uses window.print() which opens
- *            the browser's native print dialog. Users can select "Save
- *            as PDF" as their printer for a clean PDF output.
- *   Secondary: "Export JSON" — data backup format for developers or
- *              cross-device transfer. Not the main user-facing format.
+ *   Primary: "Export Resume PDF" — deterministic PDF generation using
+ *            jsPDF. Produces a clean, ATS-safe PDF directly from the
+ *            paginated resume model with no browser dialog.
+ *   Fallback: "Print" — uses window.print() for users who prefer the
+ *             browser print dialog or need to print on paper.
+ *   Internal: JSON export handler is retained for dev/debug use but
+ *             is not exposed in the user-facing action bar.
  *
  * READABILITY: The preview uses a white background with high-contrast
  * dark text (#111) at comfortable reading sizes. Section headings are
@@ -7854,15 +8019,32 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
  */
 function ResumePreviewOverlay(props: {
   draft: ResumeDraft;
+  federalDetails: {
+    securityClearance: string;
+    veteranPreference: string;
+    federalEmployee: boolean;
+    highestGrade: string;
+  } | null;
   onClose: () => void;
   onPrint: () => void;
-  onExportJSON: () => void;
 }) {
   const draft = props.draft;
   const contact = draft.contact;
 
-  /* Escape key handler — close the preview when Escape is pressed.
-   * This satisfies the modal-semantics dismiss requirement. */
+  /* PAGE-FIRST PREVIEW: Use the same pagination engine as the workspace
+   * canvas to get a PaginatedDocument. Each page's blocks determine which
+   * sections render on that page surface — no clipping, no transform
+   * offsets, no duplicate content. This replaces the old clip+translateY
+   * approach which split words at page boundaries and duplicated DOM. */
+  const previewPaginatedDoc = paginateResume(
+    draft,
+    props.federalDetails,
+    draft.certifications || [],
+    draft.supportingEvidence || []
+  );
+  const previewPageCount = previewPaginatedDoc.totalPages;
+
+  /* Escape key handler */
   useEffect(function () {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -7875,8 +8057,70 @@ function ResumePreviewOverlay(props: {
     };
   }, [props.onClose]);
 
-  /* Build experience bullets from duties strings. Parses the duties
-   * text (which may contain bullet markers) into clean list items. */
+  /* ===========================================================================
+   * DEDICATED PRINT ROOT — React portal rendered directly into document.body
+   * ===========================================================================
+   *
+   * WHY A PORTAL:
+   * The preview overlay sits deep in the app React tree, inside
+   * SharedAppShell > ResumeBuilderScreen > ResumePreviewOverlay. All ancestor
+   * containers have layout constraints (overflow:hidden, flex, fixed
+   * positioning, scroll containers) that prevent normal multi-page print
+   * flow. Browsers clip the printed output to the viewport-sized container,
+   * resulting in only page 1 appearing in print preview.
+   *
+   * By rendering a separate tree directly into document.body via a React
+   * portal, we completely escape all ancestor layout constraints. The
+   * @media print CSS in globals.css then:
+   *   1. Hides body > * (all app DOM including #__next)
+   *   2. Shows #resume-print-root (our portal container)
+   *
+   * SAME PAGINATION MODEL:
+   * The portal renders from the same previewPaginatedDoc computed by
+   * paginateResume() above. Same data, same renderPreviewPageContent()
+   * function. No second pagination logic path exists.
+   *
+   * SCREEN IMPACT:
+   * The portal container uses display:none on screen, so it has zero
+   * impact on visual layout, accessibility tree, and tab order. It only
+   * becomes visible under @media print.
+   *
+   * LIFECYCLE:
+   * Created when the preview overlay mounts; removed when it unmounts.
+   * The useEffect cleanup removes the container from document.body.
+   *
+   * BROWSER PRINT HEADERS/FOOTERS:
+   * Browsers add their own header (page title, date) and footer (URL,
+   * page number) to printed pages. This is controlled by the browser's
+   * print dialog settings, NOT by app code. The app cannot suppress
+   * these. Users should uncheck "Headers and footers" in their browser's
+   * print dialog for a clean resume PDF.
+   */
+  const [printPortalContainer, setPrintPortalContainer] = useState<HTMLDivElement | null>(null);
+
+  useEffect(function () {
+    /* Create a dedicated container directly on document.body. This
+     * ensures it is a sibling of #__next rather than a descendant,
+     * so it escapes all app layout constraints. */
+    const container = document.createElement('div');
+    container.id = 'resume-print-root';
+    container.setAttribute('data-testid', 'resume-print-root');
+    /* Hidden on screen — display:none ensures zero visual/layout impact.
+     * @media print CSS in globals.css overrides this to display:block,
+     * making it the sole printed content. */
+    container.style.display = 'none';
+    document.body.appendChild(container);
+    setPrintPortalContainer(container);
+
+    return function () {
+      if (container.parentNode) {
+        container.parentNode.removeChild(container);
+      }
+      setPrintPortalContainer(null);
+    };
+  }, []);
+
+  /* Build experience bullets from duties strings */
   function renderDuties(duties: string): React.ReactNode {
     const lines = duties.split('\n');
     const items: React.ReactNode[] = [];
@@ -7893,71 +8137,312 @@ function ResumePreviewOverlay(props: {
     return items.length > 0 ? <ul className="list-disc pl-5 space-y-1">{items}</ul> : null;
   }
 
+  /* PER-PAGE CONTENT RENDERER: Renders only the sections assigned to a
+   * specific page by the pagination engine. Each block group maps to one
+   * resume section. For experience, the renderer filters entries to only
+   * those assigned to this page via block IDs.
+   *
+   * This is the read-only preview analogue of LiveResumeCanvas's
+   * renderBlockGroup() — same pagination contract, different styling. */
+  function renderPreviewPageContent(page: DocumentPage): React.ReactNode {
+    const groups = groupBlocksBySectionId(page.blocks);
+    const sectionElements: React.ReactNode[] = [];
+
+    for (let gi = 0; gi < groups.length; gi++) {
+      const group: BlockGroup = groups[gi];
+      const sid = group.sectionId;
+      const showHeader = groupContainsFirstBlock(group.blocks);
+
+      if (sid === 'contact') {
+        sectionElements.push(
+          <div key={'preview-contact'} className="text-center border-b pb-4" style={{ borderColor: '#ccc' }}>
+            <h1 className="text-2xl font-bold tracking-tight" style={{ color: '#000' }}>
+              {contact.fullName || 'Your Name'}
+            </h1>
+            <div className="text-sm mt-1.5" style={{ color: '#444' }}>
+              {[contact.email, contact.phone, contact.city && contact.state ? contact.city + ', ' + contact.state : '']
+                .filter(Boolean)
+                .join(' | ')}
+            </div>
+            {(contact.citizenship || (contact.veteranStatus && contact.veteranStatus !== 'N/A')) && (
+              <div className="text-xs mt-1" style={{ color: '#666' }}>
+                {contact.citizenship || ''}
+                {contact.citizenship && contact.veteranStatus && contact.veteranStatus !== 'N/A' ? ' | ' : ''}
+                {contact.veteranStatus && contact.veteranStatus !== 'N/A' ? 'Veteran Preference: ' + contact.veteranStatus : ''}
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      if (sid === 'summary' && draft.summary) {
+        sectionElements.push(
+          <div key={'preview-summary'}>
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+              Professional Summary
+            </h2>
+            <p className="text-[13px] leading-relaxed" style={{ color: '#111' }}>{draft.summary}</p>
+          </div>
+        );
+      }
+
+      if (sid === 'experience') {
+        /* Filter experience entries to only those assigned to this page */
+        const expIds = getExperienceIdsFromBlocks(group.blocks);
+        const filteredExp: ResumeExperience[] = [];
+        for (let ei = 0; ei < draft.experience.length; ei++) {
+          for (let ej = 0; ej < expIds.length; ej++) {
+            if (draft.experience[ei].id === expIds[ej]) {
+              filteredExp.push(draft.experience[ei]);
+              break;
+            }
+          }
+        }
+        if (filteredExp.length > 0) {
+          sectionElements.push(
+            <div key={'preview-experience-p' + page.pageNumber}>
+              {showHeader && (
+                <h2 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#000', letterSpacing: '0.1em' }}>
+                  Work Experience
+                </h2>
+              )}
+              {!showHeader && (
+                <h2 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#000', letterSpacing: '0.1em' }}>
+                  Work Experience (continued)
+                </h2>
+              )}
+              {filteredExp.map(function (exp) {
+                return (
+                  <div key={exp.id} className="mb-4">
+                    <div className="flex items-baseline justify-between">
+                      <h3 className="text-[13px] font-bold" style={{ color: '#000' }}>{exp.jobTitle}</h3>
+                      <span className="text-xs flex-shrink-0" style={{ color: '#555' }}>{exp.startDate} {'\u2013'} {exp.endDate}</span>
+                    </div>
+                    <div className="text-xs mb-1.5" style={{ color: '#444' }}>
+                      {exp.employer}{exp.grade ? ' | ' + exp.grade : ''}{exp.hoursPerWeek ? ' | ' + exp.hoursPerWeek + ' hrs/wk' : ''}
+                    </div>
+                    {renderDuties(exp.duties)}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        }
+      }
+
+      if (sid === 'education' && draft.education.length > 0) {
+        sectionElements.push(
+          <div key={'preview-education'}>
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+              Education
+            </h2>
+            {draft.education.map(function (edu) {
+              return (
+                <div key={edu.id} className="mb-2">
+                  <div className="text-[13px] font-semibold" style={{ color: '#000' }}>
+                    {edu.degree}, {edu.field}
+                  </div>
+                  <div className="text-xs" style={{ color: '#444' }}>
+                    {edu.institution} | {edu.graduationDate}{edu.gpa ? ' | GPA: ' + edu.gpa : ''}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      }
+
+      if (sid === 'certifications' && draft.certifications && draft.certifications.length > 0) {
+        sectionElements.push(
+          <div key={'preview-certifications'}>
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+              Certifications
+            </h2>
+            <p className="text-[13px]" style={{ color: '#111' }}>
+              {draft.certifications.map(function (c) { return c.name; }).join(', ')}
+            </p>
+          </div>
+        );
+      }
+
+      if (sid === 'skills' && draft.skills.length > 0) {
+        sectionElements.push(
+          <div key={'preview-skills'}>
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+              Skills
+            </h2>
+            <p className="text-[13px]" style={{ color: '#111' }}>
+              {draft.skills.map(function (s) { return s.name; }).join(', ')}
+            </p>
+          </div>
+        );
+      }
+
+      if (sid === 'federal-details') {
+        const fd = props.federalDetails;
+        if (fd) {
+          sectionElements.push(
+            <div key={'preview-federal-details'}>
+              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+                Federal Details
+              </h2>
+              <div className="text-[13px] leading-relaxed" style={{ color: '#111' }}>
+                <div className="mb-0.5">Security Clearance: {fd.securityClearance || 'Not specified'}</div>
+                <div className="mb-0.5">Highest Grade Held: {fd.highestGrade || 'Not specified'}</div>
+                <div className="mb-0.5">Federal Employee: {fd.federalEmployee ? 'Yes' : 'No'}</div>
+                <div>Veteran Preference: {fd.veteranPreference || 'Not specified'}</div>
+              </div>
+            </div>
+          );
+        }
+      }
+
+      if (sid === 'supporting-evidence' && draft.supportingEvidence && draft.supportingEvidence.length > 0) {
+        sectionElements.push(
+          <div key={'preview-supporting-evidence'}>
+            <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+              Supporting Evidence
+            </h2>
+            <ul className="list-disc pl-5 space-y-1">
+              {draft.supportingEvidence.map(function (ev) {
+                return (
+                  <li key={ev.id} className="text-[13px] leading-relaxed" style={{ color: '#111' }}>
+                    {ev.text}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      }
+    }
+
+    return <div className="space-y-6">{sectionElements}</div>;
+  }
+
+  /* ===========================================================================
+   * DETERMINISTIC PDF EXPORT — primary export path
+   * ===========================================================================
+   *
+   * The primary "Export Resume PDF" action uses the deterministic PDF
+   * pipeline (jsPDF) to generate a clean PDF directly from the paginated
+   * resume model. This produces a PDF with:
+   *   - No browser-injected metadata (no date, URL, page title)
+   *   - Exact page-count parity with the preview
+   *   - ATS-safe selectable text
+   *   - Consistent output regardless of browser or OS
+   *
+   * If the deterministic export fails (e.g. jsPDF initialization error),
+   * the user sees an error message with an option to fall back to
+   * browser print (window.print()).
+   * =========================================================================== */
+  const [pdfExportError, setPdfExportError] = useState<string | null>(null);
+  const [pdfExportSuccess, setPdfExportSuccess] = useState(false);
+
+  /**
+   * DETERMINISTIC PDF EXPORT HANDLER — builds and downloads a PDF from the
+   * paginated resume model using jsPDF. No browser print dialog, no DOM
+   * scraping, no browser-injected metadata.
+   */
+  function handleDeterministicPdfExport(): void {
+    setPdfExportError(null);
+    setPdfExportSuccess(false);
+
+    try {
+      const result = downloadResumePdf({
+        paginatedDoc: previewPaginatedDoc,
+        draft: draft,
+        federalDetails: props.federalDetails as PdfFederalDetails | null,
+      });
+
+      setPdfExportSuccess(true);
+
+      /* Clear success indicator after a few seconds */
+      setTimeout(function () {
+        setPdfExportSuccess(false);
+      }, 3000);
+
+      /* Log export metadata for debugging in development */
+      if (process.env.NODE_ENV === 'development') {
+        console.log(
+          '[PDF Export] Success: ' + result.pageCount + ' pages, ' +
+          'filename: ' + result.filename
+        );
+      }
+    } catch (err) {
+      const message = (err instanceof Error) ? err.message : 'Unknown export error';
+      setPdfExportError(message);
+      console.error('[PDF Export] Failed:', message);
+    }
+  }
+
+  /* UX HINT: Updated copy reflecting the deterministic export path.
+   * Browser print is now a fallback, not the primary path. */
+  const exportHintText = 'PDF export generates a clean file directly — no browser dialog needed.';
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-auto print:relative print:overflow-visible"
-      style={{ background: 'rgba(0,0,0,0.6)' }}
-      onClick={function (e: React.MouseEvent) {
-        if (e.target === e.currentTarget) props.onClose();
-      }}
-      data-testid="resume-preview-overlay"
-      role="dialog"
-      aria-label="Resume preview"
-    >
+    <>
+      {/* ON-SCREEN PREVIEW OVERLAY — visible to the user for final review.
+       * This overlay is NOT the print source. The dedicated print portal
+       * below (#resume-print-root) is the sole source of printed content.
+       *
+       * PRINT EXCLUSION (three layers of defense):
+       *   1. Blanket CSS: body > *:not(#resume-print-root) { display:none }
+       *      hides the overlay via its ancestor.
+       *   2. Explicit CSS: [data-testid="resume-preview-overlay"] and
+       *      [data-print-hide] rules directly target this element.
+       *   3. Tailwind: print:hidden adds display:none at @media print.
+       *
+       * All three layers exist because position:fixed elements have known
+       * browser quirks in print mode where they can escape ancestor hiding. */}
       <div
-        className="relative my-8 mx-4 rounded-xl shadow-2xl print:my-0 print:mx-0 print:rounded-none print:shadow-none"
-        style={{
-          background: '#ffffff',
-          color: '#111',
-          maxWidth: '800px',
-          width: '100%',
-          padding: '48px 56px',
-          minHeight: '600px',
+        className="fixed inset-0 z-50 flex items-start justify-center overflow-auto print:hidden"
+        style={{ background: 'rgba(0,0,0,0.6)' }}
+        onClick={function (e: React.MouseEvent) {
+          if (e.target === e.currentTarget) props.onClose();
         }}
-        data-testid="resume-preview-document"
+        data-testid="resume-preview-overlay"
+        data-print-hide
+        role="dialog"
+        aria-label="Resume preview"
       >
-        {/* ACTION BAR — Print/PDF + JSON export + Close.
-         * Hidden when printing via @media print rules in globals.css. */}
-        <div className="absolute top-4 right-4 flex items-center gap-2" data-print-hide>
-          {/* Primary: Export Resume PDF — opens browser print dialog.
-           * The @media print rules in globals.css hide all PathOS chrome
-           * and render only the resume document content. Users select
-           * "Save as PDF" in the print dialog for a clean PDF file. */}
+        {/* ACTION BAR — floats above the page surfaces.
+         * Hidden during print by the blanket body > * rule. */}
+        <div
+          className="fixed top-4 right-8 flex items-center gap-2 z-[60]"
+          data-print-hide
+        >
           <button
             type="button"
-            onClick={props.onPrint}
+            onClick={handleDeterministicPdfExport}
             className={'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
             style={{
-              background: 'var(--p-accent, #3b82f6)',
+              background: pdfExportSuccess ? 'var(--p-success, #22c55e)' : 'var(--p-accent, #3b82f6)',
               color: '#ffffff',
               border: 'none',
               '--tw-ring-color': 'var(--p-accent)',
             } as React.CSSProperties}
-            data-testid="preview-print-button"
-            title="Export as PDF — opens the browser print dialog. Select 'Save as PDF' for a clean resume file."
+            data-testid="preview-export-pdf-button"
+            title="Export as PDF — generates a clean resume file directly."
           >
             <Download className="w-3.5 h-3.5" />
-            Export Resume PDF
+            {pdfExportSuccess ? 'Downloaded!' : 'Export Resume PDF'}
           </button>
-          {/* Secondary: Export Resume JSON — developer/backup data format.
-           * Downloads the full resume store (draft + versions) as a JSON
-           * file for backup, cross-device transfer, or developer use. */}
           <button
             type="button"
-            onClick={props.onExportJSON}
-            className={'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+            onClick={props.onPrint}
+            className={'flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
             style={{
-              background: '#f0f0f0',
-              color: '#333',
-              border: '1px solid #ddd',
+              background: 'transparent',
+              color: 'var(--p-text-dim, #888)',
+              border: '1px solid var(--p-border, #555)',
               '--tw-ring-color': 'var(--p-accent)',
             } as React.CSSProperties}
-            data-testid="preview-export-json-button"
-            title="Export resume data as JSON (developer/backup format)"
+            data-testid="preview-print-fallback-button"
+            title="Fallback: opens the browser print dialog. Browser may add headers/footers."
           >
-            Export Resume JSON
+            Print
           </button>
-          {/* Close */}
           <button
             type="button"
             onClick={props.onClose}
@@ -7974,122 +8459,176 @@ function ResumePreviewOverlay(props: {
           </button>
         </div>
 
-        {/* RESUME CONTENT — clean typographic layout optimized for
-         * readability and print output. Font sizes are slightly larger
-         * than the editing canvas. Colors use high-contrast values
-         * (not theme tokens) because this renders on a white background
-         * regardless of the PathOS dark theme. */}
-        <div className="space-y-6">
-          {/* Header / Contact */}
-          <div className="text-center border-b pb-4" style={{ borderColor: '#ccc' }}>
-            <h1 className="text-2xl font-bold tracking-tight" style={{ color: '#000' }}>
-              {contact.fullName || 'Your Name'}
-            </h1>
-            <div className="text-sm mt-1.5" style={{ color: '#444' }}>
-              {[contact.email, contact.phone, contact.city && contact.state ? contact.city + ', ' + contact.state : '']
-                .filter(Boolean)
-                .join(' | ')}
-            </div>
+        {/* PAGE-FIRST MULTI-PAGE PREVIEW: Each page in the PaginatedDocument
+         * renders as a real, independent page surface containing only its
+         * assigned sections. No clipping, no translateY offsets, no duplicate
+         * content. Each page surface is a true printable unit.
+         *
+         * Note: This on-screen preview is for visual review only. The actual
+         * printed content comes from the #resume-print-root portal below,
+         * which is isolated from all app layout constraints. */}
+        <div
+          className="py-8 px-4"
+          style={{ maxWidth: '850px', width: '100%', margin: '0 auto' }}
+          data-testid="resume-preview-page-container"
+        >
+          {/* Page count label */}
+          <div
+            className="text-center mb-4"
+            style={{ color: 'var(--p-text-dim, #999)' }}
+          >
+            <span className="text-xs">
+              {previewPageCount === 1
+                ? '1 page'
+                : previewPageCount + ' pages'}
+            </span>
           </div>
 
-          {/* Summary */}
-          {draft.summary && (
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
-                Professional Summary
-              </h2>
-              <p className="text-[13px] leading-relaxed" style={{ color: '#111' }}>{draft.summary}</p>
+          {/* EXPORT HINT — honest UX guidance about the export path. */}
+          <div
+            className="text-center mb-4"
+            style={{ color: 'var(--p-text-dim, #888)' }}
+            data-testid="export-hint"
+          >
+            <span className="text-[10px] italic">{exportHintText}</span>
+          </div>
+
+          {/* PDF EXPORT ERROR — shown when deterministic export fails.
+           * Provides clear error message and guidance to use the print fallback. */}
+          {pdfExportError !== null && (
+            <div
+              className="text-center mb-4 px-4 py-2 rounded"
+              style={{
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                color: 'var(--p-danger, #ef4444)',
+              }}
+              data-testid="pdf-export-error"
+            >
+              <span className="text-[11px]">
+                PDF export failed. Use the Print button as a fallback.
+              </span>
             </div>
           )}
 
-          {/* Experience */}
-          {draft.experience.length > 0 && (
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#000', letterSpacing: '0.1em' }}>
-                Work Experience
-              </h2>
-              {draft.experience.map(function (exp) {
-                return (
-                  <div key={exp.id} className="mb-4">
-                    <div className="flex items-baseline justify-between">
-                      <h3 className="text-[13px] font-bold" style={{ color: '#000' }}>{exp.jobTitle}</h3>
-                      <span className="text-xs" style={{ color: '#555' }}>{exp.startDate} – {exp.endDate}</span>
-                    </div>
-                    <div className="text-xs mb-1.5" style={{ color: '#444' }}>
-                      {exp.employer}{exp.grade ? ' | ' + exp.grade : ''}{exp.hoursPerWeek ? ' | ' + exp.hoursPerWeek + ' hrs/wk' : ''}
-                    </div>
-                    {renderDuties(exp.duties)}
+          {previewPaginatedDoc.pages.map(function (page: DocumentPage) {
+            return (
+              <div key={'preview-page-' + page.pageNumber}>
+                {/* PAGE BOUNDARY LABEL — between pages */}
+                {page.pageNumber > 1 && (
+                  <div
+                    className="flex items-center justify-center my-5"
+                    style={{ color: 'var(--p-text-dim, #999)' }}
+                  >
+                    <span
+                      className="px-3 py-0.5 rounded text-[10px] font-semibold"
+                      style={{
+                        color: 'var(--p-accent, #3b82f6)',
+                        border: '1px solid color-mix(in srgb, var(--p-accent, #3b82f6) 25%, transparent)',
+                        background: 'var(--p-bg, #1a1a2e)',
+                      }}
+                    >
+                      Page {page.pageNumber}
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                )}
 
-          {/* Education */}
-          {draft.education.length > 0 && (
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
-                Education
-              </h2>
-              {draft.education.map(function (edu) {
-                return (
-                  <div key={edu.id} className="mb-2">
-                    <div className="text-[13px] font-semibold" style={{ color: '#000' }}>
-                      {edu.degree}, {edu.field}
-                    </div>
-                    <div className="text-xs" style={{ color: '#444' }}>
-                      {edu.institution} | {edu.graduationDate}{edu.gpa ? ' | GPA: ' + edu.gpa : ''}
-                    </div>
+                {/* PAGE SURFACE — real container for this page's content.
+                 * On-screen only; the print portal has its own surfaces. */}
+                <div
+                  className="rounded-xl shadow-2xl"
+                  style={{
+                    background: '#ffffff',
+                    color: '#111',
+                    maxWidth: '800px',
+                    width: '100%',
+                    minHeight: '200px',
+                    overflowWrap: 'break-word',
+                    wordBreak: 'break-word',
+                  } as React.CSSProperties}
+                  data-testid={page.pageNumber === 1 ? 'resume-preview-document' : 'resume-preview-page-' + page.pageNumber}
+                  data-page-number={page.pageNumber}
+                >
+                  <div style={{ padding: '48px 56px' }}>
+                    {renderPreviewPageContent(page)}
                   </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Certifications */}
-          {draft.certifications && draft.certifications.length > 0 && (
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
-                Certifications
-              </h2>
-              <p className="text-[13px]" style={{ color: '#111' }}>
-                {draft.certifications.map(function (c) { return c.name; }).join(', ')}
-              </p>
-            </div>
-          )}
-
-          {/* Skills */}
-          {draft.skills.length > 0 && (
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
-                Skills
-              </h2>
-              <p className="text-[13px]" style={{ color: '#111' }}>
-                {draft.skills.map(function (s) { return s.name; }).join(', ')}
-              </p>
-            </div>
-          )}
-
-          {/* Supporting Evidence */}
-          {draft.supportingEvidence && draft.supportingEvidence.length > 0 && (
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
-                Supporting Evidence
-              </h2>
-              <ul className="list-disc pl-5 space-y-1">
-                {draft.supportingEvidence.map(function (ev) {
-                  return (
-                    <li key={ev.id} className="text-[13px] leading-relaxed" style={{ color: '#111' }}>
-                      {ev.text}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
-    </div>
+
+      {/* ===================================================================
+       * PRINT PORTAL — Dedicated print-only resume tree
+       * ===================================================================
+       *
+       * This React portal renders clean resume pages directly into
+       * document.body, completely outside the app's React tree. It is
+       * the SOLE source of printed content.
+       *
+       * On screen: display:none (set on the container element in useEffect).
+       * On print: @media print CSS shows #resume-print-root and hides
+       *           everything else via body > *:not(#resume-print-root).
+       *
+       * CONTENT: Same previewPaginatedDoc pages and same
+       * renderPreviewPageContent() function as the on-screen preview.
+       * No second pagination logic path. No app chrome, no buttons,
+       * no scrollbars, no overlay shell — just resume page content.
+       *
+       * PAGE BREAKS: Page 2+ gets page-break-before:always via both
+       * inline styles (for immediate effect) and CSS reinforcement
+       * (for specificity safety).
+       * =================================================================== */}
+      {printPortalContainer !== null && createPortal(
+        <div data-testid="resume-print-content" data-resume-print-source>
+          {previewPaginatedDoc.pages.map(function (page: DocumentPage) {
+            return (
+              <div
+                key={'print-page-' + page.pageNumber}
+                data-testid={'print-page-' + page.pageNumber}
+                data-page-number={page.pageNumber}
+                style={{
+                  background: '#ffffff',
+                  color: '#111111',
+                  /* PAGE-COUNT PARITY: Each print page container is sized
+                   * to exactly one physical US Letter page (1056px = 11in
+                   * at 96 DPI). box-sizing:border-box includes the padding
+                   * in the height, leaving exactly 976px (PAGE_CONTENT_PX)
+                   * for resume content. overflow:hidden clips any content
+                   * that slightly exceeds the estimated height, preventing
+                   * spill onto an extra physical page. The pagination
+                   * engine's 48px safety margin means real content should
+                   * never reach the clip boundary.
+                   *
+                   * The CSS @page { size: letter; margin: 0 } rule in
+                   * globals.css makes the full 11 inches available for
+                   * each printed page. These inline styles match the CSS
+                   * rules (which use !important) for defense in depth. */
+                  height: '1056px',
+                  boxSizing: 'border-box',
+                  padding: '40px 48px',
+                  overflow: 'hidden',
+                  margin: '0',
+                  /* PAGE BREAK: Force page 2+ onto a new printed sheet.
+                   * page-break-before is the legacy CSS2 property;
+                   * break-before is the CSS Fragmentation Level 3 spec
+                   * equivalent. Both are set for cross-browser safety. */
+                  pageBreakBefore: page.pageNumber > 1 ? 'always' : 'auto',
+                  breakBefore: page.pageNumber > 1 ? 'page' : 'auto',
+                  /* Prevent long words from overflowing the page */
+                  overflowWrap: 'break-word',
+                  wordBreak: 'break-word',
+                } as React.CSSProperties}
+              >
+                {renderPreviewPageContent(page)}
+              </div>
+            );
+          })}
+        </div>,
+        printPortalContainer
+      )}
+    </>
   );
 }
 
@@ -8117,6 +8656,7 @@ function ResumeVersionsPanel(props: {
   onClose: () => void;
   onCreateVersion: (label: string) => void;
   onRestoreVersion: (versionId: string) => void;
+  onDeleteVersion: (versionId: string) => void;
 }) {
   const [newLabel, setNewLabel] = useState('');
 
@@ -8125,13 +8665,21 @@ function ResumeVersionsPanel(props: {
    * on that version's card instead of the restore button. */
   const [confirmingRestoreId, setConfirmingRestoreId] = useState<string | null>(null);
 
+  /* DELETE CONFIRMATION: Track which version (if any) the user is
+   * about to delete. A confirmation prompt appears on that version's
+   * card. The default/master resume cannot be deleted. */
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+
   const versions = listVersions(props.store);
 
-  /* Escape key closes the panel */
+  /* Escape key closes the panel or cancels an active confirmation.
+   * Priority: cancel delete > cancel restore > close panel. */
   useEffect(function () {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        if (confirmingRestoreId !== null) {
+        if (confirmingDeleteId !== null) {
+          setConfirmingDeleteId(null);
+        } else if (confirmingRestoreId !== null) {
           setConfirmingRestoreId(null);
         } else {
           props.onClose();
@@ -8142,7 +8690,7 @@ function ResumeVersionsPanel(props: {
     return function () {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [props.onClose, confirmingRestoreId]);
+  }, [props.onClose, confirmingRestoreId, confirmingDeleteId]);
 
   return (
     <div
@@ -8258,10 +8806,8 @@ function ResumeVersionsPanel(props: {
                       {new Date(v.createdAt).toLocaleString()}
                     </div>
 
+                    {/* RESTORE FLOW — confirm before overwriting current draft */}
                     {isConfirming ? (
-                      /* RESTORE CONFIRMATION — shown when the user clicks
-                       * "Restore this version". Warns that current edits
-                       * will be replaced and offers Confirm / Cancel. */
                       <div className="mt-2">
                         <p className="text-[10px] mb-1.5" style={{ color: 'var(--p-warning, #eab308)' }}>
                           This will replace your current draft. Unsaved changes will be lost.
@@ -8299,20 +8845,76 @@ function ResumeVersionsPanel(props: {
                           </button>
                         </div>
                       </div>
+                    ) : confirmingDeleteId === v.id ? (
+                      /* DELETE CONFIRMATION — prevents accidental data loss. */
+                      <div className="mt-2">
+                        <p className="text-[10px] mb-1.5" style={{ color: 'var(--p-danger, #ef4444)' }}>
+                          Permanently delete this version? This cannot be undone.
+                        </p>
+                        <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={function () {
+                              props.onDeleteVersion(v.id);
+                              setConfirmingDeleteId(null);
+                            }}
+                            className={'text-[10px] font-semibold px-2 py-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                            style={{
+                              background: 'var(--p-danger, #ef4444)',
+                              color: '#ffffff',
+                              '--tw-ring-color': 'var(--p-accent)',
+                            } as React.CSSProperties}
+                            data-testid={'confirm-delete-' + v.id}
+                          >
+                            Delete
+                          </button>
+                          <button
+                            type="button"
+                            onClick={function () { setConfirmingDeleteId(null); }}
+                            className={'text-[10px] font-medium px-2 py-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                            style={{
+                              color: 'var(--p-text-muted)',
+                              background: 'transparent',
+                              border: '1px solid var(--p-border)',
+                              '--tw-ring-color': 'var(--p-accent)',
+                            } as React.CSSProperties}
+                            data-testid={'cancel-delete-' + v.id}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={function () { setConfirmingRestoreId(v.id); }}
-                        className={'mt-2 text-[10px] font-medium px-2 py-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
-                        style={{
-                          color: 'var(--p-accent)',
-                          background: 'color-mix(in srgb, var(--p-accent) 8%, transparent)',
-                          '--tw-ring-color': 'var(--p-accent)',
-                        } as React.CSSProperties}
-                        data-testid={'restore-version-' + v.id}
-                      >
-                        Restore this version
-                      </button>
+                      /* Default state — show both Restore and Delete actions */
+                      <div className="flex gap-1.5 mt-2">
+                        <button
+                          type="button"
+                          onClick={function () { setConfirmingRestoreId(v.id); }}
+                          className={'text-[10px] font-medium px-2 py-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                          style={{
+                            color: 'var(--p-accent)',
+                            background: 'color-mix(in srgb, var(--p-accent) 8%, transparent)',
+                            '--tw-ring-color': 'var(--p-accent)',
+                          } as React.CSSProperties}
+                          data-testid={'restore-version-' + v.id}
+                        >
+                          Restore
+                        </button>
+                        <button
+                          type="button"
+                          onClick={function () { setConfirmingDeleteId(v.id); }}
+                          className={'text-[10px] font-medium px-2 py-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                          style={{
+                            color: 'var(--p-danger, #ef4444)',
+                            background: 'color-mix(in srgb, var(--p-danger, #ef4444) 6%, transparent)',
+                            '--tw-ring-color': 'var(--p-accent)',
+                          } as React.CSSProperties}
+                          data-testid={'delete-version-' + v.id}
+                          title="Delete this version permanently"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     )}
                   </div>
                 );

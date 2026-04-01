@@ -351,13 +351,23 @@ export function useCalloutLines(
     };
   }, [measure, scrollContainerRef]);
 
-  /* Re-measure whenever lines or selection changes */
+  /* Re-measure whenever lines or selection changes. Two-phase delay:
+   * first measurement at 50ms catches most DOM updates; second at 200ms
+   * catches page-first multi-page DOM rendering which may take longer
+   * when the pagination engine produces multiple page surfaces. This
+   * ensures callout anchors on page 2+ are discoverable after the
+   * page surfaces have fully mounted and laid out. */
   useEffect(function () {
-    /* Small delay to let DOM updates settle before measuring */
-    const timeoutId = setTimeout(function () {
+    const timeoutId1 = setTimeout(function () {
       measure();
     }, 50);
-    return function () { clearTimeout(timeoutId); };
+    const timeoutId2 = setTimeout(function () {
+      measure();
+    }, 200);
+    return function () {
+      clearTimeout(timeoutId1);
+      clearTimeout(timeoutId2);
+    };
   }, [lines, selectedSection, config, measure]);
 
   // -------------------------------------------------------------------------

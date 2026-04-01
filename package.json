@@ -26,10 +26,10 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@pathos/core": "workspace:*",
-    "@pathos/adapters": "workspace:*",
-    "@pathos/ui": "workspace:*",
     "@hookform/resolvers": "^3.10.0",
+    "@pathos/adapters": "workspace:*",
+    "@pathos/core": "workspace:*",
+    "@pathos/ui": "workspace:*",
     "@radix-ui/react-accordion": "latest",
     "@radix-ui/react-alert-dialog": "latest",
     "@radix-ui/react-aspect-ratio": "latest",
@@ -71,6 +71,7 @@
     "eslint-config-next": "latest",
     "input-otp": "latest",
     "jiti": "latest",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.454.0",
     "motion": "^12.23.26",
     "next": "16.0.7",
