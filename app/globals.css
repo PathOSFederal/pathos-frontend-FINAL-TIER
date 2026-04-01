@@ -302,3 +302,101 @@
     background-color: color-mix(in oklch, var(--accent) 10%, transparent);
   }
 }
+
+/* ============================================================================
+   RESUME EXPORT PRINT RULES
+   
+   When the user triggers window.print() from the Resume Preview Overlay,
+   these rules hide all PathOS application chrome and render only the
+   resume document content. This ensures the exported PDF contains
+   a clean, professional resume — no navigation, no sidebar, no builder
+   controls, no overlays, no callout lines, no route/footer text.
+   
+   HOW IT WORKS:
+   1. Hides everything in the page
+   2. Shows only the resume-preview-overlay and its document child
+   3. Removes overlay backdrop, shadows, margins, and border-radius
+   4. Applies clean white background at the root for PDF rendering
+   5. Uses !important to override inline styles from React components
+   
+   PRINT TRIGGER: Resume Builder > Preview > "Export Resume PDF" button
+   calls window.print(), which invokes the browser's native print dialog.
+   Selecting "Save as PDF" produces a clean resume document.
+============================================================================ */
+@media print {
+  /* White background at the root for clean PDF rendering. Without
+     this, dark-theme users would get a dark background in their PDF. */
+  html, body {
+    background: #ffffff !important;
+    color: #111111 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Hide all app chrome. The Next.js root (#__next) must remain
+     visible so descendant selectors can reach the preview overlay.
+     Instead of hiding body > *, we hide specific app chrome and let
+     the preview overlay opt in. This fixes the blank-preview bug
+     caused by body > * hiding #__next (the preview's ancestor). */
+  [data-testid="resume-builder-top-bar"],
+  [data-testid="stage-tabs"],
+  [data-testid="resume-section-rail"],
+  [data-testid="callout-overlay-wrapper"],
+  [data-testid="callout-line-overlay-container"],
+  [data-testid="validation-preflight-area"],
+  [data-testid="applied-suggestion-toast"],
+  nav,
+  header,
+  aside,
+  footer,
+  [data-testid="shared-dashboard-shell-nav"],
+  [data-testid="shared-dashboard-shell-sidebar"],
+  [data-print-hide] {
+    display: none !important;
+  }
+
+  /* The resume preview overlay — make it visible and positioned for
+     print flow. Remove the backdrop dimming and fixed positioning
+     so the content flows naturally onto pages. */
+  [data-testid="resume-preview-overlay"] {
+    display: block !important;
+    position: static !important;
+    background: transparent !important;
+    overflow: visible !important;
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  /* The resume document container — remove card styling (shadows,
+     rounded corners, margins) so the content fills the printed page
+     edge-to-edge with clean document margins. */
+  [data-testid="resume-preview-document"] {
+    display: block !important;
+    position: static !important;
+    margin: 0 !important;
+    padding: 40px 48px !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    border: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: auto !important;
+    background: #ffffff !important;
+    color: #111111 !important;
+  }
+
+  /* Hide the action bar (print/export/close buttons) in print output */
+  [data-testid="resume-preview-document"] [data-print-hide],
+  [data-testid="preview-print-button"],
+  [data-testid="preview-export-json-button"],
+  [data-testid="preview-close-button"] {
+    display: none !important;
+  }
+
+  /* Page break behavior for multi-page resumes. Experience and
+     education entries avoid breaking mid-item for readability. */
+  [data-testid="resume-preview-document"] > div > div {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}

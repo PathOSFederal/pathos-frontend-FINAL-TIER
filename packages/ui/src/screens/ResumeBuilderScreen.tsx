@@ -58,19 +58,16 @@ import {
   Zap,
   AlertTriangle,
   CheckCircle2,
-  Circle,
   Plus,
   Pencil,
   Sparkles,
-  X,
   ArrowRight,
   GitCompare,
   Eye,
   Map,
   TrendingUp,
-  Info,
-  Home,
   LayoutGrid,
+  X,
 } from 'lucide-react';
 import {
   loadResumeStore,
@@ -78,6 +75,9 @@ import {
   updateDraft,
   createDefaultDraft,
   listVersions,
+  createVersion,
+  restoreVersion,
+  exportResumeJSON,
   loadSavedJobsStore,
   seedSavedJobsIfEmpty,
 } from '@pathos/core';
@@ -89,7 +89,57 @@ import type {
 } from '@pathos/core';
 import { usePathAdvisorScreenOverridesStore } from '../stores/pathAdvisorScreenOverridesStore';
 import { INTERACTIVE_HOVER_CLASS } from '../styles/interactiveHover';
-import { scoreTierColor } from '../styles/scoreTiers';
+import { scoreTierColor, readinessTierColor, readinessBandLabel } from '../styles/scoreTiers';
+
+// ---------------------------------------------------------------------------
+// New architecture imports — live canvas, slot-based top bar, callout system
+// ---------------------------------------------------------------------------
+//
+// These imports bring in the document-centered architecture components
+// that replace the old tab-heavy section manager model. The new system
+// provides:
+//   - Stable 7-slot top bar (positions never shift across stages)
+//   - Compact left rail with section progress badges
+//   - Live resume canvas with all sections always visible
+//   - Section-scoped callout layer with typed annotation anchors
+//   - Validation preflight checklist
+//
+import { ResumeBuilderTopBar } from '../resume-builder/components/ResumeBuilderTopBar';
+import type { DropdownItem } from '../resume-builder/components/ResumeBuilderTopBar';
+import { ResumeSectionRail, RESUME_OVERVIEW_ID } from '../resume-builder/components/ResumeSectionRail';
+import { LiveResumeCanvas } from '../resume-builder/components/LiveResumeCanvas';
+import type { EditingField } from '../resume-builder/components/LiveResumeCanvas';
+import { ResumeCalloutLayer } from '../resume-builder/components/ResumeCalloutLayer';
+import { CalloutLineOverlay } from '../resume-builder/components/CalloutLineOverlay';
+import { ValidationChecklist } from '../resume-builder/components/ValidationChecklist';
+import { useSectionProgress, getMissingContactFields, buildContactGuidanceLabel } from '../resume-builder/hooks/useSectionProgress';
+import { deriveOverallReadiness } from '../resume-builder/types/section-progress-types';
+import type { SectionProgress } from '../resume-builder/types/section-progress-types';
+import { useAnchorMap } from '../resume-builder/hooks/useAnchorMap';
+import { useCalloutLines } from '../resume-builder/hooks/useCalloutLines';
+import { buildPrimaryCtaConfig } from '../resume-builder/types/stage-types';
+import { buildPreflightChecks, buildPreflightState } from '../resume-builder/types/validation-types';
+import { buildDefaultCalloutLineConfig } from '../resume-builder/types/callout-line-types';
+import type { CalloutLineDef, CalloutLineOverlayConfig } from '../resume-builder/types/callout-line-types';
+import {
+  buildCanonicalCalloutRegistry,
+  getCanonicalTargetsForSection,
+  getOverviewCalloutTargets,
+  getEvidenceInformedOverviewTargets,
+  filterCanonicalTargetsForContent,
+} from '../resume-builder/types/canonical-callout-defs';
+import type { CanonicalCalloutRegistry } from '../resume-builder/types/canonical-callout-defs';
+import type { BuilderStage } from '../resume-builder/types/stage-types';
+import type { TailoringAnnotation } from '../resume-builder/types/annotation-types';
+import type { PreflightState } from '../resume-builder/types/validation-types';
+import { scoreAllSections, deriveEvidenceBasedReadiness } from '../resume-builder/utils/evidence-scoring';
+import type { SectionEvidenceScore } from '../resume-builder/utils/evidence-scoring';
+import type { SectionIssue } from '../resume-builder/types/issue-categories';
+import { sortIssuesByPriority } from '../resume-builder/types/issue-categories';
+import type { PathAdvisorResumeContext, PathAdvisorTriggerIntent } from '../resume-builder/types/pathadvisor-context';
+import { buildPathAdvisorPrompt } from '../resume-builder/types/pathadvisor-context';
+import { ResumeBuilderPathAdvisorModal } from '../resume-builder/components/ResumeBuilderPathAdvisorModal';
+import type { ConversationAction } from '../resume-builder/types/conversation-types';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -548,7 +598,11 @@ const MOCK_FEDERAL_DETAILS = {
   highestGrade: 'GS-12',
 };
 
-/** Mock certifications for the canvas (not yet in core model). */
+/**
+ * MOCK_CERTIFICATIONS — legacy constant retained for callout/annotation
+ * consumers that still reference it. The authoritative certifications
+ * now live in store.draft.certifications, seeded in createMockResumeDraft().
+ */
 const MOCK_CERTIFICATIONS = ['CISSP', 'CompTIA Security+'];
 
 /**
@@ -619,6 +673,14 @@ function createMockResumeDraft(): ResumeDraft {
       { id: 'sk-4', name: 'Incident Response' },
       { id: 'sk-5', name: 'NICE Framework' },
       { id: 'sk-6', name: 'Risk Management' },
+    ],
+    certifications: [
+      { id: 'cert-1', name: 'CISSP' },
+      { id: 'cert-2', name: 'CompTIA Security+' },
+    ],
+    supportingEvidence: [
+      { id: 'ev-1', text: 'Reduced vulnerability remediation time by 40% through automated scanning pipeline implementation (2022).' },
+      { id: 'ev-2', text: 'Awarded DoD Civilian Service Medal for cybersecurity incident response excellence (2023).' },
     ],
   };
 }
@@ -1045,7 +1107,7 @@ function WorkspaceTopBar(props: {
         }}
         aria-label="Active resume version"
       >
-        Master Resume
+        Default Resume
         <ChevronDown className="w-3 h-3" style={{ color: 'var(--p-text-dim)' }} />
       </button>
 
@@ -1254,10 +1316,10 @@ function ContextStrip(props: {
     >
       <span>
         You are editing:{' '}
-        <strong style={{ color: 'var(--p-accent)' }}>Master Resume</strong>
+        <strong style={{ color: 'var(--p-accent)' }}>Default Resume</strong>
       </span>
       <span style={{ color: 'var(--p-border)' }}>·</span>
-      <span>Auto-saves</span>
+      <span>Changes saved locally</span>
       <span style={{ color: 'var(--p-border)' }}>·</span>
       {props.autonomyMode === 'assisted' ? (
         <span>Assisted mode</span>
@@ -1743,22 +1805,25 @@ function SectionDashboard(props: {
                 </span>
               </div>
 
-              {/* Readiness score */}
+              {/* Readiness score — percentage-first with secondary band label.
+               * The percentage is the primary signal; the label interprets it.
+               * Uses 5-tier readinessTierColor for color consistency with
+               * Career Readiness and other readiness surfaces. */}
               <div className="flex items-center gap-1.5">
-                <span
-                  className="text-[10px] font-semibold uppercase tracking-wider"
-                  style={{ color: 'var(--p-text-dim)' }}
-                >
-                  Ready
-                </span>
                 <span
                   className="text-sm font-bold px-2 py-0.5 rounded"
                   style={{
-                    color: scoreTierColor(props.readinessScore),
-                    background: 'color-mix(in srgb, ' + scoreTierColor(props.readinessScore) + ' 12%, transparent)',
+                    color: readinessTierColor(props.readinessScore),
+                    background: 'color-mix(in srgb, ' + readinessTierColor(props.readinessScore) + ' 12%, transparent)',
                   }}
                 >
-                  {props.readinessScore}
+                  {props.readinessScore}% Ready
+                </span>
+                <span
+                  className="text-[10px] font-medium"
+                  style={{ color: 'var(--p-text-muted)' }}
+                >
+                  {readinessBandLabel(props.readinessScore)}
                 </span>
               </div>
 
@@ -2080,22 +2145,23 @@ function LiveScoreAnchor(props: {
         </span>
       </div>
 
-      {/* Readiness score chip */}
+      {/* Readiness score chip — percentage-first with secondary band label.
+       * Uses 5-tier readinessTierColor for consistent readiness coloring. */}
       <div className="flex items-center gap-1.5">
-        <span
-          className="text-[10px] font-semibold uppercase tracking-wider"
-          style={{ color: 'var(--p-text-dim)' }}
-        >
-          Ready
-        </span>
         <span
           className="text-xs font-bold px-1.5 py-0.5 rounded"
           style={{
-            color: scoreTierColor(props.readinessScore),
-            background: 'color-mix(in srgb, ' + scoreTierColor(props.readinessScore) + ' 12%, transparent)',
+            color: readinessTierColor(props.readinessScore),
+            background: 'color-mix(in srgb, ' + readinessTierColor(props.readinessScore) + ' 12%, transparent)',
           }}
         >
-          {props.readinessScore}
+          {props.readinessScore}% Ready
+        </span>
+        <span
+          className="text-[10px] font-medium"
+          style={{ color: 'var(--p-text-muted)' }}
+        >
+          {readinessBandLabel(props.readinessScore)}
         </span>
       </div>
 
@@ -2275,22 +2341,23 @@ function TabBar(props: {
                 {props.matchScore}%
               </span>
             </div>
-            {/* Readiness score chip */}
+            {/* Readiness score chip — percentage-first display with
+             * 5-tier color and secondary band label. */}
             <div className="flex items-center gap-1">
-              <span
-                className="text-[10px] font-semibold uppercase tracking-wider"
-                style={{ color: 'var(--p-text-dim)' }}
-              >
-                Ready
-              </span>
               <span
                 className="text-xs font-bold px-1.5 py-0.5 rounded"
                 style={{
-                  color: scoreTierColor(props.readinessScore),
-                  background: 'color-mix(in srgb, ' + scoreTierColor(props.readinessScore) + ' 12%, transparent)',
+                  color: readinessTierColor(props.readinessScore),
+                  background: 'color-mix(in srgb, ' + readinessTierColor(props.readinessScore) + ' 12%, transparent)',
                 }}
               >
-                {props.readinessScore}
+                {props.readinessScore}%
+              </span>
+              <span
+                className="text-[10px] font-medium"
+                style={{ color: 'var(--p-text-muted)' }}
+              >
+                {readinessBandLabel(props.readinessScore)}
               </span>
             </div>
           </>
@@ -2488,19 +2555,25 @@ function ResumeBrief(props: ResumeBriefProps) {
       }}
       data-testid="resume-brief"
     >
-      {/* Readiness chip */}
+      {/* Readiness chip — percentage-first with secondary band label.
+       * Readiness is NOT completion. Completion = are fields present?
+       * Readiness = how submission-ready is the overall resume?
+       * The percentage is the primary signal; the band label interprets it. */}
       <div className="flex items-center gap-1.5">
-        <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
-          Ready
-        </span>
         <span
           className="text-xs font-bold px-1.5 py-0.5 rounded"
           style={{
-            color: scoreTierColor(props.readinessScore),
-            background: 'color-mix(in srgb, ' + scoreTierColor(props.readinessScore) + ' 12%, transparent)',
+            color: readinessTierColor(props.readinessScore),
+            background: 'color-mix(in srgb, ' + readinessTierColor(props.readinessScore) + ' 12%, transparent)',
           }}
         >
-          {props.readinessScore}
+          {props.readinessScore}% Ready
+        </span>
+        <span
+          className="text-[10px] font-medium"
+          style={{ color: 'var(--p-text-muted)' }}
+        >
+          {readinessBandLabel(props.readinessScore)}
         </span>
       </div>
 
@@ -4650,6 +4723,852 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const canvasScrollRef = useRef<HTMLDivElement | null>(null);
 
+  // =========================================================================
+  // NEW ARCHITECTURE STATE — live canvas, stage system, callouts
+  // =========================================================================
+  //
+  // These state variables support the document-centered live canvas
+  // architecture. They run alongside the existing state and power the
+  // new top bar, section rail, callout layer, and validation checklist.
+  //
+
+  /**
+   * Builder stage: which phase of the federal resume workflow is active.
+   *   partial:    building the master resume (no target job required)
+   *   tailoring:  tailoring to a specific job (target job selected)
+   *   validation: final preflight before export
+   */
+  const [builderStage, setBuilderStage] = useState<BuilderStage>('partial');
+
+  /**
+   * Selected section in the live canvas. Drives two distinct modes:
+   *
+   *   RESUME_OVERVIEW_ID ('resume-overview'):
+   *     The default state when the builder opens. The full resume is
+   *     visible with no section highlighted. Callouts show the top
+   *     cross-section issues from the canonical registry.
+   *
+   *   Any real section ID (e.g. 'experience', 'summary'):
+   *     Section mode — the selected section is highlighted in the
+   *     document, and only that section's callouts appear. Guidance
+   *     narrows to the section's specific issues.
+   */
+  const [canvasSelectedSection, setCanvasSelectedSection] = useState<string | null>(RESUME_OVERVIEW_ID);
+
+  /**
+   * Edit-ready mode toggle. Controls two document states:
+   *
+   *   false (view mode):
+   *     Resume looks polished and readable. Guidance may still be
+   *     visible but editable affordances are quiet. This is the
+   *     default state — the user sees a clean resume document.
+   *
+   *   true (edit-ready mode):
+   *     Editable regions inside the selected section become visibly
+   *     activated with subtle highlights, outlines, and edit cursors.
+   *     The user understands that editing happens directly on the
+   *     document. The layout does NOT change — only affordances appear.
+   */
+  const [isEditReady, setIsEditReady] = useState(false);
+
+  /**
+   * Preview overlay visibility. When true, a read-only clean presentation
+   * of the resume replaces the editing canvas. The user can review the
+   * resume before considering it finalized.
+   */
+  const [showPreview, setShowPreview] = useState(false);
+
+  /**
+   * Versions panel visibility. When true, a sidebar/modal shows saved
+   * resume versions with restore/delete actions.
+   */
+  const [showVersions, setShowVersions] = useState(false);
+
+  /**
+   * New resume creation modal visibility. When true, shows a lightweight
+   * form for creating a new resume version from the current draft.
+   */
+  const [showNewResumeModal, setShowNewResumeModal] = useState(false);
+
+  /**
+   * RESUME SWITCH CONFIRMATION — tracks pending version switch.
+   *
+   * When the user selects a different resume version from the dropdown
+   * and the current draft may have unsaved changes, we store the
+   * pending version ID here. A confirmation dialog appears giving the
+   * user the option to save current changes first, discard and switch,
+   * or cancel. Null means no pending switch.
+   */
+  const [pendingSwitchVersionId, setPendingSwitchVersionId] = useState<string | null>(null);
+
+  /**
+   * SELECTED RESUME VERSION ID — tracks which resume version is active.
+   *
+   * 'master' = the default resume draft.
+   * Any other string = a saved version snapshot.
+   * When the user restores a version or creates one, this updates
+   * to reflect which version's data is currently loaded.
+   */
+  const [selectedResumeId, setSelectedResumeId] = useState<string>('master');
+
+  /**
+   * MASTER DRAFT BACKUP — stores a snapshot of the default resume draft
+   * before the user switches to a saved version. This allows "discard
+   * and switch back to Default Resume" to correctly restore the original
+   * draft content, instead of leaving the user stranded with the
+   * version's content labeled as "Default Resume."
+   *
+   * Set when switching away from master for the first time. Cleared
+   * when the user explicitly saves or the backup is consumed.
+   */
+  const masterDraftBackupRef = useRef<ResumeDraft | null>(null);
+
+  /**
+   * FULL-DOCUMENT REVIEW — flag to show the full-resume PathAdvisor
+   * review overlay. When true, the PathAdvisor modal opens with a
+   * full-document review context that provides a structured evaluation
+   * of the entire resume.
+   */
+  const [showFullReview, setShowFullReview] = useState(false);
+
+  /**
+   * Active callout ID for the callout layer. Tracks which callout
+   * card is currently expanded/active.
+   */
+  const [activeCalloutId, setActiveCalloutId] = useState<string | null>(null);
+
+  /**
+   * RESOLVED ANNOTATION IDS — tracks which annotations have been applied.
+   * When a suggestion is applied, the annotation ID is added here so it
+   * gets marked as resolved in the annotations list and the section
+   * status/readiness update accordingly.
+   */
+  const [resolvedAnnotationIds, setResolvedAnnotationIds] = useState<Record<string, boolean>>({});
+
+  /**
+   * APPLIED FEEDBACK — temporary confirmation state after applying a
+   * suggestion. Shows a brief "Applied!" toast indicator. Each entry
+   * contains the annotation ID and a timestamp for auto-clearing.
+   */
+  const [appliedFeedback, setAppliedFeedback] = useState<{
+    annotationId: string;
+    label: string;
+    timestamp: number;
+  } | null>(null);
+
+  /**
+   * PATHADVISOR MODAL STATE — controls the on-demand explanation modal.
+   *
+   * When a user clicks an explain trigger (issue / section / overview),
+   * handleExplainRequest builds a grounded context and opens the modal.
+   * The modal renders a structured explanation immediately — no typing
+   * required. The user can apply suggestions, edit first, ask follow-up,
+   * or close and return to the builder.
+   */
+  const [pathAdvisorModalOpen, setPathAdvisorModalOpen] = useState(false);
+  const [pathAdvisorModalContext, setPathAdvisorModalContext] = useState<PathAdvisorResumeContext | null>(null);
+
+  /**
+   * CONTENT-AWARE TAILORING ANNOTATIONS — dynamically computed from draft.
+   *
+   * Instead of a static mock list that always shows "Incomplete contact"
+   * or "Citizenship missing" regardless of actual document content, these
+   * annotations are derived from the live resume draft. This prevents
+   * false-positive guidance labels (e.g. claiming citizenship is missing
+   * when the document visibly shows "U.S. Citizen").
+   *
+   * The contact section is evaluated at the field level — each subfield
+   * (name, email, phone, location, citizenship, veteran preference) is
+   * checked independently. Only genuinely missing fields produce annotations.
+   */
+  const tailoringAnnotations: TailoringAnnotation[] = useMemo(function () {
+    const draft = store.draft;
+    const annotations: TailoringAnnotation[] = [];
+
+    /* ---- Contact / Identity: field-level evaluation ----
+     * Each subfield is checked independently. This is the core fix for
+     * false-positive labels. If citizenship IS present, we never generate
+     * a "citizenship missing" annotation. If only veteran preference is
+     * missing, the label says exactly that. */
+    const missingContactFields = getMissingContactFields(draft);
+    const contactLabel = buildContactGuidanceLabel(missingContactFields);
+    if (contactLabel) {
+      annotations.push({
+        id: 'ann-contact-incomplete',
+        annotationClass: 'alignment' as const,
+        subType: 'requirement-gap' as const,
+        anchorId: 'contact-header',
+        label: contactLabel,
+        description: 'Federal applications require full contact and eligibility details. Missing: ' + missingContactFields.join(', ') + '.',
+        severity: missingContactFields.length >= 3 ? 'high' as const : 'medium' as const,
+        resolved: false,
+      });
+    }
+
+    /* ---- Professional Summary ---- */
+    const hasSummary = draft.summary && draft.summary.trim().length >= 10;
+    if (!hasSummary) {
+      annotations.push({
+        id: 'ann-summary-gap',
+        annotationClass: 'alignment' as const,
+        subType: 'requirement-gap' as const,
+        anchorId: 'summary-summary-block-0',
+        label: 'Summary missing for screening',
+        description: 'A professional summary is the first thing HR reads. Missing it weakens your opening impression.',
+        severity: 'high' as const,
+        resolved: false,
+      });
+    }
+
+    /* ---- Work Experience: content-quality annotations ---- */
+    if (draft.experience.length > 0) {
+      annotations.push({
+        id: 'ann-exp-weak-bullet',
+        annotationClass: 'evidence' as const,
+        subType: 'weak-evidence' as const,
+        anchorId: 'experience-bullet-exp-1-b2',
+        label: 'Strengthen leadership bullet',
+        description: 'This bullet lacks federal-specific scope and quantified outcomes that GS-13/14 positions require.',
+        severity: 'high' as const,
+        resolved: false,
+        suggestedText: 'Directed vulnerability assessment and penetration testing operations across 12 DoD network enclaves, identifying and remediating 200+ critical vulnerabilities annually, reducing organizational cyber risk exposure by 35%.',
+      });
+      annotations.push({
+        id: 'ann-exp-missing-metrics',
+        annotationClass: 'evidence' as const,
+        subType: 'missing-metrics' as const,
+        anchorId: 'experience-bullet-exp-2-b2',
+        label: 'Add metrics to incident response',
+        description: 'Incident response bullet is too brief. Add frequency, scope, and documented outcomes.',
+        severity: 'medium' as const,
+        resolved: false,
+        suggestedText: 'Performed incident response activities across 15+ VA healthcare facilities, resolving an average of 8 security incidents per month with 99.2% containment rate and documented root-cause analysis for each event.',
+      });
+      annotations.push({
+        id: 'ann-exp-compression',
+        annotationClass: 'compression' as const,
+        subType: 'too-long' as const,
+        anchorId: 'experience-bullet-exp-1-b0',
+        label: 'Consider compressing',
+        description: 'This bullet is strong but lengthy. Tightening could help fit the 2-page limit.',
+        severity: 'low' as const,
+        resolved: false,
+      });
+    }
+
+    /* ---- Education ---- */
+    if (draft.education.length > 0) {
+      annotations.push({
+        id: 'ann-education-detail',
+        annotationClass: 'alignment' as const,
+        subType: 'requirement-gap' as const,
+        anchorId: 'education-entry-1',
+        label: 'Education detail gap',
+        description: 'Ensure degree type, field of study, institution, and graduation date are all clearly listed for federal compliance.',
+        severity: 'low' as const,
+        resolved: false,
+      });
+    }
+
+    /* ---- Skills ---- */
+    annotations.push({
+      id: 'ann-skills-keyword',
+      annotationClass: 'alignment' as const,
+      subType: 'missing-keyword' as const,
+      anchorId: 'skills-skill-item-0',
+      label: 'Missing target keywords',
+      description: 'Zero Trust Architecture and FISMA Compliance are in the announcement but not in your skills.',
+      severity: 'high' as const,
+      resolved: false,
+      suggestedText: 'Zero Trust Architecture, FISMA Compliance',
+    });
+
+    /* ---- Certifications ---- */
+    annotations.push({
+      id: 'ann-certs-missing-relevant',
+      annotationClass: 'alignment' as const,
+      subType: 'requirement-gap' as const,
+      anchorId: 'certifications-section-0',
+      label: 'Target-relevant certification missing',
+      description: 'The job announcement references CISSP and Security+ certifications. Adding relevant certs strengthens your qualification claim.',
+      severity: 'medium' as const,
+      resolved: false,
+    });
+
+    /* ---- Federal Details ---- */
+    annotations.push({
+      id: 'ann-federal-missing',
+      annotationClass: 'alignment' as const,
+      subType: 'requirement-gap' as const,
+      anchorId: 'federal-details-field-0',
+      label: 'Missing required federal fields',
+      description: 'Security clearance level, veteran preference, and highest grade held are required for federal applications.',
+      severity: 'high' as const,
+      resolved: false,
+    });
+
+    /* ---- Supporting Evidence ---- */
+    annotations.push({
+      id: 'ann-evidence-missing',
+      annotationClass: 'evidence' as const,
+      subType: 'unquantified-claim' as const,
+      anchorId: 'supporting-evidence-section-0',
+      label: 'Missing quantified support',
+      description: 'Key experience claims lack supporting evidence. Add specific metrics, awards, or project outcomes.',
+      severity: 'medium' as const,
+      resolved: false,
+    });
+
+    /* APPLIED SUGGESTION RESOLUTION: Mark annotations as resolved when
+     * the user has applied the suggestion. This updates section statuses
+     * and readiness score because the annotations feed into section
+     * progress via useSectionProgress. The user sees immediate state
+     * changes across the rail and top bar after applying. */
+    for (let k = 0; k < annotations.length; k++) {
+      if (resolvedAnnotationIds[annotations[k].id]) {
+        annotations[k] = Object.assign({}, annotations[k], { resolved: true });
+      }
+    }
+
+    return annotations;
+  }, [store.draft, resolvedAnnotationIds]);
+
+  /**
+   * Anchor map hook — manages the anchor registry for callout positioning.
+   * Canvas section wrappers call registerAnchor on mount. The anchor map
+   * is used to determine which sections have callout-capable regions and
+   * to track DOM positions for connector lines.
+   */
+  const anchorMapHook = useAnchorMap();
+
+  /**
+   * Canonical callout registry — declarative registry of all possible
+   * callout targets per resume section. This is the single source of
+   * truth for "which callouts can appear for this section." Built once
+   * and stable across renders.
+   */
+  const canonicalRegistry: CanonicalCalloutRegistry = useMemo(function () {
+    return buildCanonicalCalloutRegistry();
+  }, []);
+
+  /**
+   * Section progress hook — computes progress from draft + annotations.
+   */
+  const { sectionProgressList } = useSectionProgress(
+    store ? store.draft : null,
+    tailoringAnnotations
+  );
+
+  /**
+   * EVIDENCE-BASED SCORING — deterministic, explainable section scores.
+   * Runs the evidence scoring engine across all canonical sections,
+   * producing per-section composite scores and typed issues that
+   * distinguish missing fields from weak evidence. Used for the
+   * overall readiness calculation and future explainability UI.
+   *
+   * Uses the screen-level federal details and certifications data
+   * (currently mocked, will come from core model in a future pass).
+   */
+  const evidenceScores: SectionEvidenceScore[] = useMemo(function () {
+    if (!store) return [];
+    return scoreAllSections(
+      store.draft,
+      MOCK_FEDERAL_DETAILS,
+      MOCK_CERTIFICATIONS
+    );
+  }, [store]);
+
+  // =========================================================================
+  // CALLOUT LINE OVERLAY — precision annotation lines from resume to guidance
+  // =========================================================================
+  //
+  // Callout lines visually connect specific content inside the resume to
+  // small white endpoint circles outside the document boundary. They appear
+  // only when a section is selected in tailoring stage, providing focused
+  // guidance without cluttering the UI.
+
+  /**
+   * Ref to the resume document panel DOM element. The callout line hook
+   * uses this to measure anchor positions relative to the document boundary.
+   */
+  const documentPanelRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Ref to the callout line overlay container. The SVG overlay is
+   * absolutely positioned inside this container, which spans the
+   * full canvas + right margin area.
+   */
+  const calloutLineOverlayRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Ref to the canvas scroll container. The callout line hook attaches
+   * a scroll listener to this element so overlay geometry remeasures
+   * as the user scrolls the resume document. Without this, callout
+   * lines drift away from their anchor points on scroll.
+   */
+  const canvasScrollContainerRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Whether the builder is in Resume Overview mode. In overview mode,
+   * the full resume is visible with cross-section callouts showing
+   * the highest-priority issues. In section mode, callouts narrow to
+   * the selected section's specific issues.
+   */
+  const isOverviewMode = canvasSelectedSection === RESUME_OVERVIEW_ID;
+
+  /**
+   * Callout line definitions — two distinct generation strategies:
+   *
+   * OVERVIEW MODE (canvasSelectedSection === RESUME_OVERVIEW_ID):
+   *   Cross-section callouts from the canonical registry's overview
+   *   prioritization. Shows the top N highest-priority issues across
+   *   the whole resume. Calm and readable — not every possible issue.
+   *
+   * SECTION MODE (any real section ID):
+   *   Section-filtered callouts from tailoring annotations + canonical
+   *   fallbacks. More granular field-level callouts within that section.
+   *   Guidance narrows to the section's specific issues.
+   */
+  const calloutLineDefs: CalloutLineDef[] = useMemo(function () {
+    if (!canvasSelectedSection) return [];
+    if (builderStage === 'validation') return [];
+
+    /* ================================================================
+     * OVERVIEW MODE: cross-section prioritized callouts
+     * ================================================================
+     * Shows the most important issue from each section, sorted by
+     * severity, capped at 6. The user sees "here are the most
+     * important things to fix" across the whole resume. */
+    if (canvasSelectedSection === RESUME_OVERVIEW_ID) {
+      /* Use evidence-informed prioritization when scores are available,
+       * falling back to the standard severity-based overview otherwise.
+       * This ensures federal requirement gaps and low-scoring sections
+       * are surfaced first in the overview. */
+      const overviewTargets = getEvidenceInformedOverviewTargets(canonicalRegistry, evidenceScores);
+      const defs: CalloutLineDef[] = [];
+
+      for (let i = 0; i < overviewTargets.length; i++) {
+        const target = overviewTargets[i];
+        defs.push({
+          id: 'cl-overview-' + target.id,
+          anchor: {
+            anchorId: target.anchorId,
+            sectionId: target.sectionId,
+            label: target.anchorLabel,
+            annotationClass: target.annotationClass,
+          },
+          headline: target.headline,
+          description: target.description,
+          severity: target.severity,
+        });
+      }
+
+      return defs;
+    }
+
+    /* ================================================================
+     * SECTION MODE: section-filtered annotation + canonical callouts
+     * ================================================================
+     * Build callout line definitions from two sources:
+     *   1. Tailoring annotations (content-specific, higher priority)
+     *   2. Canonical registry fallbacks (section-level defaults)
+     *
+     * Annotation-based lines are preferred when they exist because
+     * they provide content-specific guidance. Canonical targets serve
+     * as fallback so every section always has at least one callout. */
+    const defs: CalloutLineDef[] = [];
+    const usedAnchorIds: Record<string, boolean> = {};
+
+    /* PASS 1: Build lines from tailoring annotations (content-specific).
+     * These take priority over canonical targets. */
+    for (let i = 0; i < tailoringAnnotations.length; i++) {
+      const ann = tailoringAnnotations[i];
+      if (ann.resolved) continue;
+
+      /* Map annotation anchor IDs to data-callout-anchor values.
+       * The existing annotations use IDs like "experience-bullet-exp-1-b2"
+       * which map to data-callout-anchor="bullet-exp-1-2" in the canvas.
+       * We also support direct anchor IDs for summary, skills, etc. */
+      let calloutAnchorId = '';
+      let sectionId = '';
+      const anchorId = ann.anchorId;
+
+      if (anchorId.startsWith('summary-')) {
+        calloutAnchorId = 'summary-text';
+        sectionId = 'summary';
+      } else if (anchorId.startsWith('skills-')) {
+        calloutAnchorId = 'skills-block';
+        sectionId = 'skills';
+      } else if (anchorId.startsWith('experience-bullet-')) {
+        /* Convert "experience-bullet-exp-1-b2" → "bullet-exp-1-2" */
+        const bulletPart = anchorId.replace('experience-', '');
+        const bMatch = bulletPart.match(/^bullet-(exp-\d+)-b(\d+)$/);
+        if (bMatch) {
+          calloutAnchorId = 'bullet-' + bMatch[1] + '-' + bMatch[2];
+        }
+        sectionId = 'experience';
+      } else if (anchorId.startsWith('education-')) {
+        calloutAnchorId = 'education-section-anchor';
+        sectionId = 'education';
+      } else if (anchorId.startsWith('contact-')) {
+        calloutAnchorId = 'contact-header';
+        sectionId = 'contact';
+      } else if (anchorId.startsWith('certifications-')) {
+        calloutAnchorId = 'certifications-section-anchor';
+        sectionId = 'certifications';
+      } else if (anchorId.startsWith('federal-details-') || anchorId.startsWith('federal-')) {
+        calloutAnchorId = 'federal-details-section-anchor';
+        sectionId = 'federal-details';
+      } else if (anchorId.startsWith('supporting-evidence-')) {
+        calloutAnchorId = 'supporting-evidence-section-anchor';
+        sectionId = 'supporting-evidence';
+      }
+
+      if (!calloutAnchorId) continue;
+      if (sectionId !== canvasSelectedSection) continue;
+
+      usedAnchorIds[calloutAnchorId] = true;
+
+      defs.push({
+        id: 'cl-' + ann.id,
+        anchor: {
+          anchorId: calloutAnchorId,
+          sectionId: sectionId,
+          label: ann.label,
+          annotationClass: ann.annotationClass,
+        },
+        headline: ann.label,
+        description: ann.description,
+        severity: ann.severity,
+      });
+    }
+
+    /* PASS 2: Fill from canonical registry if the selected section has
+     * canonical targets that were not already covered by annotations.
+     * Uses content-aware filtering to prevent false-positive targets
+     * (e.g. "Citizenship missing" when citizenship is visibly present).
+     * This ensures every section has at least one callout target, but
+     * only targets that actually apply to the current document state. */
+    const rawCanonicalTargets = getCanonicalTargetsForSection(canonicalRegistry, canvasSelectedSection);
+    const canonicalTargets = filterCanonicalTargetsForContent(rawCanonicalTargets, canvasSelectedSection, store.draft);
+    for (let i = 0; i < canonicalTargets.length; i++) {
+      const target = canonicalTargets[i];
+      if (usedAnchorIds[target.anchorId]) continue;
+
+      usedAnchorIds[target.anchorId] = true;
+
+      defs.push({
+        id: 'cl-canon-' + target.id,
+        anchor: {
+          anchorId: target.anchorId,
+          sectionId: canvasSelectedSection,
+          label: target.anchorLabel,
+          annotationClass: target.annotationClass,
+        },
+        headline: target.headline,
+        description: target.description,
+        severity: target.severity,
+      });
+    }
+
+    return defs;
+  }, [tailoringAnnotations, canvasSelectedSection, builderStage, canonicalRegistry]);
+
+  /**
+   * Callout line overlay configuration — differs between modes:
+   *
+   * OVERVIEW MODE:
+   *   - Section filtering OFF (lines span all sections)
+   *   - Max 6 lines (the overview prioritization already caps)
+   *   - Calm, cross-section view
+   *
+   * SECTION MODE:
+   *   - Section filtering ON (only the selected section's lines)
+   *   - Max 4 lines (more granular, within one section)
+   */
+  const calloutLineConfig: CalloutLineOverlayConfig = useMemo(function () {
+    if (isOverviewMode) {
+      return {
+        enabled: true,
+        maxLines: 6,
+        filterToSelectedSection: false,
+      };
+    }
+    return buildDefaultCalloutLineConfig();
+  }, [isOverviewMode]);
+
+  /**
+   * Callout lines hook — computes geometry from anchor DOM positions.
+   * Handles measurement, resize tracking, and hover state management.
+   */
+  const calloutLinesHook = useCalloutLines(
+    calloutLineDefs,
+    calloutLineConfig,
+    documentPanelRef,
+    calloutLineOverlayRef,
+    canvasSelectedSection,
+    canvasScrollContainerRef
+  );
+
+  /**
+   * Scroll-to-section effect. When the selected section changes (from
+   * the rail or from clicking in the canvas), the document scrolls the
+   * corresponding section wrapper into view. This ensures the selected
+   * section is always visible without replacing the document with a
+   * detached panel. Uses smooth scrolling for a calm, polished feel.
+   *
+   * In OVERVIEW MODE, we scroll to the top of the document instead of
+   * a specific section, since the full resume should be visible.
+   */
+  useEffect(function () {
+    if (!canvasSelectedSection) return;
+
+    /* In overview mode, scroll to the top of the document so the user
+     * sees the full resume from the beginning. */
+    if (canvasSelectedSection === RESUME_OVERVIEW_ID) {
+      const scrollContainer = canvasScrollContainerRef.current;
+      if (scrollContainer) {
+        const timer = setTimeout(function () {
+          scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+        }, 60);
+        return function () { clearTimeout(timer); };
+      }
+      return;
+    }
+
+    /* Find the section wrapper by its data-section-id attribute inside
+     * the document panel. The CanvasSectionWrapper sets this attribute. */
+    const panel = documentPanelRef.current;
+    if (!panel) return;
+    const sectionEl = panel.querySelector(
+      '[data-section-id="' + canvasSelectedSection + '"]'
+    );
+    if (!sectionEl) return;
+
+    /* Use a short delay so the DOM has settled after any re-render.
+     * scrollIntoView with 'smooth' and 'nearest' block alignment
+     * avoids jarring jumps when the section is already partially visible. */
+    const timer = setTimeout(function () {
+      sectionEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 60);
+    return function () { clearTimeout(timer); };
+  }, [canvasSelectedSection]);
+
+  /**
+   * TAILORING COMPLETENESS — determines whether the Validation tab is enabled.
+   *
+   * Tailoring is considered "complete enough" to enter validation when
+   * the resume has meaningful content in the core sections. This replaces
+   * the previous hardcoded `false` that permanently disabled validation.
+   *
+   * The threshold is deliberately low — users should be able to validate
+   * early and often, not only after perfecting every section. The
+   * validation checklist itself will flag what's missing.
+   *
+   * Conditions for tailoring complete:
+   *   1. At least one experience entry exists
+   *   2. Summary is non-empty
+   *   3. A target job is selected (already gated by hasTargetJob in stage tabs)
+   */
+  const computedTailoringComplete = useMemo(function () {
+    if (!store) return false;
+    const hasSummary = store.draft.summary !== null && store.draft.summary !== undefined && store.draft.summary.trim().length > 0;
+    const hasExperience = store.draft.experience.length > 0;
+    return hasSummary && hasExperience;
+  }, [store]);
+
+  /**
+   * PAGE COUNT ESTIMATION — approximate page count from resume content.
+   *
+   * A proper page count would require measuring rendered DOM height,
+   * but that is not available during the memoized computation phase.
+   * Instead, we estimate based on content volume using federal resume
+   * conventions: ~45 lines per page for single-spaced 11pt body text.
+   *
+   * The estimate counts:
+   *   - Contact header: ~4 lines
+   *   - Summary: ~3 lines base + 1 per 100 chars
+   *   - Each experience entry: ~4 lines + 1 per bullet (split on newlines)
+   *   - Each education entry: ~3 lines
+   *   - Certifications: ~2 lines if present
+   *   - Skills: ~2 lines if present
+   *   - Federal details: ~3 lines
+   *   - Supporting evidence: ~1 line per item
+   *
+   * This approximation rounds to 1 decimal place and clamps between
+   * 0.5 and 5.0 for display sanity.
+   */
+  const computedPageCount = useMemo(function () {
+    if (!store) return 1.0;
+    const draft = store.draft;
+    const LINES_PER_PAGE = 45;
+    let lineCount = 4; /* contact header */
+
+    /* Summary */
+    if (draft.summary && draft.summary.trim().length > 0) {
+      lineCount = lineCount + 3 + Math.floor(draft.summary.length / 100);
+    }
+
+    /* Experience entries */
+    for (let i = 0; i < draft.experience.length; i++) {
+      const exp = draft.experience[i];
+      lineCount = lineCount + 4;
+      if (exp.duties && exp.duties.trim().length > 0) {
+        const bulletLines = exp.duties.split('\n');
+        for (let j = 0; j < bulletLines.length; j++) {
+          if (bulletLines[j].trim().length > 0) {
+            lineCount = lineCount + 1 + Math.floor(bulletLines[j].length / 80);
+          }
+        }
+      }
+    }
+
+    /* Education */
+    lineCount = lineCount + (draft.education.length * 3);
+
+    /* Certifications */
+    if (draft.certifications && draft.certifications.length > 0) {
+      lineCount = lineCount + 2;
+    }
+
+    /* Skills */
+    if (draft.skills.length > 0) {
+      lineCount = lineCount + 2;
+    }
+
+    /* Federal details (always present as a section) */
+    lineCount = lineCount + 3;
+
+    /* Supporting evidence */
+    if (draft.supportingEvidence) {
+      lineCount = lineCount + draft.supportingEvidence.length;
+    }
+
+    const rawPages = lineCount / LINES_PER_PAGE;
+    /* Clamp between 0.5 and 5.0, round to 1 decimal */
+    const clamped = Math.max(0.5, Math.min(5.0, rawPages));
+    return Math.round(clamped * 10) / 10;
+  }, [store]);
+
+  /**
+   * Preflight state — computed from resume state for validation stage.
+   *
+   * Uses real resume data where available instead of hardcoded stubs.
+   * The page count comes from computedPageCount (content-based estimate).
+   * Required sections are checked against what a federal resume needs.
+   * Federal details completeness is approximated from contact data.
+   * Evidence coverage uses summary + skills as a minimum bar.
+   * Critical issues count unresolved high-severity callouts.
+   */
+  const computedPreflightState: PreflightState | null = useMemo(function () {
+    if (builderStage !== 'validation') return null;
+    if (!store) return null;
+
+    const summaryPresent = store.draft.summary !== null && store.draft.summary !== undefined && store.draft.summary.trim().length > 0;
+    const hasExperience = store.draft.experience.length > 0;
+    const hasEducation = store.draft.education.length > 0;
+    const hasSkills = store.draft.skills.length > 0;
+
+    /* Federal details: check if contact has the key federal fields.
+     * A real implementation would check series, grade, citizenship etc.
+     * For now, check that contact has name + email + phone as minimum. */
+    const c = store.draft.contact;
+    const hasBasicContact = (
+      c.fullName !== null && c.fullName !== undefined && c.fullName.trim().length > 0 &&
+      c.email !== null && c.email !== undefined && c.email.trim().length > 0
+    );
+    const federalDetailsComplete = hasBasicContact && hasExperience;
+
+    /* Critical issue count: count high-severity unresolved callouts */
+    let criticalCount = 0;
+    if (!summaryPresent) criticalCount = criticalCount + 1;
+    for (let i = 0; i < sectionProgressList.length; i++) {
+      criticalCount = criticalCount + sectionProgressList[i].highSeverityIssueCount;
+    }
+
+    const checks = buildPreflightChecks({
+      pageCount: computedPageCount,
+      pageLimit: 2,
+      requiredSectionsPresent: hasExperience && hasEducation && summaryPresent,
+      federalDetailsComplete: federalDetailsComplete,
+      evidenceCoverageAcceptable: summaryPresent && hasSkills,
+      criticalIssueCount: criticalCount,
+    });
+
+    return buildPreflightState(checks);
+  }, [builderStage, store, computedPageCount, sectionProgressList]);
+
+  /**
+   * Primary CTA configuration — derived from current stage and state.
+   */
+  const primaryCtaConfig = useMemo(function () {
+    const hasTarget = activeTargetJobId !== null;
+    let pendingCount = 0;
+    for (let i = 0; i < proposals.length; i++) {
+      if (proposals[i].status === 'pending') {
+        pendingCount = pendingCount + 1;
+      }
+    }
+    return buildPrimaryCtaConfig(builderStage, hasTarget, pendingCount > 0);
+  }, [builderStage, activeTargetJobId, proposals]);
+
+  /**
+   * Callout annotations filtered to the active scope.
+   *
+   * OVERVIEW MODE:
+   *   Returns all unresolved annotations sorted by severity (high first).
+   *   The callout layer shows a compact summary of cross-section issues.
+   *
+   * SECTION MODE:
+   *   Returns only annotations for the selected section. Uses anchor ID
+   *   prefix matching with special handling for compound section IDs.
+   */
+  const selectedSectionAnnotations = useMemo(function (): TailoringAnnotation[] {
+    if (!canvasSelectedSection) return [];
+
+    /* In overview mode, return all unresolved annotations sorted by
+     * severity so the guidance layer can show cross-section summaries. */
+    if (canvasSelectedSection === RESUME_OVERVIEW_ID) {
+      const unresolvedAnns: TailoringAnnotation[] = [];
+      for (let i = 0; i < tailoringAnnotations.length; i++) {
+        if (!tailoringAnnotations[i].resolved) {
+          unresolvedAnns.push(tailoringAnnotations[i]);
+        }
+      }
+      /* Sort: high > medium > low */
+      const severityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+      unresolvedAnns.sort(function (a, b) {
+        const aVal = severityOrder[a.severity] !== undefined ? severityOrder[a.severity] : 2;
+        const bVal = severityOrder[b.severity] !== undefined ? severityOrder[b.severity] : 2;
+        return aVal - bVal;
+      });
+      return unresolvedAnns;
+    }
+
+    /**
+     * Determine if an annotation belongs to the selected section by
+     * checking the anchor ID prefix. Most sections use their section
+     * ID as the prefix, but some need special handling.
+     */
+    function annotationMatchesSection(anchorId: string, sectionId: string): boolean {
+      if (sectionId === 'federal-details') {
+        return anchorId.startsWith('federal-details-') || anchorId.startsWith('federal-');
+      }
+      if (sectionId === 'supporting-evidence') {
+        return anchorId.startsWith('supporting-evidence-');
+      }
+      return anchorId.startsWith(sectionId);
+    }
+
+    const result: TailoringAnnotation[] = [];
+    for (let i = 0; i < tailoringAnnotations.length; i++) {
+      if (annotationMatchesSection(tailoringAnnotations[i].anchorId, canvasSelectedSection)) {
+        result.push(tailoringAnnotations[i]);
+      }
+    }
+    return result;
+  }, [canvasSelectedSection, tailoringAnnotations]);
+
   /* ---- PathAdvisor screen overrides ---- */
   const setOverrides = usePathAdvisorScreenOverridesStore(function (s) { return s.setOverrides; });
 
@@ -4704,62 +5623,15 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
   }, []);
 
   /*
-   * ---- PathAdvisor: tab-aware route overrides ----
+   * ---- PathAdvisor: minimal route overrides ----
    *
-   * Phase 2 improvement: the PathAdvisor rail content now reflects the
-   * active tab context. In Edit, it emphasizes the weakest bullet; in
-   * Suggested Changes, it emphasizes proposal review; in Coverage Map,
-   * it emphasizes the biggest gap.
-   *
-   * Quick prompts remain the same across tabs since they are all valid
-   * resume improvement actions regardless of which tab is active.
-   *
-   * Depends on [setOverrides, activeTab] so the rail updates when the
-   * user switches tabs. The cleanup function clears overrides on unmount
-   * and on tab change; the immediate re-set in the same cycle prevents
-   * visible flicker.
+   * The PathAdvisor right rail is hidden for Resume Builder (see
+   * SharedDashboardRouteShell hideAdvisor). The builder uses its own
+   * section-scoped callout layer instead. These overrides still set
+   * screen context and suggested prompts so PathAdvisor retains
+   * resume-builder awareness for any floating or mobile access paths.
    */
   useEffect(function () {
-    /* Build tab-specific insight bullets and next best action */
-    let insightBullets: string[] = [];
-    let nextBestAction = {
-      title: 'Improve your resume',
-      text: 'Review suggestions or make direct edits.',
-      ctaLabel: 'Get started',
-    };
-
-    if (activeTab === 'edit') {
-      insightBullets = [
-        'Weak leadership bullet flagged — missing federal language and scope.',
-        'Supervisory experience is high-emphasis at GS-13/14.',
-      ];
-      nextBestAction = {
-        title: 'Fix weakest bullet',
-        text: 'Click the weak bullet and apply the rewrite, or edit manually.',
-        ctaLabel: 'Fix now',
-      };
-    } else if (activeTab === 'suggested-changes') {
-      insightBullets = [
-        'Highest-impact proposal targets Federal Details compliance.',
-        'Review proposals by confidence for fastest improvement.',
-      ];
-      nextBestAction = {
-        title: 'Review top proposal',
-        text: 'Start with the highest-confidence proposal. Each accept improves coverage.',
-        ctaLabel: 'Review fixes',
-      };
-    } else if (activeTab === 'coverage-map') {
-      insightBullets = [
-        'Federal Details gap could cause screening rejection.',
-        'Leadership / Scope at 45% — fix 2 bullets to improve.',
-      ];
-      nextBestAction = {
-        title: 'Fix biggest gap',
-        text: 'Federal Details at 30% is your lowest score.',
-        ctaLabel: 'Fix now',
-      };
-    }
-
     setOverrides({
       screenId: 'resume-builder',
       viewingLabel: 'Resume Builder',
@@ -4767,16 +5639,12 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
       briefingLabel: 'From Resume Builder',
       briefingHelperText: 'Ask deeper questions here.',
       composerPlaceholder: 'Ask PathAdvisor about your resume...',
-      railContent: {
-        insightBullets: insightBullets,
-        nextBestAction: nextBestAction,
-      },
     });
 
     return function () {
       setOverrides(null);
     };
-  }, [setOverrides, activeTab]);
+  }, [setOverrides]);
 
   /* ---- Find the active target job object ---- */
   const activeJob = useMemo(function () {
@@ -4839,10 +5707,24 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
   }, [activeJob, coverageDimensions]);
 
   const computedReadinessScore = useMemo(function () {
-    /* Readiness = match score + small boost for existing content completeness */
+    /* EVIDENCE-BASED READINESS: When evidence scores are available, derive
+     * readiness from the deterministic scoring engine. This produces a more
+     * defensible and explainable overall readiness number that considers
+     * field completion, evidence strength, target relevance, and federal
+     * requirement coverage — weighted by section importance.
+     *
+     * Falls back to the section-progress-based readiness when evidence
+     * scores are not yet computed (preserving backward compatibility). */
+    if (evidenceScores.length > 0) {
+      return deriveEvidenceBasedReadiness(evidenceScores);
+    }
+    if (sectionProgressList.length > 0) {
+      return deriveOverallReadiness(sectionProgressList);
+    }
+    /* Final fallback when nothing is computed yet */
     const boost = store.draft.summary && store.draft.summary.trim() ? 6 : 0;
     return Math.min(100, computedMatchScore + boost + 14);
-  }, [computedMatchScore, store.draft.summary]);
+  }, [evidenceScores, sectionProgressList, computedMatchScore, store.draft.summary]);
 
   const computedTopGap = useMemo(function () {
     /* Find the weakest dimension for the "top gap" display */
@@ -5461,6 +6343,947 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     };
   }, [showSectionDropdown]);
 
+  // =========================================================================
+  // INLINE EDITING HANDLERS — Save edits from the live canvas back to store
+  // =========================================================================
+
+  /**
+   * Handler for saving inline edits from the LiveResumeCanvas.
+   * Routes the edit to the correct part of the resume draft and
+   * persists the change. Supports:
+   *   - summary:        updates draft.summary
+   *   - bullet:         updates the specific bullet in experience.duties
+   *   - skill:          updates draft.skills from comma-separated text
+   *   - federal-field:  updates the specific federal detail field
+   */
+  const handleInlineEditSave = useCallback(function (field: EditingField, newValue: string) {
+    if (!store) return;
+
+    /**
+     * Helper: build a new draft by spreading the current draft and
+     * overriding specific fields. Every handler MUST use this helper
+     * so the new certifications/supportingEvidence fields are never
+     * dropped during reconstruction.
+     */
+    function makeDraft(overrides: Partial<ResumeDraft>): ResumeDraft {
+      return Object.assign({}, store.draft, overrides);
+    }
+
+    if (field.type === 'summary') {
+      persist(updateDraft(store, makeDraft({ summary: newValue })));
+    } else if (field.type === 'bullet' && field.experienceId !== undefined && field.bulletIndex !== undefined) {
+      /* Update a specific experience bullet by reconstructing duties string */
+      const newExperience: ResumeExperience[] = [];
+      for (let i = 0; i < store.draft.experience.length; i++) {
+        const exp = store.draft.experience[i];
+        if (exp.id === field.experienceId) {
+          const rawLines = exp.duties ? exp.duties.split('\n') : [];
+          const bulletLines: string[] = [];
+          for (let j = 0; j < rawLines.length; j++) {
+            const trimmed = rawLines[j].replace(/^[•\-*]\s*/, '').trim();
+            if (trimmed) {
+              bulletLines.push(trimmed);
+            }
+          }
+          if (field.bulletIndex < bulletLines.length) {
+            bulletLines[field.bulletIndex] = newValue;
+          }
+          const dutiesLines: string[] = [];
+          for (let j = 0; j < bulletLines.length; j++) {
+            dutiesLines.push('• ' + bulletLines[j]);
+          }
+          const updated = Object.assign({}, exp, { duties: dutiesLines.join('\n') });
+          newExperience.push(updated);
+        } else {
+          newExperience.push(exp);
+        }
+      }
+      persist(updateDraft(store, makeDraft({ experience: newExperience })));
+    } else if (field.type === 'skill') {
+      /* Update skills from comma-separated text, preserving existing IDs. */
+      const parts = newValue.split(',');
+      const newSkills: Array<{ id: string; name: string }> = [];
+      for (let i = 0; i < parts.length; i++) {
+        const name = parts[i].trim();
+        if (name) {
+          let existingId = '';
+          for (let j = 0; j < store.draft.skills.length; j++) {
+            if (store.draft.skills[j].name.toLowerCase() === name.toLowerCase()) {
+              existingId = store.draft.skills[j].id;
+              break;
+            }
+          }
+          const skillId = existingId || ('skill-' + i + '-' + Date.now());
+          newSkills.push({ id: skillId, name: name });
+        }
+      }
+      persist(updateDraft(store, makeDraft({ skills: newSkills })));
+    }
+    else if (field.type === 'experience-field' && field.experienceId && field.fieldName) {
+      /* Update a specific Work Experience subfield (jobTitle, employer,
+       * dateRange, hoursPerWeek). */
+      const newExperience: ResumeExperience[] = [];
+      for (let i = 0; i < store.draft.experience.length; i++) {
+        const exp = store.draft.experience[i];
+        if (exp.id === field.experienceId) {
+          const updated = Object.assign({}, exp);
+          if (field.fieldName === 'jobTitle') {
+            updated.jobTitle = newValue;
+          } else if (field.fieldName === 'employer') {
+            updated.employer = newValue;
+          } else if (field.fieldName === 'dateRange') {
+            const dashIdx = newValue.indexOf('\u2013');
+            const hyphenIdx = dashIdx >= 0 ? dashIdx : newValue.indexOf('-');
+            if (hyphenIdx >= 0) {
+              updated.startDate = newValue.substring(0, hyphenIdx).trim();
+              updated.endDate = newValue.substring(hyphenIdx + 1).trim();
+            } else {
+              updated.startDate = newValue.trim();
+              updated.endDate = '';
+            }
+          } else if (field.fieldName === 'hoursPerWeek') {
+            updated.hoursPerWeek = newValue.trim();
+          }
+          newExperience.push(updated);
+        } else {
+          newExperience.push(exp);
+        }
+      }
+      persist(updateDraft(store, makeDraft({ experience: newExperience })));
+    }
+    else if (field.type === 'contact-field' && field.fieldName) {
+      /* Update a specific contact field. Handles location as a special
+       * case (parses "City, State" into separate city/state fields). */
+      const contactCopy = Object.assign({}, store.draft.contact);
+      if (field.fieldName === 'fullName') {
+        contactCopy.fullName = newValue;
+      } else if (field.fieldName === 'email') {
+        contactCopy.email = newValue;
+      } else if (field.fieldName === 'phone') {
+        contactCopy.phone = newValue;
+      } else if (field.fieldName === 'location') {
+        const commaIdx = newValue.indexOf(',');
+        if (commaIdx >= 0) {
+          contactCopy.city = newValue.substring(0, commaIdx).trim();
+          contactCopy.state = newValue.substring(commaIdx + 1).trim();
+        } else {
+          contactCopy.city = newValue.trim();
+          contactCopy.state = '';
+        }
+      }
+      persist(updateDraft(store, makeDraft({ contact: contactCopy })));
+    }
+    else if (field.type === 'education-field' && field.educationId && field.fieldName) {
+      /* Update a specific education subfield (degree, field, institution,
+       * graduationDate, gpa). Handles the 'new' sentinel for adding a
+       * fresh education entry. */
+      if (field.educationId === 'new') {
+        const newEdu = {
+          id: 'edu-' + Date.now(),
+          institution: '',
+          degree: newValue,
+          field: '',
+          graduationDate: '',
+          gpa: '',
+        };
+        persist(updateDraft(store, makeDraft({
+          education: store.draft.education.concat([newEdu]),
+        })));
+      } else {
+        const newEducation = store.draft.education.map(function (edu) {
+          if (edu.id !== field.educationId) return edu;
+          const updated = Object.assign({}, edu);
+          if (field.fieldName === 'degree') updated.degree = newValue;
+          else if (field.fieldName === 'field') updated.field = newValue;
+          else if (field.fieldName === 'institution') updated.institution = newValue;
+          else if (field.fieldName === 'graduationDate') updated.graduationDate = newValue;
+          else if (field.fieldName === 'gpa') updated.gpa = newValue;
+          return updated;
+        });
+        persist(updateDraft(store, makeDraft({ education: newEducation })));
+      }
+    }
+    else if (field.type === 'certification') {
+      /* Update certifications from comma-separated text, preserving
+       * existing IDs for matching names (same pattern as skills). */
+      const parts = newValue.split(',');
+      const newCerts: Array<{ id: string; name: string }> = [];
+      const existingCerts = store.draft.certifications || [];
+      for (let i = 0; i < parts.length; i++) {
+        const name = parts[i].trim();
+        if (name) {
+          let existingId = '';
+          for (let j = 0; j < existingCerts.length; j++) {
+            if (existingCerts[j].name.toLowerCase() === name.toLowerCase()) {
+              existingId = existingCerts[j].id;
+              break;
+            }
+          }
+          const certId = existingId || ('cert-' + i + '-' + Date.now());
+          newCerts.push({ id: certId, name: name });
+        }
+      }
+      persist(updateDraft(store, makeDraft({ certifications: newCerts })));
+    }
+    else if (field.type === 'supporting-evidence' && field.evidenceId) {
+      /* Update or add a supporting evidence item. Handles the 'new'
+       * sentinel for creating a fresh evidence entry. */
+      const existingEvidence = store.draft.supportingEvidence || [];
+      if (field.evidenceId === 'new') {
+        if (newValue.trim()) {
+          const newItem = { id: 'ev-' + Date.now(), text: newValue.trim() };
+          persist(updateDraft(store, makeDraft({
+            supportingEvidence: existingEvidence.concat([newItem]),
+          })));
+        }
+      } else {
+        const updated = existingEvidence.map(function (ev) {
+          if (ev.id !== field.evidenceId) return ev;
+          return Object.assign({}, ev, { text: newValue });
+        });
+        persist(updateDraft(store, makeDraft({ supportingEvidence: updated })));
+      }
+    }
+    /* Federal field edits are stored in mock state — in a real app
+     * these would update the core model. For now, the edit visually
+     * demonstrates the interaction pattern. */
+  }, [store, persist]);
+
+  /**
+   * Handler for section action chip clicks from the LiveResumeCanvas.
+   * Routes the action to the appropriate behavior. Currently logs
+   * the action — in the future, these will trigger PathOS guidance,
+   * open deeper editors, or initiate AI-assisted improvements.
+   */
+  /**
+   * Handler for section action chip clicks from the LiveResumeCanvas.
+   * Routes each action to a concrete behavior using deterministic logic.
+   * In a future pass these will integrate with PathOS guidance AI, but
+   * right now every action produces a real, visible change:
+   *
+   *   edit:       Enters edit mode for the first editable field in the section.
+   *   strengthen: Produces a deterministic strengthened version of the section
+   *               content (adds quantifiers, action verbs, detail).
+   *   compress:   Produces a deterministic compressed version of the section
+   *               content (removes filler, tightens phrasing).
+   *   add:        Inserts a new empty item at the correct scope (new bullet,
+   *               new education entry, new certification, etc.).
+   */
+  const handleSectionAction = useCallback(function (sectionId: string, action: string) {
+    if (!store) return;
+
+    /**
+     * Helper: build a new draft by spreading the current draft and
+     * overriding specific fields, ensuring no fields are dropped.
+     */
+    function makeDraft(overrides: Partial<ResumeDraft>): ResumeDraft {
+      return Object.assign({}, store.draft, overrides);
+    }
+
+    /* ---- EDIT: scroll-to / focus the first editable region ------------- */
+    if (action === 'edit') {
+      /* Set the section as selected and edit-ready so the user can
+       * click any field in that section to edit it. The canvas will
+       * visually highlight the section and show the inline edit hints. */
+      setCanvasSelectedSection(sectionId);
+      return;
+    }
+
+    /* ---- STRENGTHEN: deterministic rewrite with stronger language ----- */
+    if (action === 'strengthen') {
+      if (sectionId === 'summary' && store.draft.summary) {
+        /* Add quantifiers and action verbs to the summary */
+        let stronger = store.draft.summary;
+        if (!stronger.includes('proven')) {
+          stronger = 'Proven ' + stronger.charAt(0).toLowerCase() + stronger.slice(1);
+        }
+        if (!stronger.includes('track record')) {
+          stronger = stronger.replace(/experience/i, 'track record of success');
+        }
+        if (stronger !== store.draft.summary) {
+          persist(updateDraft(store, makeDraft({ summary: stronger })));
+        }
+      } else if (sectionId === 'experience' && store.draft.experience.length > 0) {
+        /* Strengthen the first experience entry's duties by adding
+         * quantifiers to bullets that lack them */
+        const exp = store.draft.experience[0];
+        const lines = exp.duties ? exp.duties.split('\n') : [];
+        const strengthened: string[] = [];
+        for (let i = 0; i < lines.length; i++) {
+          let line = lines[i];
+          if (line && !line.match(/\d+/) && !line.match(/percent|%/i)) {
+            line = line.replace(/\.\s*$/, ', resulting in measurable efficiency gains.');
+          }
+          strengthened.push(line);
+        }
+        const updatedExp = Object.assign({}, exp, { duties: strengthened.join('\n') });
+        const newExperience = [updatedExp].concat(store.draft.experience.slice(1));
+        persist(updateDraft(store, makeDraft({ experience: newExperience })));
+      }
+      return;
+    }
+
+    /* ---- COMPRESS: deterministic tightening of section content --------- */
+    if (action === 'compress') {
+      if (sectionId === 'summary' && store.draft.summary) {
+        /* Remove filler words and tighten the summary */
+        let compressed = store.draft.summary;
+        const fillerPatterns = [
+          /\bvery\b\s*/gi,
+          /\breally\b\s*/gi,
+          /\bjust\b\s*/gi,
+          /\bbasically\b\s*/gi,
+          /\bin order to\b/gi,
+        ];
+        for (let i = 0; i < fillerPatterns.length; i++) {
+          compressed = compressed.replace(fillerPatterns[i], '');
+        }
+        compressed = compressed.replace(/in order to/gi, 'to');
+        compressed = compressed.replace(/\s{2,}/g, ' ').trim();
+        if (compressed !== store.draft.summary) {
+          persist(updateDraft(store, makeDraft({ summary: compressed })));
+        }
+      } else if (sectionId === 'experience' && store.draft.experience.length > 0) {
+        /* Compress the first experience entry's duties */
+        const exp = store.draft.experience[0];
+        const lines = exp.duties ? exp.duties.split('\n') : [];
+        const compressed: string[] = [];
+        for (let i = 0; i < lines.length; i++) {
+          let line = lines[i];
+          line = line.replace(/\bvery\b\s*/gi, '');
+          line = line.replace(/\breally\b\s*/gi, '');
+          line = line.replace(/\bin order to\b/gi, 'to');
+          line = line.replace(/\s{2,}/g, ' ').trim();
+          if (line) compressed.push(line);
+        }
+        const updatedExp = Object.assign({}, exp, { duties: compressed.join('\n') });
+        const newExperience = [updatedExp].concat(store.draft.experience.slice(1));
+        persist(updateDraft(store, makeDraft({ experience: newExperience })));
+      }
+      return;
+    }
+
+    /* ---- ADD: insert a new item in the correct scope ------------------- */
+    if (action === 'add') {
+      const ts = Date.now();
+      if (sectionId === 'experience') {
+        const newExp: ResumeExperience = {
+          id: 'exp-' + ts,
+          jobTitle: '',
+          employer: '',
+          location: '',
+          startDate: '',
+          endDate: '',
+          hoursPerWeek: '40',
+          grade: '',
+          duties: '',
+        };
+        persist(updateDraft(store, makeDraft({
+          experience: store.draft.experience.concat([newExp]),
+        })));
+      } else if (sectionId === 'education') {
+        const newEdu = {
+          id: 'edu-' + ts,
+          institution: '',
+          degree: '',
+          field: '',
+          graduationDate: '',
+          gpa: '',
+        };
+        persist(updateDraft(store, makeDraft({
+          education: store.draft.education.concat([newEdu]),
+        })));
+      } else if (sectionId === 'skills') {
+        const newSkill = { id: 'skill-' + ts, name: 'New Skill' };
+        persist(updateDraft(store, makeDraft({
+          skills: store.draft.skills.concat([newSkill]),
+        })));
+      } else if (sectionId === 'certifications') {
+        const existingCerts = store.draft.certifications || [];
+        const newCert = { id: 'cert-' + ts, name: 'New Certification' };
+        persist(updateDraft(store, makeDraft({
+          certifications: existingCerts.concat([newCert]),
+        })));
+      } else if (sectionId === 'supporting-evidence') {
+        const existingEvidence = store.draft.supportingEvidence || [];
+        const newEvidence = { id: 'ev-' + ts, text: '' };
+        persist(updateDraft(store, makeDraft({
+          supportingEvidence: existingEvidence.concat([newEvidence]),
+        })));
+      }
+      return;
+    }
+  }, [store, persist]);
+
+  /**
+   * Handler for removing individual items from the resume.
+   * Routes the remove to the correct section and persists the change.
+   *
+   * COVERAGE:
+   *   experience:              remove a job entry by ID
+   *   experience-add-bullet:   add a blank bullet to an experience entry
+   *   education:               remove an education entry by ID
+   *   certifications:          remove a certification by ID
+   *   supporting-evidence:     remove an evidence item by ID
+   *   experience (with extra.bulletIndex): remove a specific bullet
+   *
+   * TRUST RULE: Every user-created item must have a visible removal path.
+   * This handler fulfills that requirement for all list-based sections.
+   */
+  const handleRemoveItem = useCallback(function (sectionId: string, itemId: string, extra?: { bulletIndex?: number }) {
+    if (!store) return;
+
+    function makeDraft(overrides: Partial<ResumeDraft>): ResumeDraft {
+      return Object.assign({}, store.draft, overrides);
+    }
+
+    if (sectionId === 'experience' && extra && extra.bulletIndex !== undefined) {
+      /* Remove a specific bullet from an experience entry */
+      const newExperience: ResumeExperience[] = [];
+      for (let i = 0; i < store.draft.experience.length; i++) {
+        const exp = store.draft.experience[i];
+        if (exp.id === itemId) {
+          const rawLines = exp.duties ? exp.duties.split('\n') : [];
+          const bulletLines: string[] = [];
+          for (let j = 0; j < rawLines.length; j++) {
+            const trimmed = rawLines[j].replace(/^[•\-*]\s*/, '').trim();
+            if (trimmed) bulletLines.push(trimmed);
+          }
+          /* Remove the bullet at the specified index */
+          const remaining: string[] = [];
+          for (let j = 0; j < bulletLines.length; j++) {
+            if (j !== extra.bulletIndex) {
+              remaining.push('• ' + bulletLines[j]);
+            }
+          }
+          newExperience.push(Object.assign({}, exp, { duties: remaining.join('\n') }));
+        } else {
+          newExperience.push(exp);
+        }
+      }
+      persist(updateDraft(store, makeDraft({ experience: newExperience })));
+      return;
+    }
+
+    if (sectionId === 'experience-add-bullet') {
+      /* Add a new blank bullet to a specific experience entry */
+      const newExperience: ResumeExperience[] = [];
+      for (let i = 0; i < store.draft.experience.length; i++) {
+        const exp = store.draft.experience[i];
+        if (exp.id === itemId) {
+          const currentDuties = exp.duties ? exp.duties.trim() : '';
+          const newDuties = currentDuties
+            ? currentDuties + '\n• New responsibility or achievement'
+            : '• New responsibility or achievement';
+          newExperience.push(Object.assign({}, exp, { duties: newDuties }));
+        } else {
+          newExperience.push(exp);
+        }
+      }
+      persist(updateDraft(store, makeDraft({ experience: newExperience })));
+      return;
+    }
+
+    if (sectionId === 'experience') {
+      /* Remove a job entry */
+      const filtered = store.draft.experience.filter(function (exp) { return exp.id !== itemId; });
+      persist(updateDraft(store, makeDraft({ experience: filtered })));
+      return;
+    }
+
+    if (sectionId === 'education') {
+      /* Remove an education entry */
+      const filtered = store.draft.education.filter(function (edu) { return edu.id !== itemId; });
+      persist(updateDraft(store, makeDraft({ education: filtered })));
+      return;
+    }
+
+    if (sectionId === 'certifications') {
+      /* Remove a certification */
+      const existing = store.draft.certifications || [];
+      const filtered = existing.filter(function (cert) { return cert.id !== itemId; });
+      persist(updateDraft(store, makeDraft({ certifications: filtered })));
+      return;
+    }
+
+    if (sectionId === 'supporting-evidence') {
+      /* Remove an evidence item */
+      const existing = store.draft.supportingEvidence || [];
+      const filtered = existing.filter(function (ev) { return ev.id !== itemId; });
+      persist(updateDraft(store, makeDraft({ supportingEvidence: filtered })));
+      return;
+    }
+  }, [store, persist]);
+
+  /**
+   * Handler for callout card actions from the ResumeCalloutLayer.
+   *
+   * ACTION ROUTING:
+   *   'apply':      Apply the annotation's suggestedText directly to the
+   *                 document. The document updates visibly.
+   *   'edit-first': Load the suggestedText into the inline editor for the
+   *                 relevant field, allowing the user to refine before saving.
+   *   'dismiss':    Close the guidance card without action.
+   *   'primary':    Navigate to the section (legacy fallback when no
+   *                 suggestedText is available).
+   *
+   * This wiring makes suggestions actionable — the user can affect the
+   * document directly from the guidance card instead of just reading advice.
+   */
+  const handleCalloutAction = useCallback(function (annotationId: string, action: string) {
+    /* Find the source annotation */
+    let targetAnnotation: TailoringAnnotation | null = null;
+    for (let i = 0; i < tailoringAnnotations.length; i++) {
+      if (tailoringAnnotations[i].id === annotationId) {
+        targetAnnotation = tailoringAnnotations[i];
+        break;
+      }
+    }
+
+    /* DISMISS: Just close the active card */
+    if (action === 'dismiss') {
+      setActiveCalloutId(null);
+      calloutLinesHook.setActiveLineId(null);
+      return;
+    }
+
+    if (!targetAnnotation) return;
+
+    /* APPLY: Insert the suggested text directly into the document.
+     * After applying:
+     *   1. The document field updates visibly (via handleInlineEditSave)
+     *   2. The annotation is marked as resolved (updating section status)
+     *   3. A confirmation toast appears briefly
+     *   4. The guidance card closes */
+    if (action === 'apply' && targetAnnotation.suggestedText) {
+      const suggestedText = targetAnnotation.suggestedText;
+      const anchorId = targetAnnotation.anchorId;
+
+      /* Route by anchor prefix to determine which field to update */
+      if (anchorId.startsWith('experience-bullet-')) {
+        const bMatch = anchorId.match(/^experience-bullet-(exp-\d+)-b(\d+)$/);
+        if (bMatch) {
+          const expId = bMatch[1];
+          const bulletIdx = parseInt(bMatch[2], 10);
+          handleInlineEditSave(
+            { type: 'bullet', experienceId: expId, bulletIndex: bulletIdx },
+            suggestedText
+          );
+        }
+      } else if (anchorId.startsWith('skills-')) {
+        const currentNames: string[] = [];
+        for (let i = 0; i < store.draft.skills.length; i++) {
+          currentNames.push(store.draft.skills[i].name);
+        }
+        const combined = currentNames.join(', ') + ', ' + suggestedText;
+        handleInlineEditSave({ type: 'skill' }, combined);
+      } else if (anchorId.startsWith('summary-')) {
+        handleInlineEditSave({ type: 'summary' }, suggestedText);
+      }
+
+      /* Mark this annotation as resolved so section statuses update */
+      const newResolved = Object.assign({}, resolvedAnnotationIds);
+      newResolved[annotationId] = true;
+      setResolvedAnnotationIds(newResolved);
+
+      /* Show confirmation feedback — auto-clears after 3 seconds */
+      setAppliedFeedback({
+        annotationId: annotationId,
+        label: targetAnnotation.label,
+        timestamp: Date.now(),
+      });
+      setTimeout(function () {
+        setAppliedFeedback(function (prev) {
+          if (prev && prev.annotationId === annotationId) {
+            return null;
+          }
+          return prev;
+        });
+      }, 3000);
+
+      /* Close the guidance card after applying */
+      setActiveCalloutId(null);
+      calloutLinesHook.setActiveLineId(null);
+      return;
+    }
+
+    /* EDIT-FIRST: Load suggestion into the inline editor for refinement.
+     * The user sees the suggested content pre-loaded into the editable
+     * field so they can review and modify before saving. This makes the
+     * "Edit First" workflow clear: review → modify → save. */
+    if (action === 'edit-first' && targetAnnotation.suggestedText) {
+      const anchorId = targetAnnotation.anchorId;
+      const suggestedText = targetAnnotation.suggestedText;
+
+      /* Navigate to the owning section and activate edit mode */
+      if (anchorId.startsWith('experience-')) {
+        setCanvasSelectedSection('experience');
+      } else if (anchorId.startsWith('summary-')) {
+        setCanvasSelectedSection('summary');
+      } else if (anchorId.startsWith('skills-')) {
+        setCanvasSelectedSection('skills');
+      } else {
+        const parts = anchorId.split('-');
+        if (parts.length > 0) {
+          setCanvasSelectedSection(parts[0]);
+        }
+      }
+      setIsEditReady(true);
+
+      /* Load the suggested text into the editing state after a short
+       * delay so the section selection and scroll have time to settle. */
+      if (anchorId.startsWith('experience-bullet-')) {
+        const bMatch = anchorId.match(/^experience-bullet-(exp-\d+)-b(\d+)$/);
+        if (bMatch) {
+          const bulletId = bMatch[1] + '-b' + bMatch[2];
+          setEditingBulletId(bulletId);
+          setEditingBulletText(suggestedText);
+        }
+      } else if (anchorId.startsWith('summary-')) {
+        setEditingSummary(true);
+        setEditingSummaryText(suggestedText);
+      }
+
+      setActiveCalloutId(null);
+      calloutLinesHook.setActiveLineId(null);
+      return;
+    }
+
+    /* PRIMARY (fallback): Navigate to the section */
+    const anchorId = targetAnnotation.anchorId;
+    const parts = anchorId.split('-');
+    if (parts.length > 0) {
+      setCanvasSelectedSection(parts[0]);
+    }
+  }, [tailoringAnnotations, store.draft, handleInlineEditSave, calloutLinesHook, resolvedAnnotationIds]);
+
+  // =========================================================================
+  // PATHADVISOR ON-DEMAND EXPLANATION — context builder + dispatch
+  // =========================================================================
+
+  /**
+   * Collects all unresolved scored issues for the current scope (overview
+   * or selected section). Used by TopFixBanner to identify the single
+   * most impactful next action without the parent screen needing to
+   * re-sort or filter.
+   */
+  const scopeIssues: SectionIssue[] = useMemo(function () {
+    if (evidenceScores.length === 0) return [];
+
+    const issues: SectionIssue[] = [];
+
+    if (isOverviewMode) {
+      /* In overview mode, collect all issues across all sections */
+      for (let i = 0; i < evidenceScores.length; i++) {
+        const sectionScore = evidenceScores[i];
+        for (let j = 0; j < sectionScore.issues.length; j++) {
+          if (!sectionScore.issues[j].resolved) {
+            issues.push(sectionScore.issues[j]);
+          }
+        }
+      }
+    } else if (canvasSelectedSection) {
+      /* In section mode, collect issues for the selected section */
+      for (let i = 0; i < evidenceScores.length; i++) {
+        if (evidenceScores[i].sectionId === canvasSelectedSection) {
+          for (let j = 0; j < evidenceScores[i].issues.length; j++) {
+            if (!evidenceScores[i].issues[j].resolved) {
+              issues.push(evidenceScores[i].issues[j]);
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    return sortIssuesByPriority(issues);
+  }, [evidenceScores, isOverviewMode, canvasSelectedSection]);
+
+  /**
+   * Handler for PathAdvisor on-demand explanation triggers. Builds a
+   * grounded context payload from the current Resume Builder state and
+   * dispatches it to PathAdvisor via the screen overrides store.
+   *
+   * CONTEXT INJECTION DESIGN: When a user clicks "Why this matters" on
+   * an issue card, this handler assembles:
+   *   - the screen (resume-builder)
+   *   - the current mode (overview/section)
+   *   - the active section and its health
+   *   - the active issue details (annotation class, category, label)
+   *   - the target job context
+   *   - a pre-composed natural-language prompt
+   *
+   * This context is injected into the PathAdvisor overrides so that
+   * PathAdvisor opens already understanding what the user is asking about.
+   */
+  const handleExplainRequest = useCallback(function (intent: string, annotationId: string | null) {
+    /* Find the annotation if one is referenced */
+    let matchedAnnotation: TailoringAnnotation | null = null;
+    if (annotationId !== null) {
+      for (let i = 0; i < tailoringAnnotations.length; i++) {
+        if (tailoringAnnotations[i].id === annotationId) {
+          matchedAnnotation = tailoringAnnotations[i];
+          break;
+        }
+      }
+    }
+
+    /* Find section health for the active section */
+    let sectionHealthPct: number | null = null;
+    if (canvasSelectedSection && sectionProgressList.length > 0) {
+      for (let i = 0; i < sectionProgressList.length; i++) {
+        if (sectionProgressList[i].sectionId === canvasSelectedSection) {
+          sectionHealthPct = sectionProgressList[i].completionPct;
+          break;
+        }
+      }
+    }
+
+    /* Build the grounded context payload */
+    const ctx: PathAdvisorResumeContext = {
+      screen: 'resume-builder',
+      intent: intent as PathAdvisorTriggerIntent,
+      mode: isOverviewMode ? 'overview' : 'section',
+      selectedSection: canvasSelectedSection,
+      activeCalloutId: activeCalloutId,
+      issueAnnotationClass: matchedAnnotation ? matchedAnnotation.annotationClass : null,
+      issueCategory: matchedAnnotation ? matchedAnnotation.subType : null,
+      issueLabel: matchedAnnotation ? matchedAnnotation.label : null,
+      issueDescription: matchedAnnotation ? matchedAnnotation.description : null,
+      issueSeverity: matchedAnnotation ? matchedAnnotation.severity : null,
+      suggestedFix: matchedAnnotation && matchedAnnotation.suggestedText ? matchedAnnotation.suggestedText : null,
+      sectionHealthPct: sectionHealthPct,
+      overallReadiness: computedReadinessScore,
+      targetJobTitle: activeJob ? activeJob.title : null,
+      targetJobId: activeJob ? activeJob.id : null,
+      composedPrompt: '',
+    };
+
+    /* Build the natural-language prompt from the context */
+    ctx.composedPrompt = buildPathAdvisorPrompt(ctx);
+
+    /* Update PathAdvisor overrides with the grounded context.
+     * This injects the composed prompt as the composer placeholder
+     * and adds context-specific suggested prompts so PathAdvisor
+     * opens already understanding the user's question. */
+    setOverrides({
+      screenId: 'resume-builder',
+      viewingLabel: 'Resume Builder',
+      suggestedPrompts: [
+        ctx.composedPrompt,
+        'How can I strengthen this section?',
+        'What keywords am I missing?',
+      ],
+      briefingLabel: 'From Resume Builder',
+      briefingHelperText: ctx.composedPrompt,
+      composerPlaceholder: ctx.composedPrompt,
+    });
+
+    /* Open the PathAdvisor modal with the grounded context.
+     * The modal renders a structured explanation immediately so
+     * the user gets value without typing. The overrides above are
+     * also updated for consistency with the broader PathAdvisor
+     * system (future mobile rail, etc.). */
+    setPathAdvisorModalContext(ctx);
+    setPathAdvisorModalOpen(true);
+
+  }, [
+    tailoringAnnotations,
+    canvasSelectedSection,
+    sectionProgressList,
+    isOverviewMode,
+    activeCalloutId,
+    computedReadinessScore,
+    activeJob,
+    setOverrides,
+  ]);
+
+  // =========================================================================
+  // CALLOUT LINE — Anchor hover handler and highlighted anchor computation
+  // =========================================================================
+
+  /**
+   * Handle hover on a data-callout-anchor element inside the canvas.
+   * Maps the anchor ID to the corresponding callout line ID and
+   * updates the line's source hover state so the line + endpoint highlight.
+   */
+  /**
+   * PRINT/PDF EXPORT — opens the preview overlay in print-ready mode.
+   *
+   * The primary user-facing export is print-to-PDF via the browser's
+   * built-in print dialog. This produces a clean, readable PDF without
+   * requiring a third-party PDF library. The preview overlay renders
+   * the resume in a print-optimized format with white background,
+   * high-contrast text, and proper margins.
+   *
+   * The old JSON export is preserved as a secondary dev/backup option.
+   */
+  const handleExportPrint = useCallback(function () {
+    setShowPreview(true);
+  }, []);
+
+  /**
+   * JSON EXPORT — secondary/developer format for data backup.
+   *
+   * Exports the full resume store as a JSON file. This is NOT the
+   * primary user-facing export — it's a data backup/transfer format.
+   * The primary export is print-to-PDF via handleExportPrint.
+   */
+  const handleExportJSON = useCallback(function () {
+    if (!store) return;
+    const jsonStr = exportResumeJSON(store);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    link.download = 'resume-' + dateStr + '.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [store]);
+
+  /**
+   * Create a new resume version from the current draft. Saves a
+   * snapshot with a label and refreshes the store state.
+   */
+  const handleCreateVersion = useCallback(function (label: string) {
+    if (!store) return;
+    const updated = createVersion(store, label || 'Version ' + new Date().toLocaleDateString());
+    persist(updated);
+    /* After creating, make the new version the active selection so the
+     * user is looking at the version they just created. The newest
+     * version is at index 0 in the versions array. */
+    if (updated.versions.length > 0) {
+      setSelectedResumeId(updated.versions[0].id);
+    }
+    setShowNewResumeModal(false);
+  }, [store, persist]);
+
+  /**
+   * Create a blank federal resume version. Uses the core createDefaultDraft()
+   * to produce empty-but-scaffolded sections (contact, summary, experience,
+   * education, skills, certifications, supporting evidence). The draft is
+   * replaced with the blank scaffolding and then saved as a named version.
+   * This way the new version is genuinely distinct from the default resume.
+   */
+  const handleCreateBlankResume = useCallback(function (label: string) {
+    if (!store) return;
+    /* Snapshot current draft first so the user can return to it */
+    const snapshotted = createVersion(store, 'Before blank — ' + new Date().toLocaleDateString());
+    /* Replace draft with blank federal scaffold */
+    const blankDraft = createDefaultDraft();
+    const withBlank = updateDraft(snapshotted, blankDraft);
+    /* Save the blank draft as a new named version */
+    const withVersion = createVersion(withBlank, label || 'New Federal Resume');
+    persist(withVersion);
+    /* Switch to the new blank version */
+    if (withVersion.versions.length > 0) {
+      setSelectedResumeId(withVersion.versions[0].id);
+    }
+    setShowNewResumeModal(false);
+  }, [store, persist]);
+
+  const handleAnchorHover = useCallback(function (anchorId: string, hovered: boolean) {
+    /* Find the callout line whose anchor matches this anchorId */
+    for (let i = 0; i < calloutLineDefs.length; i++) {
+      if (calloutLineDefs[i].anchor.anchorId === anchorId) {
+        calloutLinesHook.setSourceHovered(calloutLineDefs[i].id, hovered);
+        return;
+      }
+    }
+  }, [calloutLineDefs, calloutLinesHook]);
+
+  /**
+   * Compute highlighted anchor IDs from callout line endpoint hover state.
+   * When an endpoint circle is hovered, the source anchor in the resume
+   * should receive a subtle highlight to show the visual connection.
+   */
+  const highlightedAnchors: Record<string, boolean> = useMemo(function () {
+    const result: Record<string, boolean> = {};
+    const stateKeys = Object.keys(calloutLinesHook.lineStates);
+    for (let i = 0; i < stateKeys.length; i++) {
+      const state = calloutLinesHook.lineStates[stateKeys[i]];
+      if (state.endpointHovered) {
+        /* Find the corresponding callout line def to get the anchor ID */
+        for (let j = 0; j < calloutLineDefs.length; j++) {
+          if (calloutLineDefs[j].id === state.lineId) {
+            result[calloutLineDefs[j].anchor.anchorId] = true;
+            break;
+          }
+        }
+      }
+    }
+    return result;
+  }, [calloutLinesHook.lineStates, calloutLineDefs]);
+
+  // =========================================================================
+  // DROPDOWN DATA — Build dropdown items for the top bar selectors
+  // =========================================================================
+
+  /**
+   * Target job dropdown items — derived from the saved jobs list.
+   * Each item shows the job title with the agency as a sublabel.
+   */
+  const targetJobDropdownItems: DropdownItem[] = useMemo(function () {
+    const items: DropdownItem[] = [];
+    for (let i = 0; i < savedJobs.length; i++) {
+      const job = savedJobs[i];
+      items.push({
+        id: job.id,
+        label: job.title,
+        sublabel: job.agency ? job.agency.split(',')[0] : undefined,
+      });
+    }
+    return items;
+  }, [savedJobs]);
+
+  /**
+   * Resume version dropdown items. Includes "Default Resume" (the current
+   * working draft) plus any saved version snapshots, plus a "New Resume
+   * Version" action at the bottom for creating new snapshots.
+   *
+   * NAMING: "Default Resume" replaces the previous "Master Resume" label
+   * to be clearer and more approachable for non-technical users.
+   */
+  const resumeVersionDropdownItems: DropdownItem[] = useMemo(function () {
+    const items: DropdownItem[] = [
+      { id: 'master', label: 'Default Resume' },
+    ];
+    const versions = store ? listVersions(store) : [];
+    for (let i = 0; i < versions.length; i++) {
+      items.push({
+        id: versions[i].id,
+        label: versions[i].label,
+        sublabel: new Date(versions[i].createdAt).toLocaleDateString(),
+      });
+    }
+    items.push({ id: 'new', label: '+ New Resume Version' });
+    return items;
+  }, [store]);
+
+  /**
+   * Active resume label — dynamically reflects the currently selected
+   * resume or version. When the user is on the default draft, shows
+   * "Default Resume". When on a saved version, shows that version's label.
+   * This ensures the top bar selector always honestly shows what is active.
+   */
+  const activeResumeLabel: string = useMemo(function () {
+    if (selectedResumeId === 'master') {
+      return 'Default Resume';
+    }
+    if (store) {
+      const versions = listVersions(store);
+      for (let i = 0; i < versions.length; i++) {
+        if (versions[i].id === selectedResumeId) {
+          return versions[i].label;
+        }
+      }
+    }
+    return 'Default Resume';
+  }, [selectedResumeId, store]);
+
   /* ---- Loading state ---- */
   if (!mounted) {
     return (
@@ -5473,479 +7296,1774 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
   /* ---- Render ---- */
   return (
     <div className="flex flex-col h-full" style={{ color: 'var(--p-text)' }} data-testid="resume-builder-screen">
-      {/* 1) Top workspace bar */}
-      <WorkspaceTopBar
-        savedJobs={savedJobs}
-        activeTargetJobId={activeTargetJobId}
-        onTargetJobChange={handleTargetJobChange}
-        autonomyMode={autonomyMode}
-        onAutonomyModeChange={setAutonomyMode}
-        versionCount={versionCount}
-        showTargetJobDropdown={showTargetJobDropdown}
-        onToggleTargetJobDropdown={function () { setShowTargetJobDropdown(!showTargetJobDropdown); }}
-        onCloseTargetJobDropdown={function () { setShowTargetJobDropdown(false); }}
+      {/* 1) NEW: Stable 7-slot top bar — replaces old WorkspaceTopBar.
+       *
+       * Slot positions are fixed across all builder stages (Partial,
+       * Tailoring, Validation). Only content inside each slot changes.
+       * This eliminates the header reflow problems from the old layout.
+       */}
+      <ResumeBuilderTopBar
+        stage={builderStage}
+        onStageChange={setBuilderStage}
+        resumeLabel={activeResumeLabel}
+        resumeVersions={resumeVersionDropdownItems}
+        selectedResumeId={selectedResumeId}
+        onResumeSelect={function (resumeId: string) {
+          if (resumeId === 'new') {
+            setShowNewResumeModal(true);
+            return;
+          }
+          /* If the user selects the same version they're on, no-op */
+          if (resumeId === selectedResumeId) return;
+          /* Show confirmation before switching — current draft may have
+           * unsaved changes. The pendingSwitchVersionId triggers the
+           * ResumeSwitchConfirmation dialog. */
+          setPendingSwitchVersionId(resumeId);
+        }}
+        targetJobLabel={activeJob ? activeJob.title + ' - ' + (activeJob.agency ? activeJob.agency.split(',')[0] : '') : null}
+        targetJobs={targetJobDropdownItems}
+        selectedTargetJobId={activeTargetJobId}
+        onTargetJobSelect={function (jobId: string | null) { handleTargetJobChange(jobId); }}
+        hasTargetJob={activeTargetJobId !== null}
+        tailoringComplete={computedTailoringComplete}
+        pageCount={computedPageCount}
+        pageLimit={2}
+        readinessScore={computedReadinessScore}
+        preflightState={computedPreflightState}
+        hasPendingSuggestions={pendingProposalCount > 0}
+        primaryCta={primaryCtaConfig}
+        onPrimaryCtaClick={function () {
+          if (builderStage === 'validation') {
+            handleExportPrint();
+          } else if (builderStage === 'tailoring') {
+            setBuilderStage('validation');
+          } else {
+            setBuilderStage('tailoring');
+          }
+        }}
+        onPreview={function () { setShowPreview(true); }}
+        onVersions={function () { setShowVersions(!showVersions); }}
+        onExport={handleExportPrint}
+        onReviewResume={function () { setShowFullReview(true); }}
+        isEditReady={isEditReady}
+        onEditToggle={function () { setIsEditReady(!isEditReady); }}
       />
 
-      {/* 2) Main body: full-width center panel (left organizer removed) */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Center panel: tabs + content — now spans full width */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Tab bar — primary mode switcher with inline overall score */}
-          <TabBar
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            proposalCount={pendingProposalCount}
-            matchScore={computedMatchScore}
-            readinessScore={computedReadinessScore}
-            activeJob={activeJob}
-          />
+      {/* 2) Main body: section rail + center canvas + callout overlay.
+       *
+       * The container uses position:relative so the callout layer can
+       * be absolutely positioned as an overlay. This prevents the callout
+       * column from participating in flex layout, which means the resume
+       * document never shifts or reflows when callouts appear/disappear. */}
+      <div className="flex flex-1 overflow-hidden relative">
 
-          {/* Tab content */}
-          {activeTab === 'edit' ? (
-            /* ---- Edit tab: two-state workspace ----
-             *
-             * State A: Section Dashboard — grid of section cards showing
-             * health/progress at a glance. User picks which section to work on.
-             *
-             * State B: Focused Section Editor — renders only the selected
-             * section's editing surface with a "Back to sections" control.
-             *
-             * The LiveScoreAnchor stays visible in both states, providing
-             * a compact persistent view of match + readiness scores.
-             */
+        {/* NEW: Compact left rail with section progress badges.
+         * Shows at-a-glance health for each section with color-coded
+         * circular progress indicators. Clicking scrolls the canvas
+         * to that section and activates its callouts. */}
+        <ResumeSectionRail
+          sections={sectionProgressList}
+          selectedSectionId={canvasSelectedSection}
+          onSectionSelect={function (sectionId) {
+            /* Set the selected section on the live canvas. This drives
+             * which section is highlighted in the document AND which
+             * section's callouts appear in the right-side callout layer.
+             * Clear the active callout when switching sections so stale
+             * guidance cards from the previous section don't persist. */
+            setCanvasSelectedSection(sectionId);
+            setActiveCalloutId(null);
+            calloutLinesHook.setActiveLineId(null);
+          }}
+          expanded={true}
+        />
+
+        {/* ================================================================
+         * CENTER WORKSPACE: Live resume document — always visible.
+         *
+         * The document is the primary working surface across all stages
+         * (Partial / Tailoring / Validation). The old tab-based shell
+         * (Edit / Suggested Changes / Coverage Map / Preview / Version
+         * Diff) has been removed as the primary organizer. Workflow is
+         * now expressed through:
+         *   - stage tabs in the top bar
+         *   - the selected section in the left rail
+         *   - on-document callout guidance in the right layer
+         *   - validation checklist overlay at the bottom
+         * ================================================================ */}
+        <LiveResumeCanvas
+          draft={store.draft}
+          selectedSectionId={isOverviewMode ? null : canvasSelectedSection}
+          onSectionSelect={function (sectionId) {
+            setCanvasSelectedSection(sectionId);
+            /* Clear active guidance card when switching sections —
+             * guidance belongs to the callout interaction of the
+             * current section, not the previous one. */
+            setActiveCalloutId(null);
+            calloutLinesHook.setActiveLineId(null);
+            /* Trigger re-measurement of callout line positions when the
+             * selected section changes, since anchor visibility may shift. */
+            requestAnimationFrame(function () {
+              calloutLinesHook.remeasure();
+            });
+          }}
+          onAnchorRegister={anchorMapHook.registerAnchor}
+          editMode={isEditReady}
+          federalDetails={MOCK_FEDERAL_DETAILS}
+          certifications={store.draft.certifications || []}
+          supportingEvidence={store.draft.supportingEvidence || []}
+          onInlineEditSave={handleInlineEditSave}
+          onSectionAction={handleSectionAction}
+          onRemoveItem={handleRemoveItem}
+          documentPanelRef={documentPanelRef}
+          highlightedAnchors={highlightedAnchors}
+          onAnchorHover={handleAnchorHover}
+          scrollContainerRef={canvasScrollContainerRef}
+        />
+
+        {/* Legacy tab-based center panel has been removed. The document-
+         * centered live canvas model (LiveResumeCanvas above) is now the
+         * only center workspace. All workflow is expressed through stage
+         * tabs in the top bar, section selection in the left rail, and
+         * on-document callout guidance. */}
+
+        {/* ================================================================
+         * CALLOUT LINE OVERLAY — Precision SVG lines from resume to guidance
+         *
+         * Renders thin lines originating from specific content inside the
+         * resume document, extending outward past the document boundary,
+         * and terminating in small white-filled circles. This overlay is
+         * absolutely positioned and uses pointer-events:none for the SVG
+         * background; endpoint circles re-enable pointer events for
+         * hover and click interaction.
+         *
+         * VISIBILITY RULE: Lines appear when:
+         *   1. A section is selected in the canvas
+         *   2. The builder is NOT in validation stage
+         *   3. There are unresolved annotations for the selected section
+         *
+         * Lines are contextual — they show only for the active section.
+         * ================================================================ */}
+        {calloutLineDefs.length > 0 && (
+          <div
+            ref={calloutLineOverlayRef}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 8,
+              pointerEvents: 'none',
+              overflow: 'visible',
+            }}
+            data-testid="callout-line-overlay-container"
+          >
+            <CalloutLineOverlay
+              lines={calloutLineDefs}
+              geometries={calloutLinesHook.geometries}
+              lineStates={calloutLinesHook.lineStates}
+              onEndpointHover={calloutLinesHook.setEndpointHovered}
+              onSourceHover={calloutLinesHook.setSourceHovered}
+              onEndpointClick={function (lineId: string) {
+                /* When an endpoint is clicked, activate the corresponding
+                 * callout card if there is a matching annotation. Strip
+                 * the "cl-" prefix to get the annotation ID.
+                 *
+                 * Also set the active line in the overlay so it gets a
+                 * persistent highlight while the guidance card is open. */
+                const annotationId = lineId.replace('cl-', '');
+                const isToggleOff = annotationId === activeCalloutId;
+                setActiveCalloutId(isToggleOff ? null : annotationId);
+                calloutLinesHook.setActiveLineId(isToggleOff ? null : lineId);
+              }}
+            />
+          </div>
+        )}
+
+        {/* Section-scoped callout layer — OVERLAY POSITIONED.
+         *
+         * Renders callout cards for the currently selected section ONLY.
+         * Shows the top 1-2 highest-priority unresolved annotations
+         * with connector-line indicators. Non-selected sections do not
+         * spray callouts.
+         *
+         * CRITICAL LAYOUT RULE: The callout layer is wrapped in an
+         * absolutely positioned container so it floats over the right
+         * edge of the canvas without participating in flex flow. This
+         * ensures the resume document never shifts when callouts appear
+         * or disappear. The wrapper uses pointer-events:none so the
+         * canvas underneath remains scrollable; the inner layer re-enables
+         * pointer events for card interaction. */}
+        {/* CALLOUT-DRIVEN GUIDANCE SURFACE: Always present when a section
+         * is selected and we're not in validation stage. The guidance layer
+         * is now interaction-driven — it shows a compact issue summary by
+         * default and opens a guidance card only when a callout endpoint
+         * is clicked. This replaces the old always-on detached guidance
+         * boxes with a calmer, more contextual model. */}
+        {canvasSelectedSection && builderStage !== 'validation' && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 10,
+              pointerEvents: 'none',
+              overflow: 'visible',
+            }}
+            data-testid="callout-overlay-wrapper"
+          >
+            <ResumeCalloutLayer
+              sectionAnnotations={selectedSectionAnnotations}
+              maxVisible={isOverviewMode ? 3 : 2}
+              activeCalloutId={activeCalloutId}
+              onCalloutClick={function (calloutId) { setActiveCalloutId(calloutId === activeCalloutId ? null : calloutId); }}
+              selectedSectionId={canvasSelectedSection}
+              calloutLineDefs={calloutLineDefs}
+              onCalloutAction={handleCalloutAction}
+              isOverviewMode={isOverviewMode}
+              sectionProgressList={sectionProgressList}
+              onExplainRequest={handleExplainRequest}
+              scopeIssues={scopeIssues}
+              onTopFixClick={function (issue) {
+                /* Navigate to the issue's section when the top-fix banner
+                 * is clicked, giving the user a direct path to the fix. */
+                if (issue.sectionId) {
+                  setCanvasSelectedSection(issue.sectionId);
+                }
+              }}
+            />
+          </div>
+        )}
+
+        {/* APPLIED SUGGESTION CONFIRMATION TOAST — brief feedback after
+         * a suggestion is applied. Appears as a small floating indicator
+         * at the top-right of the workspace. Auto-dismisses after 3s. */}
+        {appliedFeedback !== null && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '12px',
+              right: '16px',
+              zIndex: 20,
+              pointerEvents: 'auto',
+            }}
+            data-testid="applied-suggestion-toast"
+          >
             <div
-              className="flex-1 flex flex-col overflow-hidden"
-              role="tabpanel"
-              id="resume-tabpanel-edit"
-              aria-labelledby="resume-tab-edit"
-              data-testid="resume-tabpanel-edit"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg"
+              style={{
+                background: 'var(--p-surface)',
+                border: '1px solid var(--p-success)',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                color: 'var(--p-success)',
+                animation: 'fadeIn 0.2s ease',
+              }}
+              role="status"
+              aria-live="polite"
             >
-              {/* ---- Persistent local Edit control row ----
-               *
-               * This row persists across BOTH dashboard and focused states,
-               * providing a stable local navigation/control pattern for Edit.
-               *
-               * Three controls:
-               *   1. Home/dashboard icon button — always returns to dashboard
-               *   2. Section dropdown — shows "Overview" on dashboard,
-               *      shows active section on focused state
-               *   3. Section score area — shows section score when focused,
-               *      empty/hidden on dashboard
-               */}
-              <div
-                className="px-4 py-2 flex items-center gap-2 flex-shrink-0"
-                style={{
-                  borderBottom: '1px solid var(--p-border)',
-                  background: 'var(--p-surface)',
-                }}
-                data-testid="edit-local-control-row"
-              >
-                {/* 1. Home icon button — return to section dashboard */}
-                <button
-                  type="button"
-                  onClick={handleBackToDashboard}
-                  className={'flex items-center justify-center rounded ' + INTERACTIVE_HOVER_CLASS + ' outline-none focus-visible:ring-2 focus-visible:ring-inset'}
-                  style={Object.assign(
-                    {
-                      width: '30px',
-                      height: '30px',
-                      border: editMode === 'dashboard'
-                        ? '1px solid var(--p-accent)'
-                        : '1px solid var(--p-border)',
-                      background: editMode === 'dashboard'
-                        ? 'color-mix(in srgb, var(--p-accent) 8%, transparent)'
-                        : 'transparent',
-                      color: editMode === 'dashboard'
-                        ? 'var(--p-accent)'
-                        : 'var(--p-text-muted)',
-                      flexShrink: 0,
-                    },
-                    { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
-                  )}
-                  aria-label="Return to section dashboard"
-                  title="Section dashboard"
-                  data-testid="back-to-dashboard-btn"
-                >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                </button>
-
-                {/* 2. Section dropdown — shows "Overview" on dashboard, active section on focused */}
-                <div className="relative" data-testid="section-dropdown">
-                  <button
-                    type="button"
-                    onClick={function () { setShowSectionDropdown(!showSectionDropdown); }}
-                    className={'flex items-center gap-2 px-3 py-1.5 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
-                    style={Object.assign(
-                      {
-                        border: '1px solid var(--p-border)',
-                        background: 'transparent',
-                        color: 'var(--p-text)',
-                      },
-                      { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
-                    )}
-                    aria-haspopup="listbox"
-                    aria-expanded={showSectionDropdown}
-                    aria-label={editMode === 'dashboard'
-                      ? 'Section overview — select a section'
-                      : 'Current section: ' + (activeSectionMeta ? activeSectionMeta.label : 'Unknown')}
-                    data-testid="section-dropdown-trigger"
-                  >
-                    {/* Dropdown trigger icon and label */}
-                    {editMode === 'dashboard' ? (
-                      <>
-                        <LayoutGrid className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--p-accent)' }} />
-                        <span className="text-xs font-semibold">Overview</span>
-                      </>
-                    ) : (
-                      <>
-                        {/* Current section icon — looks up from Edit section groups */}
-                        {(function () {
-                          let SectionIcon = FileText;
-                          for (let i = 0; i < EDIT_SECTION_GROUPS.length; i++) {
-                            if (EDIT_SECTION_GROUPS[i].id === activeSection) {
-                              SectionIcon = EDIT_SECTION_GROUPS[i].icon;
-                              break;
-                            }
-                          }
-                          return <SectionIcon className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--p-accent)' }} />;
-                        })()}
-                        <span className="text-xs font-semibold truncate" style={{ maxWidth: '200px' }}>
-                          {activeSectionMeta ? activeSectionMeta.label : 'Unknown'}
-                        </span>
-                      </>
-                    )}
-                    <ChevronDown className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--p-text-dim)' }} />
-                  </button>
-
-                  {/* Dropdown panel — all sections + Overview option */}
-                  {showSectionDropdown && (
-                    <SectionDropdownMenu
-                      sections={EDIT_SECTION_META}
-                      activeSection={activeSection}
-                      editMode={editMode}
-                      onSelectSection={function (id) {
-                        setActiveSection(id);
-                        setEditMode('focused');
-                        setShowSectionDropdown(false);
-                        /* Reset edit-ready when switching sections via dropdown */
-                        setSectionEditReady(false);
-                      }}
-                      onSelectOverview={function () {
-                        handleBackToDashboard();
-                        setShowSectionDropdown(false);
-                      }}
-                    />
-                  )}
+              <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <div>
+                <div className="text-xs font-semibold">Suggestion applied</div>
+                <div className="text-[10px]" style={{ color: 'var(--p-text-muted)' }}>
+                  {appliedFeedback.label}
                 </div>
-
-                {/* Spacer */}
-                <div className="flex-1" />
-
-                {/* 3. Edit-ready toggle — visible only in focused mode.
-                 *
-                 * This pencil button toggles between View mode (polished,
-                 * read-first resume slice) and Edit-ready mode (editable
-                 * regions highlighted, inline actions visible).
-                 *
-                 * The toggle uses aria-pressed to communicate state to
-                 * assistive technologies, and visually distinguishes the
-                 * active state with accent coloring + tinted background.
-                 */}
-                {editMode === 'focused' && (
-                  <button
-                    type="button"
-                    onClick={function () { setSectionEditReady(!sectionEditReady); }}
-                    className={'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
-                    style={Object.assign(
-                      {
-                        border: sectionEditReady
-                          ? '1px solid var(--p-accent)'
-                          : '1px solid var(--p-border)',
-                        background: sectionEditReady
-                          ? 'color-mix(in srgb, var(--p-accent) 10%, transparent)'
-                          : 'transparent',
-                        color: sectionEditReady
-                          ? 'var(--p-accent)'
-                          : 'var(--p-text-muted)',
-                        flexShrink: 0,
-                      },
-                      { '--tw-ring-color': 'var(--p-accent)' } as unknown as React.CSSProperties
-                    )}
-                    aria-label={sectionEditReady ? 'Switch to view mode' : 'Switch to edit mode'}
-                    aria-pressed={sectionEditReady}
-                    title={sectionEditReady ? 'Viewing in edit mode — click to switch to view mode' : 'Click to enter edit mode'}
-                    data-testid="section-edit-toggle"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                    <span>{sectionEditReady ? 'Editing' : 'Edit'}</span>
-                  </button>
-                )}
-
-                {/* 4. Section score — only visible in focused mode */}
-                {editMode === 'focused' && activeSectionMeta && (function () {
-                  const sectionStatus = deriveSectionStatus(activeSectionMeta);
-                  return (
-                    <div
-                      className="flex items-center gap-2 flex-shrink-0"
-                      data-testid="section-score-display"
-                    >
-                      {/* Completion percentage */}
-                      <span
-                        className="text-xs font-bold px-1.5 py-0.5 rounded"
-                        style={{
-                          color: scoreTierColor(activeSectionMeta.completionPct),
-                          background: 'color-mix(in srgb, ' + scoreTierColor(activeSectionMeta.completionPct) + ' 12%, transparent)',
-                        }}
-                      >
-                        {activeSectionMeta.completionPct}%
-                      </span>
-                      {/* Status label */}
-                      <span
-                        className="text-[10px] font-semibold"
-                        style={{ color: sectionStatus.color }}
-                      >
-                        {sectionStatus.label}
-                      </span>
-                    </div>
-                  );
-                })()}
               </div>
+            </div>
+          </div>
+        )}
+      </div>
 
-              {editMode === 'dashboard' ? (
-                /* ---- State A: Section Dashboard ----
-                 * Default landing state for the Edit tab. Shows summary strip
-                 * and section cards ordered by priority.
-                 */
-                <SectionDashboard
-                  sections={EDIT_SECTION_META}
-                  onSectionSelect={handleSectionClick}
-                  matchScore={computedMatchScore}
-                  readinessScore={computedReadinessScore}
-                  biggestBlocker={computedTopGap}
-                  fastestWin={computedFastestWin}
-                  activeJob={activeJob}
-                />
-              ) : (
-                /* ---- State B: Focused Section Editor ----
-                 * Shows only the selected section's editing surface,
-                 * wrapped in a "resume slice" document container.
-                 *
-                 * The resume slice creates the visual impression of a
-                 * zoomed-in, polished portion of a real federal resume.
-                 * It uses a constrained-width panel with subtle framing
-                 * (border, shadow, surface background) so the content
-                 * does not float on the raw workspace background.
-                 *
-                 * When sectionEditReady is true, the container adds a
-                 * subtle accent border to signal that the section is in
-                 * edit-ready mode.
-                 */
-                <>
+      {/* NEW: Validation preflight checklist overlay.
+       *
+       * Shown only in the validation stage. Renders as a compact
+       * overlay at the bottom of the workspace that does not obscure
+       * the resume document. The checklist covers: page length,
+       * required sections, federal details, evidence coverage, and
+       * critical issues.
+       */}
+      {builderStage === 'validation' && computedPreflightState && (
+        <div
+          className="px-4 py-3 flex-shrink-0"
+          style={{
+            borderTop: '1px solid var(--p-border)',
+            background: 'var(--p-surface)',
+          }}
+          data-testid="validation-preflight-area"
+        >
+          <div className="max-w-[600px] mx-auto">
+            <ValidationChecklist preflightState={computedPreflightState} />
+            {/* EXIT VALIDATION — clear path back to editing mode.
+             * Without this, users can feel trapped in Validation with no
+             * obvious way to return to their working draft. The button
+             * switches back to the Partial stage and re-enables editing. */}
+            <div className="flex items-center justify-center mt-3 pt-3" style={{ borderTop: '1px solid var(--p-border)' }}>
+              <button
+                type="button"
+                onClick={function () { setBuilderStage('partial'); }}
+                className={'flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                style={{
+                  color: 'var(--p-accent)',
+                  background: 'color-mix(in srgb, var(--p-accent) 8%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--p-accent) 20%, transparent)',
+                  '--tw-ring-color': 'var(--p-accent)',
+                } as React.CSSProperties}
+                data-testid="validation-exit-button"
+                aria-label="Exit validation and return to editing"
+              >
+                <ArrowRight className="w-3.5 h-3.5" style={{ transform: 'rotate(180deg)' }} />
+                Back to Editing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-                  {/* Section editing surface — renders only the active section */}
-                  <div
-                    ref={canvasScrollRef}
-                    className="flex-1 overflow-y-auto"
-                    style={{ background: 'var(--p-bg)' }}
-                  >
-                    <div className="max-w-[820px] mx-auto px-8 py-8">
+      {/* PATHADVISOR EXPLANATION MODAL — on-demand explanation layer.
+       *
+       * Opens when a user clicks an explanation trigger at any level
+       * (issue, section, or overview). Renders structured explanation
+       * from grounded context immediately — no typing required.
+       *
+       * The modal is an INVITED LAYER (tertiary in the visual hierarchy):
+       *   primary:   resume document
+       *   secondary: callouts / section focus / direct actions
+       *   tertiary:  this modal
+       *
+       * It does not compete with the document or the callout system.
+       * The user opens it deliberately and closes it to return to the
+       * builder with no layout disruption.
+       *
+       * ACTION ROUTING: Apply/Edit-first route through handleCalloutAction
+       * so the existing suggestion plumbing is reused, not duplicated.
+       *
+       * CONVERSATION ACTIONS: Actions triggered from within the conversation
+       * thread (apply, edit, copy from assistant replies) also route through
+       * handleCalloutAction when they carry an annotationId. This ensures
+       * the same suggestion-application plumbing is used regardless of
+       * whether the action originated from the footer buttons or from a
+       * conversational reply. */}
+      <ResumeBuilderPathAdvisorModal
+        open={pathAdvisorModalOpen}
+        onOpenChange={setPathAdvisorModalOpen}
+        context={pathAdvisorModalContext}
+        onApplySuggestion={function (annotationId) {
+          handleCalloutAction(annotationId, 'apply');
+        }}
+        onEditFirst={function (annotationId) {
+          handleCalloutAction(annotationId, 'edit-first');
+        }}
+        onConversationAction={function (action) {
+          if (action.type === 'apply' && action.annotationId !== null) {
+            handleCalloutAction(action.annotationId, 'apply');
+          } else if (action.type === 'edit' && action.annotationId !== null) {
+            handleCalloutAction(action.annotationId, 'edit-first');
+          }
+        }}
+      />
 
-                      {/* ---- Resume slice document container ----
-                       * This panel creates a document-like surface that
-                       * makes focused section content feel like a real
-                       * resume fragment rather than loose content on a
-                       * dark workspace. The framing, padding, and subtle
-                       * shadow give it physical presence without clutter.
-                       *
-                       * In edit-ready mode, the border shifts to accent
-                       * color and a faint accent tint appears, signaling
-                       * that the section is ready for inline editing.
-                       */}
-                      <div
-                        className="rounded-lg"
-                        style={{
-                          background: 'var(--p-surface)',
-                          border: sectionEditReady
-                            ? '1px solid var(--p-accent)'
-                            : '1px solid var(--p-border)',
-                          boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)',
-                          padding: '2rem 2.5rem',
-                          transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
-                        }}
-                        data-testid="resume-slice-container"
-                        data-edit-ready={sectionEditReady ? 'true' : 'false'}
-                      >
+      {/* ================================================================
+       * FINAL PREVIEW OVERLAY — clean read-only presentation view.
+       *
+       * When active, a full-screen overlay covers the workspace with a
+       * polished, read-only rendering of the resume. The user can review
+       * the document without editing affordances, then close the overlay
+       * or export directly. This is the "final review surface" that
+       * feels distinct from editing mode.
+       * ================================================================ */}
+      {showPreview && store && (
+        <ResumePreviewOverlay
+          draft={store.draft}
+          onClose={function () { setShowPreview(false); }}
+          onPrint={function () { window.print(); }}
+          onExportJSON={handleExportJSON}
+        />
+      )}
 
-                      {/* ---- Identity & Summary (combined group) ----
-                       * Merges Contact Information and Professional Summary
-                       * into one cohesive editing surface. Also handles the
-                       * individual 'contact' and 'summary' IDs for backward
-                       * compatibility with cross-tab jump handlers.
-                       */}
-                      {(activeSection === 'identity-summary' || activeSection === 'contact' || activeSection === 'summary') && (
-                        <div
-                          ref={function (el) {
-                            sectionRefs.current['contact'] = el;
-                            sectionRefs.current['summary'] = el;
-                            sectionRefs.current['identity-summary'] = el;
-                          }}
-                          data-testid="edit-section-identity-summary"
-                        >
-                          {/* Contact information sub-section */}
-                          <div data-testid="edit-section-contact">
-                            <ContactHeader draft={store.draft} sectionEditReady={sectionEditReady} />
-                          </div>
+      {/* ================================================================
+       * VERSIONS PANEL — lightweight side panel for version management.
+       *
+       * Shows saved resume versions with restore and delete actions.
+       * The user can snapshot the current draft or revert to a previous
+       * version. Renders as an overlay to avoid layout shifts.
+       * ================================================================ */}
+      {showVersions && store && (
+        <ResumeVersionsPanel
+          store={store}
+          onClose={function () { setShowVersions(false); }}
+          onCreateVersion={handleCreateVersion}
+          onRestoreVersion={function (versionId: string) {
+            const restored = restoreVersion(store, versionId);
+            persist(restored);
+          }}
+        />
+      )}
 
-                          {/* Visual separator between contact and summary */}
-                          <div
-                            className="my-6"
-                            style={{
-                              borderTop: '1px solid var(--p-border)',
-                            }}
-                          />
+      {/* ================================================================
+       * NEW RESUME MODAL — lightweight version creation flow.
+       *
+       * A minimal modal that lets the user name and save a new version
+       * of the current draft. Uses the core createVersion function.
+       * ================================================================ */}
+      {showNewResumeModal && (
+        <NewResumeModal
+          onClose={function () { setShowNewResumeModal(false); }}
+          onCreate={handleCreateVersion}
+          onCreateBlank={handleCreateBlankResume}
+        />
+      )}
 
-                          {/* Professional summary sub-section */}
-                          <div data-testid="edit-section-summary">
-                            <ProfessionalSummaryBlock
-                              summary={store.draft.summary}
-                              onEdit={handleSummaryEditChange}
-                              isEditing={editingSummary}
-                              editText={editingSummaryText}
-                              onEditStart={handleSummaryEditStart}
-                              onEditChange={handleSummaryEditChange}
-                              onEditSave={handleSummaryEditSave}
-                              sectionEditReady={sectionEditReady}
-                            />
-                          </div>
-                        </div>
-                      )}
+      {/* ================================================================
+       * RESUME SWITCH CONFIRMATION — dirty-state guard for version switching.
+       *
+       * When the user selects a different resume version from the dropdown
+       * while the current draft may have unsaved changes, this dialog
+       * appears. It prevents accidental data loss by offering three
+       * options: save current + switch, discard + switch, or cancel.
+       *
+       * WHY: Users must be able to trust that switching versions won't
+       * silently destroy their work. This is a trust-critical interaction.
+       * ================================================================ */}
+      {pendingSwitchVersionId !== null && store && (
+        <ResumeSwitchConfirmation
+          pendingVersionId={pendingSwitchVersionId}
+          onSaveAndSwitch={function () {
+            /* Save current draft as a named version, then switch.
+             * The version gets a meaningful timestamp-based name instead
+             * of the old "Auto-save" label which was confusing as a
+             * user-visible version name. */
+            const versionLabel = 'Draft snapshot — ' + new Date().toLocaleDateString();
+            const saved = createVersion(store, versionLabel);
 
-                      {/* ---- Work Experience ---- */}
-                      {activeSection === 'experience' && (
-                        <div
-                          ref={function (el) { sectionRefs.current['experience'] = el; }}
-                          data-testid="edit-section-experience"
-                        >
-                          {/* Section heading — consistent with other resume sections */}
-                          <div
-                            className="flex items-center justify-between mb-4 pb-2"
-                            style={{ borderBottom: '1px solid var(--p-border)' }}
-                          >
-                            <h3
-                              className="text-xs font-bold uppercase tracking-wider"
-                              style={{ color: 'var(--p-text)', letterSpacing: '0.08em' }}
-                            >
-                              Work Experience
-                            </h3>
-                          </div>
-                          {store.draft.experience.map(function (exp) {
-                            const bullets = bulletMap[exp.id] || [];
-                            return (
-                              <ExperienceBlock
-                                key={exp.id}
-                                experience={exp}
-                                bullets={bullets}
-                                editingBulletId={editingBulletId}
-                                editingBulletText={editingBulletText}
-                                activeSuggestionBulletId={activeSuggestionBulletId}
-                                activeSuggestion={MOCK_INLINE_SUGGESTION}
-                                autonomyMode={autonomyMode}
-                                proposalCount={pendingProposalCount}
-                                sectionEditReady={sectionEditReady}
-                                onBulletEditStart={handleBulletEditStart}
-                                onBulletEditChange={handleBulletEditChange}
-                                onBulletEditSave={handleBulletEditSave}
-                                onBulletRewrite={handleBulletRewrite}
-                                onSuggestionAccept={handleSuggestionAccept}
-                                onSuggestionEditFirst={handleSuggestionEditFirst}
-                                onSuggestionDismiss={handleSuggestionDismiss}
-                                onAddBullet={handleAddBullet}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
+            /* If leaving master for the first time, back up the master
+             * draft so we can restore it if the user switches back. */
+            if (selectedResumeId === 'master' && masterDraftBackupRef.current === null) {
+              masterDraftBackupRef.current = JSON.parse(JSON.stringify(store.draft));
+            }
 
-                      {/* ---- Education ---- */}
-                      {activeSection === 'education' && (
-                        <div
-                          ref={function (el) { sectionRefs.current['education'] = el; }}
-                          data-testid="edit-section-education"
-                        >
-                          <EducationSection draft={store.draft} sectionEditReady={sectionEditReady} />
-                        </div>
-                      )}
+            /* Restore the target version if it exists. For 'master', the
+             * draft is already the master content, so no restore needed. */
+            let afterSave = saved;
+            if (pendingSwitchVersionId !== 'master') {
+              afterSave = restoreVersion(saved, pendingSwitchVersionId);
+            } else if (masterDraftBackupRef.current !== null) {
+              /* Switching back to master — restore the backed-up draft */
+              afterSave = updateDraft(saved, masterDraftBackupRef.current);
+              masterDraftBackupRef.current = null;
+            }
+            persist(afterSave);
+            setSelectedResumeId(pendingSwitchVersionId);
+            setPendingSwitchVersionId(null);
+          }}
+          onDiscardAndSwitch={function () {
+            /* Switch without saving — restore the selected version directly.
+             * Any unsaved edits to the current draft are lost. */
+            if (pendingSwitchVersionId === 'master') {
+              /* Switching back to Default Resume. If we have a backup of
+               * the master draft from before the user switched away, restore
+               * it. Otherwise the draft stays as-is (it IS master). */
+              if (masterDraftBackupRef.current !== null) {
+                const restored = updateDraft(store, masterDraftBackupRef.current);
+                persist(restored);
+                masterDraftBackupRef.current = null;
+              }
+              setPendingSwitchVersionId(null);
+              setSelectedResumeId('master');
+            } else {
+              /* If leaving master, back up the draft first */
+              if (selectedResumeId === 'master' && masterDraftBackupRef.current === null) {
+                masterDraftBackupRef.current = JSON.parse(JSON.stringify(store.draft));
+              }
+              const restored = restoreVersion(store, pendingSwitchVersionId);
+              persist(restored);
+              setSelectedResumeId(pendingSwitchVersionId);
+              setPendingSwitchVersionId(null);
+            }
+          }}
+          onCancel={function () {
+            setPendingSwitchVersionId(null);
+          }}
+        />
+      )}
 
-                      {/* ---- Skills ---- */}
-                      {activeSection === 'skills' && (
-                        <div
-                          ref={function (el) { sectionRefs.current['skills'] = el; }}
-                          data-testid="edit-section-skills"
-                        >
-                          <SkillsSection draft={store.draft} sectionEditReady={sectionEditReady} />
-                        </div>
-                      )}
+      {/* ================================================================
+       * FULL-DOCUMENT REVIEW — PathAdvisor whole-resume evaluation.
+       *
+       * This overlay presents a structured, deterministic review of the
+       * entire resume. It evaluates overall readiness, strongest sections,
+       * weakest sections, missing federal requirements, biggest blockers,
+       * and top recommended fixes.
+       *
+       * ARCHITECTURE: This is designed as the future entry point for the
+       * real PathAdvisor LLM review. In this pass, the review content is
+       * deterministically generated from the current resume state. The
+       * same modal infrastructure and data contract will be used when
+       * the LLM is connected.
+       *
+       * The review uses the existing readiness, section progress, and
+       * preflight infrastructure to build its evaluation.
+       * ================================================================ */}
+      {showFullReview && store && (
+        <FullDocumentReview
+          draft={store.draft}
+          readinessScore={computedReadinessScore}
+          sectionProgressList={sectionProgressList}
+          targetJobTitle={activeJob ? activeJob.title : null}
+          onClose={function () { setShowFullReview(false); }}
+        />
+      )}
+    </div>
+  );
+}
 
-                      {/* ---- Federal Details ---- */}
-                      {activeSection === 'federal-details' && (
-                        <div
-                          ref={function (el) { sectionRefs.current['federal-details'] = el; }}
-                          data-testid="edit-section-federal-details"
-                        >
-                          <FederalDetailsSection sectionEditReady={sectionEditReady} />
-                        </div>
-                      )}
+// ===========================================================================
+// OVERLAY COMPONENTS — Preview, Versions, New Resume Modal
+// ===========================================================================
 
-                      {/* ---- Certifications ---- */}
-                      {activeSection === 'certifications' && (
-                        <div
-                          ref={function (el) { sectionRefs.current['certifications'] = el; }}
-                          data-testid="edit-section-certifications"
-                        >
-                          <CertificationsSection sectionEditReady={sectionEditReady} />
-                        </div>
-                      )}
+/**
+ * ============================================================================
+ * RESUME PREVIEW OVERLAY — Print-ready final review surface
+ * ============================================================================
+ *
+ * PURPOSE: Full-screen overlay for final resume review with print/PDF
+ * export. This is the primary user-facing export surface — the user sees
+ * a clean, readable version of their resume and can print or save as PDF
+ * using the browser's native print dialog.
+ *
+ * EXPORT STRATEGY:
+ *   Primary: "Print / Save as PDF" — uses window.print() which opens
+ *            the browser's native print dialog. Users can select "Save
+ *            as PDF" as their printer for a clean PDF output.
+ *   Secondary: "Export JSON" — data backup format for developers or
+ *              cross-device transfer. Not the main user-facing format.
+ *
+ * READABILITY: The preview uses a white background with high-contrast
+ * dark text (#111) at comfortable reading sizes. Section headings are
+ * black (#000) and bold for clear visual hierarchy. Font sizes are
+ * larger than the editing canvas to optimize for reading, not editing.
+ *
+ * PRINT CSS: The overlay uses CSS classes that a print stylesheet can
+ * target. The data-testid="resume-preview-overlay" wrapper and the
+ * data-testid="resume-preview-document" inner wrapper allow @media print
+ * rules to hide chrome and show only the document content.
+ *
+ * DISMISS: Escape key, close button, and clicking the dimmed backdrop
+ * all close the overlay. The user is never trapped.
+ */
+function ResumePreviewOverlay(props: {
+  draft: ResumeDraft;
+  onClose: () => void;
+  onPrint: () => void;
+  onExportJSON: () => void;
+}) {
+  const draft = props.draft;
+  const contact = draft.contact;
 
-                      {/* ---- Supporting Evidence ---- */}
-                      {activeSection === 'supporting-evidence' && (
-                        <div
-                          ref={function (el) { sectionRefs.current['supporting-evidence'] = el; }}
-                          data-testid="edit-section-supporting-evidence"
-                        >
-                          <SupportingEvidenceSection sectionEditReady={sectionEditReady} />
-                        </div>
-                      )}
+  /* Escape key handler — close the preview when Escape is pressed.
+   * This satisfies the modal-semantics dismiss requirement. */
+  useEffect(function () {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        props.onClose();
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return function () {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [props.onClose]);
 
-                      </div>{/* end resume-slice-container */}
+  /* Build experience bullets from duties strings. Parses the duties
+   * text (which may contain bullet markers) into clean list items. */
+  function renderDuties(duties: string): React.ReactNode {
+    const lines = duties.split('\n');
+    const items: React.ReactNode[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const cleaned = lines[i].replace(/^[•\-*]\s*/, '').trim();
+      if (cleaned) {
+        items.push(
+          <li key={i} className="text-[13px] leading-relaxed" style={{ color: '#111' }}>
+            {cleaned}
+          </li>
+        );
+      }
+    }
+    return items.length > 0 ? <ul className="list-disc pl-5 space-y-1">{items}</ul> : null;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-auto print:relative print:overflow-visible"
+      style={{ background: 'rgba(0,0,0,0.6)' }}
+      onClick={function (e: React.MouseEvent) {
+        if (e.target === e.currentTarget) props.onClose();
+      }}
+      data-testid="resume-preview-overlay"
+      role="dialog"
+      aria-label="Resume preview"
+    >
+      <div
+        className="relative my-8 mx-4 rounded-xl shadow-2xl print:my-0 print:mx-0 print:rounded-none print:shadow-none"
+        style={{
+          background: '#ffffff',
+          color: '#111',
+          maxWidth: '800px',
+          width: '100%',
+          padding: '48px 56px',
+          minHeight: '600px',
+        }}
+        data-testid="resume-preview-document"
+      >
+        {/* ACTION BAR — Print/PDF + JSON export + Close.
+         * Hidden when printing via @media print rules in globals.css. */}
+        <div className="absolute top-4 right-4 flex items-center gap-2" data-print-hide>
+          {/* Primary: Export Resume PDF — opens browser print dialog.
+           * The @media print rules in globals.css hide all PathOS chrome
+           * and render only the resume document content. Users select
+           * "Save as PDF" in the print dialog for a clean PDF file. */}
+          <button
+            type="button"
+            onClick={props.onPrint}
+            className={'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+            style={{
+              background: 'var(--p-accent, #3b82f6)',
+              color: '#ffffff',
+              border: 'none',
+              '--tw-ring-color': 'var(--p-accent)',
+            } as React.CSSProperties}
+            data-testid="preview-print-button"
+            title="Export as PDF — opens the browser print dialog. Select 'Save as PDF' for a clean resume file."
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export Resume PDF
+          </button>
+          {/* Secondary: Export Resume JSON — developer/backup data format.
+           * Downloads the full resume store (draft + versions) as a JSON
+           * file for backup, cross-device transfer, or developer use. */}
+          <button
+            type="button"
+            onClick={props.onExportJSON}
+            className={'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+            style={{
+              background: '#f0f0f0',
+              color: '#333',
+              border: '1px solid #ddd',
+              '--tw-ring-color': 'var(--p-accent)',
+            } as React.CSSProperties}
+            data-testid="preview-export-json-button"
+            title="Export resume data as JSON (developer/backup format)"
+          >
+            Export Resume JSON
+          </button>
+          {/* Close */}
+          <button
+            type="button"
+            onClick={props.onClose}
+            className={'flex items-center justify-center w-8 h-8 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+            style={{
+              background: '#f0f0f0',
+              color: '#555',
+              '--tw-ring-color': 'var(--p-accent)',
+            } as React.CSSProperties}
+            aria-label="Close preview"
+            data-testid="preview-close-button"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* RESUME CONTENT — clean typographic layout optimized for
+         * readability and print output. Font sizes are slightly larger
+         * than the editing canvas. Colors use high-contrast values
+         * (not theme tokens) because this renders on a white background
+         * regardless of the PathOS dark theme. */}
+        <div className="space-y-6">
+          {/* Header / Contact */}
+          <div className="text-center border-b pb-4" style={{ borderColor: '#ccc' }}>
+            <h1 className="text-2xl font-bold tracking-tight" style={{ color: '#000' }}>
+              {contact.fullName || 'Your Name'}
+            </h1>
+            <div className="text-sm mt-1.5" style={{ color: '#444' }}>
+              {[contact.email, contact.phone, contact.city && contact.state ? contact.city + ', ' + contact.state : '']
+                .filter(Boolean)
+                .join(' | ')}
+            </div>
+          </div>
+
+          {/* Summary */}
+          {draft.summary && (
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+                Professional Summary
+              </h2>
+              <p className="text-[13px] leading-relaxed" style={{ color: '#111' }}>{draft.summary}</p>
+            </div>
+          )}
+
+          {/* Experience */}
+          {draft.experience.length > 0 && (
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#000', letterSpacing: '0.1em' }}>
+                Work Experience
+              </h2>
+              {draft.experience.map(function (exp) {
+                return (
+                  <div key={exp.id} className="mb-4">
+                    <div className="flex items-baseline justify-between">
+                      <h3 className="text-[13px] font-bold" style={{ color: '#000' }}>{exp.jobTitle}</h3>
+                      <span className="text-xs" style={{ color: '#555' }}>{exp.startDate} – {exp.endDate}</span>
+                    </div>
+                    <div className="text-xs mb-1.5" style={{ color: '#444' }}>
+                      {exp.employer}{exp.grade ? ' | ' + exp.grade : ''}{exp.hoursPerWeek ? ' | ' + exp.hoursPerWeek + ' hrs/wk' : ''}
+                    </div>
+                    {renderDuties(exp.duties)}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Education */}
+          {draft.education.length > 0 && (
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+                Education
+              </h2>
+              {draft.education.map(function (edu) {
+                return (
+                  <div key={edu.id} className="mb-2">
+                    <div className="text-[13px] font-semibold" style={{ color: '#000' }}>
+                      {edu.degree}, {edu.field}
+                    </div>
+                    <div className="text-xs" style={{ color: '#444' }}>
+                      {edu.institution} | {edu.graduationDate}{edu.gpa ? ' | GPA: ' + edu.gpa : ''}
                     </div>
                   </div>
-                </>
-              )}
+                );
+              })}
             </div>
-          ) : activeTab === 'suggested-changes' ? (
-            /* ---- Suggested Changes tab: broader proposal review queue ---- */
-            <SuggestedChangesTab
-              proposals={proposals}
-              onAccept={handleProposalAccept}
-              onReject={handleProposalReject}
-              onEditFirst={handleProposalEditFirst}
-              activeJob={activeJob}
-            />
-          ) : activeTab === 'coverage-map' ? (
-            /* ---- Coverage Map tab: actionable resume-to-job diagnostics ---- */
-            <CoverageMapTab
-              dimensions={coverageDimensions}
-              activeJob={activeJob}
-              onJumpToSection={handleJumpToSection}
-              onSwitchToSuggestedChanges={handleSwitchToSuggestedChanges}
-              onEditSection={handleEditSection}
-            />
-          ) : (
-            /* ---- Preview / Version Diff: still scaffolded for future phases ---- */
-            <TabPlaceholder tab={activeTab} />
+          )}
+
+          {/* Certifications */}
+          {draft.certifications && draft.certifications.length > 0 && (
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+                Certifications
+              </h2>
+              <p className="text-[13px]" style={{ color: '#111' }}>
+                {draft.certifications.map(function (c) { return c.name; }).join(', ')}
+              </p>
+            </div>
+          )}
+
+          {/* Skills */}
+          {draft.skills.length > 0 && (
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+                Skills
+              </h2>
+              <p className="text-[13px]" style={{ color: '#111' }}>
+                {draft.skills.map(function (s) { return s.name; }).join(', ')}
+              </p>
+            </div>
+          )}
+
+          {/* Supporting Evidence */}
+          {draft.supportingEvidence && draft.supportingEvidence.length > 0 && (
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#000', letterSpacing: '0.1em' }}>
+                Supporting Evidence
+              </h2>
+              <ul className="list-disc pl-5 space-y-1">
+                {draft.supportingEvidence.map(function (ev) {
+                  return (
+                    <li key={ev.id} className="text-[13px] leading-relaxed" style={{ color: '#111' }}>
+                      {ev.text}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
         </div>
       </div>
     </div>
   );
 }
+
+/**
+ * ============================================================================
+ * VERSIONS PANEL — Side panel for resume version management
+ * ============================================================================
+ *
+ * PURPOSE: Shows saved resume versions with create and restore actions.
+ * The user can snapshot the current draft or revert to a previous version.
+ *
+ * RESTORE FLOW: Restoring a version replaces the current working draft.
+ * Because this is destructive (it overwrites unsaved changes), a
+ * confirmation step is shown before the restore executes. The user
+ * can cancel to keep their current work.
+ *
+ * INTERACTION: All buttons have hover/focus-visible/active states.
+ * The close button, create button, and restore buttons all respond
+ * visibly to user interaction per the interaction-state standard.
+ *
+ * DISMISS: Escape key, close button, and backdrop click all close.
+ */
+function ResumeVersionsPanel(props: {
+  store: ResumeStore;
+  onClose: () => void;
+  onCreateVersion: (label: string) => void;
+  onRestoreVersion: (versionId: string) => void;
+}) {
+  const [newLabel, setNewLabel] = useState('');
+
+  /* RESTORE CONFIRMATION: Track which version (if any) the user is
+   * about to restore. When non-null, a confirmation prompt appears
+   * on that version's card instead of the restore button. */
+  const [confirmingRestoreId, setConfirmingRestoreId] = useState<string | null>(null);
+
+  const versions = listVersions(props.store);
+
+  /* Escape key closes the panel */
+  useEffect(function () {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        if (confirmingRestoreId !== null) {
+          setConfirmingRestoreId(null);
+        } else {
+          props.onClose();
+        }
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return function () {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [props.onClose, confirmingRestoreId]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex justify-end"
+      style={{ background: 'rgba(0,0,0,0.3)' }}
+      onClick={function (e: React.MouseEvent) {
+        if (e.target === e.currentTarget) props.onClose();
+      }}
+      data-testid="versions-panel-overlay"
+      role="dialog"
+      aria-label="Resume Versions"
+    >
+      <div
+        className="w-80 h-full overflow-auto"
+        style={{
+          background: 'var(--p-surface)',
+          borderLeft: '1px solid var(--p-border)',
+          boxShadow: '-4px 0 12px rgba(0,0,0,0.15)',
+        }}
+        data-testid="versions-panel"
+      >
+        <div className="p-4">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-bold" style={{ color: 'var(--p-text)' }}>
+              Resume Versions
+            </h2>
+            <button
+              type="button"
+              onClick={props.onClose}
+              className={'flex items-center justify-center w-6 h-6 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+              style={{
+                color: 'var(--p-text-muted)',
+                '--tw-ring-color': 'var(--p-accent)',
+              } as React.CSSProperties}
+              aria-label="Close versions panel"
+              data-testid="versions-panel-close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Create new version */}
+          <div className="mb-4 p-3 rounded-lg" style={{ background: 'var(--p-surface2, rgba(255,255,255,0.05))' }}>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--p-text-muted)' }}>
+              Save current draft as version
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newLabel}
+                onChange={function (e) { setNewLabel(e.target.value); }}
+                placeholder="Version name..."
+                className="flex-1 px-2 py-1.5 text-xs rounded outline-none focus-visible:ring-2 focus-visible:ring-inset"
+                style={{
+                  background: 'var(--p-surface)',
+                  border: '1px solid var(--p-border)',
+                  color: 'var(--p-text)',
+                  '--tw-ring-color': 'var(--p-accent)',
+                } as React.CSSProperties}
+                onKeyDown={function (e) {
+                  if (e.key === 'Enter') {
+                    props.onCreateVersion(newLabel || 'Version ' + (versions.length + 1));
+                    setNewLabel('');
+                  }
+                }}
+                data-testid="new-version-label-input"
+              />
+              <button
+                type="button"
+                onClick={function () {
+                  props.onCreateVersion(newLabel || 'Version ' + (versions.length + 1));
+                  setNewLabel('');
+                }}
+                className={'px-3 py-1.5 text-xs font-medium rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                style={{
+                  background: 'var(--p-accent)',
+                  color: '#ffffff',
+                  border: 'none',
+                  '--tw-ring-color': 'var(--p-accent)',
+                } as React.CSSProperties}
+                data-testid="create-version-button"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+
+          {/* Version list */}
+          {versions.length === 0 ? (
+            <p className="text-xs py-4 text-center" style={{ color: 'var(--p-text-dim)' }}>
+              No saved versions yet. Save the current draft to create your first version.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {versions.map(function (v) {
+                const isConfirming = confirmingRestoreId === v.id;
+                return (
+                  <div
+                    key={v.id}
+                    className="p-3 rounded-lg"
+                    style={{
+                      background: 'var(--p-surface2, rgba(255,255,255,0.05))',
+                      border: isConfirming
+                        ? '1px solid var(--p-warning, #eab308)'
+                        : '1px solid var(--p-border)',
+                    }}
+                    data-testid={'version-item-' + v.id}
+                  >
+                    <div className="text-xs font-medium" style={{ color: 'var(--p-text)' }}>
+                      {v.label}
+                    </div>
+                    <div className="text-[10px] mt-0.5" style={{ color: 'var(--p-text-dim)' }}>
+                      {new Date(v.createdAt).toLocaleString()}
+                    </div>
+
+                    {isConfirming ? (
+                      /* RESTORE CONFIRMATION — shown when the user clicks
+                       * "Restore this version". Warns that current edits
+                       * will be replaced and offers Confirm / Cancel. */
+                      <div className="mt-2">
+                        <p className="text-[10px] mb-1.5" style={{ color: 'var(--p-warning, #eab308)' }}>
+                          This will replace your current draft. Unsaved changes will be lost.
+                        </p>
+                        <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={function () {
+                              props.onRestoreVersion(v.id);
+                              setConfirmingRestoreId(null);
+                            }}
+                            className={'text-[10px] font-semibold px-2 py-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                            style={{
+                              background: 'var(--p-warning, #eab308)',
+                              color: '#000',
+                              '--tw-ring-color': 'var(--p-accent)',
+                            } as React.CSSProperties}
+                            data-testid={'confirm-restore-' + v.id}
+                          >
+                            Confirm Restore
+                          </button>
+                          <button
+                            type="button"
+                            onClick={function () { setConfirmingRestoreId(null); }}
+                            className={'text-[10px] font-medium px-2 py-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                            style={{
+                              color: 'var(--p-text-muted)',
+                              background: 'transparent',
+                              border: '1px solid var(--p-border)',
+                              '--tw-ring-color': 'var(--p-accent)',
+                            } as React.CSSProperties}
+                            data-testid={'cancel-restore-' + v.id}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={function () { setConfirmingRestoreId(v.id); }}
+                        className={'mt-2 text-[10px] font-medium px-2 py-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                        style={{
+                          color: 'var(--p-accent)',
+                          background: 'color-mix(in srgb, var(--p-accent) 8%, transparent)',
+                          '--tw-ring-color': 'var(--p-accent)',
+                        } as React.CSSProperties}
+                        data-testid={'restore-version-' + v.id}
+                      >
+                        Restore this version
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * New Resume creation modal. Offers two starting points:
+ *   1. "Start from Default Resume" — clones the current default
+ *      resume content into a new named version so the user can
+ *      iterate from existing work.
+ *   2. "Start blank from federal template" — creates a new version
+ *      with empty-but-scaffolded federal resume sections (contact,
+ *      summary, experience, education, skills, certifications,
+ *      supporting evidence). Not a void — the section structure is
+ *      present so the user can fill in fields immediately.
+ *
+ * After creation the new version becomes the active resume in the
+ * selector via the onCreateFromDefault or onCreateBlank callbacks.
+ */
+function NewResumeModal(props: {
+  onClose: () => void;
+  onCreate: (label: string) => void;
+  onCreateBlank: (label: string) => void;
+}) {
+  const [step, setStep] = useState<'choose' | 'name-default' | 'name-blank'>('choose');
+  const [label, setLabel] = useState('');
+
+  /* Escape key closes */
+  useEffect(function () {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') props.onClose();
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return function () { document.removeEventListener('keydown', handleKeyDown); };
+  }, [props.onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.5)' }}
+      onClick={function (e: React.MouseEvent) {
+        if (e.target === e.currentTarget) props.onClose();
+      }}
+      data-testid="new-resume-modal-overlay"
+    >
+      <div
+        className="rounded-xl shadow-2xl p-6"
+        style={{
+          background: 'var(--p-surface)',
+          border: '1px solid var(--p-border)',
+          width: '440px',
+          maxWidth: '90vw',
+        }}
+        data-testid="new-resume-modal"
+      >
+        {/* ---- STEP 1: Choose starting point ---- */}
+        {step === 'choose' && (
+          <div>
+            <h2 className="text-sm font-bold mb-2" style={{ color: 'var(--p-text)' }}>
+              Create New Resume
+            </h2>
+            <p className="text-xs mb-5" style={{ color: 'var(--p-text-muted)' }}>
+              Choose how to start your new resume version.
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {/* Option 1: Start from Default Resume */}
+              <button
+                type="button"
+                onClick={function () { setStep('name-default'); }}
+                className={'w-full text-left px-4 py-3.5 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                style={{
+                  background: 'color-mix(in srgb, var(--p-accent) 6%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--p-accent) 20%, transparent)',
+                  color: 'var(--p-text)',
+                  '--tw-ring-color': 'var(--p-accent)',
+                } as React.CSSProperties}
+                data-testid="new-resume-from-default"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <FileText className="w-4 h-4" style={{ color: 'var(--p-accent)' }} />
+                  <span className="text-xs font-semibold">Start from Default Resume</span>
+                </div>
+                <p className="text-[10px] ml-6" style={{ color: 'var(--p-text-muted)' }}>
+                  Clone your current resume content into a new version you can tailor independently.
+                </p>
+              </button>
+
+              {/* Option 2: Start blank from federal template */}
+              <button
+                type="button"
+                onClick={function () { setStep('name-blank'); }}
+                className={'w-full text-left px-4 py-3.5 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                style={{
+                  background: 'var(--p-surface2, rgba(255,255,255,0.04))',
+                  border: '1px solid var(--p-border)',
+                  color: 'var(--p-text)',
+                  '--tw-ring-color': 'var(--p-accent)',
+                } as React.CSSProperties}
+                data-testid="new-resume-blank-federal"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <ShieldCheck className="w-4 h-4" style={{ color: 'var(--p-text-muted)' }} />
+                  <span className="text-xs font-semibold">Start blank from federal template</span>
+                </div>
+                <p className="text-[10px] ml-6" style={{ color: 'var(--p-text-muted)' }}>
+                  Empty federal resume with standard section scaffolding — fill in your own content.
+                </p>
+              </button>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button
+                type="button"
+                onClick={props.onClose}
+                className={'px-4 py-2 text-xs font-medium rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                style={{
+                  color: 'var(--p-text-muted)',
+                  background: 'transparent',
+                  border: '1px solid var(--p-border)',
+                  '--tw-ring-color': 'var(--p-accent)',
+                } as React.CSSProperties}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ---- STEP 2: Name the new version ---- */}
+        {(step === 'name-default' || step === 'name-blank') && (
+          <div>
+            <h2 className="text-sm font-bold mb-2" style={{ color: 'var(--p-text)' }}>
+              {step === 'name-default' ? 'Name Your Resume Copy' : 'Name Your New Resume'}
+            </h2>
+            <p className="text-xs mb-4" style={{ color: 'var(--p-text-muted)' }}>
+              {step === 'name-default'
+                ? 'This will clone your Default Resume content into a new version.'
+                : 'This will create a blank federal resume with standard section structure.'}
+            </p>
+            <input
+              type="text"
+              value={label}
+              onChange={function (e) { setLabel(e.target.value); }}
+              placeholder="e.g., GS-13 Cybersecurity Application..."
+              className="w-full px-3 py-2 text-xs rounded mb-4 outline-none focus-visible:ring-2 focus-visible:ring-inset"
+              style={{
+                background: 'var(--p-surface2, rgba(255,255,255,0.05))',
+                border: '1px solid var(--p-border)',
+                color: 'var(--p-text)',
+                '--tw-ring-color': 'var(--p-accent)',
+              } as React.CSSProperties}
+              autoFocus
+              onKeyDown={function (e) {
+                if (e.key === 'Enter') {
+                  const versionName = label.trim() || (step === 'name-default' ? 'Resume Copy' : 'New Federal Resume');
+                  if (step === 'name-default') {
+                    props.onCreate(versionName);
+                  } else {
+                    props.onCreateBlank(versionName);
+                  }
+                } else if (e.key === 'Escape') {
+                  props.onClose();
+                }
+              }}
+              data-testid="new-resume-label-input"
+            />
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={function () { setStep('choose'); setLabel(''); }}
+                className={'px-3 py-1.5 text-xs font-medium rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                style={{
+                  color: 'var(--p-text-muted)',
+                  background: 'transparent',
+                  '--tw-ring-color': 'var(--p-accent)',
+                } as React.CSSProperties}
+              >
+                Back
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={props.onClose}
+                  className={'px-4 py-2 text-xs font-medium rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                  style={{
+                    color: 'var(--p-text-muted)',
+                    background: 'transparent',
+                    border: '1px solid var(--p-border)',
+                    '--tw-ring-color': 'var(--p-accent)',
+                  } as React.CSSProperties}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={function () {
+                    const versionName = label.trim() || (step === 'name-default' ? 'Resume Copy' : 'New Federal Resume');
+                    if (step === 'name-default') {
+                      props.onCreate(versionName);
+                    } else {
+                      props.onCreateBlank(versionName);
+                    }
+                  }}
+                  className={'px-4 py-2 text-xs font-semibold rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+                  style={{
+                    background: 'var(--p-accent)',
+                    color: '#ffffff',
+                    border: 'none',
+                    '--tw-ring-color': 'var(--p-accent)',
+                  } as React.CSSProperties}
+                  data-testid="create-resume-button"
+                >
+                  Create Resume
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// RESUME SWITCH CONFIRMATION — dirty-state guard dialog
+// ===========================================================================
+
+/**
+ * Modal dialog for confirming a resume version switch when the current
+ * draft may have unsaved changes. Offers three options:
+ *   - Save current changes and switch (safe path)
+ *   - Discard changes and switch (destructive but intentional)
+ *   - Cancel (stay on current version)
+ *
+ * WHY: Switching versions replaces the draft in the store. Without this
+ * guard, users could lose work by accidentally clicking a different
+ * version in the dropdown. This is a trust-critical interaction.
+ *
+ * DISMISS: Escape key or Cancel button. No backdrop click dismiss
+ * because this is a destructive-action confirmation where accidental
+ * dismissal should be avoided.
+ */
+function ResumeSwitchConfirmation(props: {
+  pendingVersionId: string;
+  onSaveAndSwitch: () => void;
+  onDiscardAndSwitch: () => void;
+  onCancel: () => void;
+}) {
+  /* Escape key cancels the switch */
+  useEffect(function () {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        props.onCancel();
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return function () {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [props.onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.5)' }}
+      data-testid="resume-switch-confirmation-overlay"
+      role="alertdialog"
+      aria-label="Switch resume version"
+    >
+      <div
+        className="rounded-xl shadow-2xl p-6"
+        style={{
+          background: 'var(--p-surface)',
+          border: '1px solid var(--p-border)',
+          width: '420px',
+          maxWidth: '90vw',
+        }}
+        data-testid="resume-switch-confirmation"
+      >
+        <h2 className="text-sm font-bold mb-2" style={{ color: 'var(--p-text)' }}>
+          Switch Resume Version?
+        </h2>
+        <p className="text-xs mb-4" style={{ color: 'var(--p-text-muted)' }}>
+          You may have unsaved changes in your current draft. Switching to
+          another version will replace the active draft.
+        </p>
+
+        <div className="flex flex-col gap-2">
+          {/* Save + Switch — safe path */}
+          <button
+            type="button"
+            onClick={props.onSaveAndSwitch}
+            className={'w-full text-left px-3 py-2.5 text-xs rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+            style={{
+              background: 'color-mix(in srgb, var(--p-accent) 8%, transparent)',
+              color: 'var(--p-accent)',
+              border: '1px solid color-mix(in srgb, var(--p-accent) 20%, transparent)',
+              '--tw-ring-color': 'var(--p-accent)',
+            } as React.CSSProperties}
+            data-testid="switch-save-and-switch"
+          >
+            <span className="font-semibold">Save current changes and switch</span>
+            <br />
+            <span style={{ color: 'var(--p-text-dim)', fontSize: '10px' }}>
+              Saves your current draft as a named version before switching
+            </span>
+          </button>
+
+          {/* Discard + Switch — destructive */}
+          <button
+            type="button"
+            onClick={props.onDiscardAndSwitch}
+            className={'w-full text-left px-3 py-2.5 text-xs rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+            style={{
+              background: 'color-mix(in srgb, var(--p-danger) 6%, transparent)',
+              color: 'var(--p-danger)',
+              border: '1px solid color-mix(in srgb, var(--p-danger) 15%, transparent)',
+              '--tw-ring-color': 'var(--p-accent)',
+            } as React.CSSProperties}
+            data-testid="switch-discard-and-switch"
+          >
+            <span className="font-semibold">Discard changes and switch</span>
+            <br />
+            <span style={{ color: 'var(--p-text-dim)', fontSize: '10px' }}>
+              Unsaved edits will be lost
+            </span>
+          </button>
+
+          {/* Cancel */}
+          <button
+            type="button"
+            onClick={props.onCancel}
+            className={'w-full text-center px-3 py-2 text-xs font-medium rounded outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+            style={{
+              color: 'var(--p-text-muted)',
+              background: 'transparent',
+              border: '1px solid var(--p-border)',
+              '--tw-ring-color': 'var(--p-accent)',
+            } as React.CSSProperties}
+            data-testid="switch-cancel"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// FULL-DOCUMENT REVIEW — PathAdvisor resume review workspace
+// ===========================================================================
+
+/**
+ * Full-document review workspace that evaluates the entire resume. This is
+ * structured as a review conversation workspace rather than a static card.
+ *
+ * ARCHITECTURE:
+ *   1. Header with "Resume Review" title
+ *   2. Deterministic review summary block (readiness, strongest, blocker,
+ *      top federal issue)
+ *   3. Review conversation thread area below the summary — this is where
+ *      future PathAdvisor LLM conversation will appear
+ *   4. Composer area at bottom — currently shows a placeholder state
+ *      indicating the conversation layer is not yet connected
+ *
+ * The summary block provides the initial review frame. The conversation
+ * area below is structurally ready for the real LLM-backed review flow.
+ * Until the conversation layer is wired, the composer shows an honest
+ * placeholder instead of a dead input that does nothing.
+ *
+ * DISMISS: Escape key, close button, and backdrop click.
+ */
+function FullDocumentReview(props: {
+  draft: ResumeDraft;
+  readinessScore: number;
+  sectionProgressList: SectionProgress[];
+  targetJobTitle: string | null;
+  onClose: () => void;
+}) {
+  /* Escape key closes the review */
+  useEffect(function () {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        props.onClose();
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return function () {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [props.onClose]);
+
+  /* --- Deterministic evaluation logic ---
+   * Analyzes section progress to identify strongest, weakest, missing,
+   * and build prioritized fix recommendations. */
+
+  /* Find strongest section (highest completion) */
+  let strongestSection: SectionProgress | null = null;
+  let weakestSection: SectionProgress | null = null;
+  const missingSections: SectionProgress[] = [];
+  const criticalSections: SectionProgress[] = [];
+  const needsWorkSections: SectionProgress[] = [];
+
+  for (let i = 0; i < props.sectionProgressList.length; i++) {
+    const sp = props.sectionProgressList[i];
+    if (sp.severity === 'missing') {
+      missingSections.push(sp);
+      continue;
+    }
+    if (sp.severity === 'critical') {
+      criticalSections.push(sp);
+    }
+    if (sp.severity === 'needs_work') {
+      needsWorkSections.push(sp);
+    }
+    if (strongestSection === null || sp.completionPct > strongestSection.completionPct) {
+      strongestSection = sp;
+    }
+    if (weakestSection === null || sp.completionPct < weakestSection.completionPct) {
+      weakestSection = sp;
+    }
+  }
+
+  /* Build biggest blocker */
+  let biggestBlocker = 'No critical blockers detected.';
+  if (criticalSections.length > 0) {
+    biggestBlocker = criticalSections[0].label + ' has ' + criticalSections[0].highSeverityIssueCount + ' critical issue' + (criticalSections[0].highSeverityIssueCount === 1 ? '' : 's') + ' that must be resolved.';
+  } else if (!props.draft.summary || props.draft.summary.trim().length === 0) {
+    biggestBlocker = 'Missing Professional Summary — required for federal resume screening.';
+  } else if (missingSections.length > 0) {
+    biggestBlocker = missingSections[0].label + ' section is empty and should be completed.';
+  }
+
+  /* Build top 3 fix recommendations */
+  const fixes: string[] = [];
+  if (!props.draft.summary || props.draft.summary.trim().length === 0) {
+    fixes.push('Write a Professional Summary — this is the first section HR reviewers read.');
+  }
+  for (let i = 0; i < criticalSections.length && fixes.length < 3; i++) {
+    fixes.push('Fix critical issues in ' + criticalSections[i].label + ' (' + criticalSections[i].highSeverityIssueCount + ' high-severity).');
+  }
+  for (let i = 0; i < needsWorkSections.length && fixes.length < 3; i++) {
+    fixes.push('Improve ' + needsWorkSections[i].label + ' (currently at ' + needsWorkSections[i].completionPct + '% completion).');
+  }
+  for (let i = 0; i < missingSections.length && fixes.length < 3; i++) {
+    fixes.push('Complete the ' + missingSections[i].label + ' section.');
+  }
+  if (fixes.length === 0) {
+    fixes.push('Resume is in good shape. Review the preview and export when ready.');
+  }
+
+  /* Check for missing federal details — top federal issue for summary */
+  const missingFederalItems: string[] = [];
+  for (let i = 0; i < props.draft.experience.length; i++) {
+    const exp = props.draft.experience[i];
+    if (!exp.hoursPerWeek || exp.hoursPerWeek.trim().length === 0) {
+      missingFederalItems.push('Hours/week missing for: ' + exp.jobTitle);
+    }
+    if (!exp.grade || exp.grade.trim().length === 0) {
+      missingFederalItems.push('Grade/series missing for: ' + exp.jobTitle);
+    }
+  }
+
+  /* Top federal issue — one-line summary for the review summary block */
+  const topFederalIssue = missingFederalItems.length > 0
+    ? missingFederalItems[0]
+    : null;
+
+  const readinessColor = readinessTierColor(props.readinessScore);
+  const readinessLabel = readinessBandLabel(props.readinessScore);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-auto"
+      style={{ background: 'rgba(0,0,0,0.6)' }}
+      onClick={function (e: React.MouseEvent) {
+        if (e.target === e.currentTarget) props.onClose();
+      }}
+      data-testid="full-document-review-overlay"
+      role="dialog"
+      aria-label="Resume review workspace"
+    >
+      <div
+        className="relative mx-4 rounded-xl shadow-2xl flex flex-col"
+        style={{
+          background: 'var(--p-surface)',
+          border: '1px solid var(--p-border)',
+          maxWidth: '640px',
+          width: '100%',
+          /* Workspace feel: substantial height, centered in viewport */
+          minHeight: '520px',
+          maxHeight: 'calc(100vh - 96px)',
+        }}
+        data-testid="full-document-review"
+      >
+        {/* ================================================================
+         * HEADER — Resume Review title with close button.
+         * Structurally separated from the review body so the header
+         * stays pinned at the top of the workspace.
+         * ================================================================ */}
+        <div
+          className="flex items-center justify-between px-6 py-4 flex-shrink-0"
+          style={{ borderBottom: '1px solid var(--p-border)' }}
+        >
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5" style={{ color: 'var(--p-accent)' }} />
+            <h2 className="text-base font-bold" style={{ color: 'var(--p-text)' }}>
+              Resume Review
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={props.onClose}
+            className={'flex items-center justify-center w-7 h-7 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset ' + INTERACTIVE_HOVER_CLASS}
+            style={{
+              color: 'var(--p-text-muted)',
+              '--tw-ring-color': 'var(--p-accent)',
+            } as React.CSSProperties}
+            aria-label="Close review"
+            data-testid="full-review-close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* ================================================================
+         * SCROLLABLE BODY — Review summary + conversation thread area.
+         * Flex-1 and overflow-auto so the body scrolls independently
+         * of the pinned header and the bottom composer area.
+         * ================================================================ */}
+        <div className="flex-1 overflow-auto px-6 py-4">
+
+          {/* Target job context */}
+          {props.targetJobTitle && (
+            <p className="text-xs mb-4" style={{ color: 'var(--p-text-dim)' }}>
+              Reviewing for: <span className="font-medium" style={{ color: 'var(--p-text-muted)' }}>{props.targetJobTitle}</span>
+            </p>
+          )}
+
+          {/* ============================================================
+           * REVIEW SUMMARY BLOCK — Deterministic initial review frame.
+           *
+           * Compact summary with four key metrics: readiness, strongest
+           * section, biggest blocker, and top federal issue. This is
+           * the initial frame that PathAdvisor review starts from.
+           * ============================================================ */}
+          <div
+            className="rounded-lg mb-5 p-4"
+            style={{
+              background: 'var(--p-surface2, rgba(255,255,255,0.04))',
+              border: '1px solid var(--p-border)',
+            }}
+            data-testid="review-summary-block"
+          >
+            {/* Readiness score — the primary metric */}
+            <div
+              className="flex items-baseline gap-2 mb-3 pb-3"
+              style={{ borderBottom: '1px solid var(--p-border)' }}
+              data-testid="review-readiness-summary"
+            >
+              <span className="text-2xl font-bold" style={{ color: readinessColor }}>
+                {props.readinessScore}%
+              </span>
+              <span className="text-sm font-semibold" style={{ color: readinessColor }}>
+                Ready
+              </span>
+              <span className="text-xs" style={{ color: 'var(--p-text-muted)' }}>
+                · {readinessLabel}
+              </span>
+            </div>
+
+            {/* Summary metrics — compact key/value pairs */}
+            <div className="space-y-2">
+              {/* Strongest section */}
+              <div className="flex items-start gap-2" data-testid="review-strongest">
+                <span
+                  className="flex-shrink-0 mt-1 w-2 h-2 rounded-full"
+                  style={{ background: 'var(--p-success)' }}
+                />
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
+                    Strongest
+                  </span>
+                  <p className="text-xs" style={{ color: 'var(--p-text-muted)' }}>
+                    {strongestSection ? strongestSection.label + ' — ' + strongestSection.completionPct + '% complete' : 'Not enough data yet'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Biggest blocker */}
+              <div className="flex items-start gap-2" data-testid="review-biggest-blocker">
+                <span
+                  className="flex-shrink-0 mt-1 w-2 h-2 rounded-full"
+                  style={{ background: 'var(--p-danger, #ef4444)' }}
+                />
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
+                    Biggest Blocker
+                  </span>
+                  <p className="text-xs" style={{ color: 'var(--p-text-muted)' }}>
+                    {biggestBlocker}
+                  </p>
+                </div>
+              </div>
+
+              {/* Top federal issue — only shown if there are gaps */}
+              {topFederalIssue && (
+                <div className="flex items-start gap-2" data-testid="review-federal">
+                  <span
+                    className="flex-shrink-0 mt-1 w-2 h-2 rounded-full"
+                    style={{ background: 'var(--p-warning, #eab308)' }}
+                  />
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
+                      Top Federal Issue
+                    </span>
+                    <p className="text-xs" style={{ color: 'var(--p-text-muted)' }}>
+                      {topFederalIssue}
+                      {missingFederalItems.length > 1 ? ' (+' + (missingFederalItems.length - 1) + ' more)' : ''}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ============================================================
+           * TOP RECOMMENDED FIXES — deterministic action items
+           * ============================================================ */}
+          <div className="mb-5" data-testid="review-top-fixes">
+            <h3 className="text-xs font-bold mb-2" style={{ color: 'var(--p-text)' }}>
+              Recommended Next Steps
+            </h3>
+            <ol className="space-y-1.5">
+              {fixes.map(function (fix, idx) {
+                return (
+                  <li key={idx} className="flex gap-2 text-xs leading-relaxed" style={{ color: 'var(--p-text-muted)' }}>
+                    <span className="font-bold flex-shrink-0" style={{ color: 'var(--p-accent)' }}>{idx + 1}.</span>
+                    <span>{fix}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+
+          {/* ============================================================
+           * REVIEW CONVERSATION THREAD AREA
+           *
+           * Structurally ready for future PathAdvisor LLM review
+           * conversation. Currently shows a deterministic placeholder
+           * that honestly communicates what will appear here.
+           *
+           * When the LLM conversation layer is connected, this area
+           * will render a threaded conversation where PathAdvisor
+           * provides deeper analysis and the user can ask follow-up
+           * questions about specific sections or recommendations.
+           * ============================================================ */}
+          <div
+            className="rounded-lg p-4"
+            style={{
+              background: 'color-mix(in srgb, var(--p-accent) 4%, transparent)',
+              border: '1px dashed color-mix(in srgb, var(--p-accent) 20%, transparent)',
+              minHeight: '80px',
+            }}
+            data-testid="review-conversation-thread"
+          >
+            <div className="flex items-start gap-2.5">
+              <div
+                className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center"
+                style={{
+                  background: 'color-mix(in srgb, var(--p-accent) 15%, transparent)',
+                }}
+              >
+                <Sparkles className="w-3.5 h-3.5" style={{ color: 'var(--p-accent)' }} />
+              </div>
+              <div>
+                <p className="text-xs font-semibold mb-1" style={{ color: 'var(--p-accent)' }}>
+                  PathAdvisor Review
+                </p>
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--p-text-dim)' }}>
+                  PathAdvisor review conversation will appear here once connected.
+                  You will be able to ask follow-up questions about specific sections,
+                  get deeper analysis of alignment gaps, and receive tailored
+                  improvement suggestions.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ================================================================
+         * COMPOSER AREA — Bottom-pinned area for future conversation input.
+         *
+         * Currently shows a clearly disabled placeholder. The composer is
+         * not functional until the PathAdvisor conversation layer is wired.
+         * This is an honest placeholder, not a dead input pretending to work.
+         * ================================================================ */}
+        <div
+          className="flex-shrink-0 px-6 py-3"
+          style={{ borderTop: '1px solid var(--p-border)' }}
+          data-testid="review-composer-area"
+        >
+          <div
+            className="flex items-center gap-2 px-3 py-2 rounded-lg"
+            style={{
+              background: 'var(--p-surface2, rgba(255,255,255,0.04))',
+              border: '1px solid var(--p-border)',
+              opacity: 0.5,
+              cursor: 'not-allowed',
+            }}
+            aria-disabled="true"
+            title="PathAdvisor conversation is not yet connected"
+          >
+            <span className="text-xs" style={{ color: 'var(--p-text-dim)' }}>
+              Ask PathAdvisor about your resume...
+            </span>
+            <div className="ml-auto flex-shrink-0">
+              <button
+                type="button"
+                disabled={true}
+                className="px-2.5 py-1 text-[10px] font-medium rounded"
+                style={{
+                  background: 'var(--p-surface)',
+                  color: 'var(--p-text-dim)',
+                  border: '1px solid var(--p-border)',
+                  cursor: 'not-allowed',
+                }}
+                aria-label="Send message (not yet available)"
+                tabIndex={-1}
+              >
+                Coming soon
+              </button>
+            </div>
+          </div>
+          <p className="text-[10px] mt-1.5 text-center" style={{ color: 'var(--p-text-dim)' }}>
+            Review summary is based on deterministic analysis. Conversation with PathAdvisor coming in a future update.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ReviewSection helper removed — no longer used after the Resume Review
+ * evolution from static card to conversation workspace layout. */
