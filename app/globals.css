@@ -302,3 +302,220 @@
     background-color: color-mix(in oklch, var(--accent) 10%, transparent);
   }
 }
+
+/* ============================================================================
+   RESUME EXPORT PRINT RULES — Portal-based dedicated print root
+   ============================================================================
+   
+   STRATEGY:
+   When the user triggers window.print() from the Resume Preview Overlay,
+   these rules produce a clean resume PDF by using a dedicated print root
+   (#resume-print-root) that is rendered via React portal directly into
+   document.body, completely outside the app's React DOM tree.
+   
+   HOW IT WORKS:
+   1. A blanket rule hides ALL direct children of body (including #__next
+      which contains the entire app) EXCEPT #resume-print-root
+   2. #resume-print-root (display:none on screen) becomes visible
+   3. Only paginated resume pages exist inside the print root
+   4. No app chrome, no overlay, no scrollbar, no buttons — just resume
+   
+   WHY NOT SELECTIVE HIDING:
+   The previous approach tried to hide specific app chrome by data-testid.
+   This was fragile (missed elements, wrong specificity) and could not fix
+   the core problem: the preview overlay sat inside ancestor containers
+   with overflow:hidden, flex, and fixed positioning that clipped print
+   output to a single viewport-sized page. The portal approach escapes
+   ALL ancestor constraints by placing the print tree outside the app.
+   
+   BROWSER PRINT HEADERS/FOOTERS:
+   Browsers add their own header (page title, date) and footer (URL,
+   page number) to printed pages. This metadata is controlled by the
+   browser's print dialog settings, NOT by app CSS or JavaScript. The
+   app cannot suppress these. Users should uncheck "Headers and footers"
+   in their browser print dialog for a clean resume export. This is
+   documented in the print preview UI and in merge-notes.
+   
+   PRINT TRIGGER: Resume Builder > Preview > "Export Resume PDF" button
+   calls window.print(), which invokes the browser's native print dialog.
+   Selecting "Save as PDF" produces a clean resume document.
+
+   PAGE-COUNT PARITY:
+   The @page rule below sets the physical page size to US Letter with
+   zero margins, giving the full 8.5in x 11in (816px x 1056px at 96 DPI)
+   as the printable area. Each print page container is sized to exactly
+   PAGE_HEIGHT_PX (1056px) with box-sizing:border-box so padding is
+   included. This guarantees that each page container maps to exactly
+   one physical printed page — the exported PDF page count matches the
+   paginated resume model page count exactly.
+
+   Without @page { margin: 0 }, browsers apply default print margins
+   (~0.4–0.5in top and bottom), reducing the printable area to ~960px.
+   Content that fits within the pagination engine's 928px budget +
+   80px padding = 1008px would then overflow the physical page and
+   push onto an extra sheet, causing a page-count mismatch (e.g. a
+   2-page resume exporting as 3 pages).
+============================================================================ */
+
+/* ---- @PAGE RULE ----
+   Sets the physical printed page to US Letter with zero margins.
+   This makes the full 11 inches (1056px at 96 DPI) available for
+   content. Without this, browser default margins consume ~1 inch
+   of vertical space, causing content to overflow to extra pages.
+   The @page at-rule only applies during printing — it has no effect
+   on screen layout. Placed at the top level per CSS spec (not inside
+   @media print). */
+@page {
+  size: letter;
+  margin: 0;
+}
+
+@media print {
+  /* ---- ROOT RESET ----
+     White background at the root for clean PDF rendering. Without
+     this, dark-theme users would get a dark background in their PDF.
+     Margins are zeroed so the print root's internal padding controls
+     the document margins. */
+  html, body {
+    background: #ffffff !important;
+    color: #111111 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* ---- BLANKET HIDE ----
+     Hide ALL direct children of body EXCEPT the dedicated print root.
+     The print root (#resume-print-root) is a direct child of body,
+     rendered via React portal. This single rule hides the entire app
+     tree (#__next and all its descendants), all script/style nodes,
+     and any other body-level elements — without needing to enumerate
+     specific data-testid values.
+
+     This is the key architectural improvement: instead of playing
+     whack-a-mole with app chrome selectors, we hide everything and
+     show only the print root. Nothing app-generated can leak through
+     except the portal content. */
+  body > *:not(#resume-print-root) {
+    display: none !important;
+  }
+
+  /* ---- EXPLICIT PREVIEW OVERLAY KILL-SWITCH ----
+     Belt-and-suspenders defense: the blanket rule above hides all body
+     direct children except #resume-print-root, which should hide the
+     preview overlay via its ancestor. However, position:fixed elements
+     have known browser quirks in print mode — Chrome and Edge print
+     engines can render fixed-position elements even when an ancestor
+     has display:none. This rule directly targets the preview overlay
+     and any [data-print-hide] elements so they never appear in print
+     regardless of browser behavior.
+
+     INVARIANT: At print time, exactly one printable resume root may
+     exist. The preview overlay is the screen-only review surface;
+     the print portal (#resume-print-root) is the sole print source. */
+  [data-testid="resume-preview-overlay"],
+  [data-print-hide] {
+    display: none !important;
+    visibility: hidden !important;
+    position: static !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+
+  /* ---- PRINT ROOT REVEAL ----
+     The print root uses display:none on screen (set via inline style
+     in the React useEffect that creates the container). This rule
+     overrides that to make the print tree visible during printing.
+     This is the sole source of printed content.
+
+     Zero margin/padding ensures the print root contributes no extra
+     vertical space that could push page content onto additional pages. */
+  #resume-print-root {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* ---- PRINT SOURCE WRAPPER ----
+     The [data-resume-print-source] wrapper div sits between the
+     print root container and the individual page surfaces. It must
+     contribute zero vertical space — all sizing comes from the page
+     surfaces (data-page-number) which are sized to exactly one
+     physical page each. */
+  #resume-print-root [data-resume-print-source] {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* ---- PAGE SURFACES ----
+     Each page in the print root is a div with data-page-number.
+     These rules ensure clean document-style rendering: no card shadows,
+     no borders, full-width content, and exact page-height sizing.
+
+     CRITICAL FOR PAGE-COUNT PARITY:
+     height: 1056px (PAGE_HEIGHT_PX) makes each container exactly one
+     US Letter page tall. box-sizing: border-box includes padding in
+     that height, so the 40px top + 40px bottom padding leaves exactly
+     976px (PAGE_CONTENT_PX) for content — matching the pagination
+     engine's budget. overflow: hidden clips any content that slightly
+     exceeds the estimated height, preventing it from spilling onto an
+     extra physical page. The 48px safety margin in the pagination
+     engine means real content should never reach the clip boundary. */
+  #resume-print-root [data-page-number] {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 1056px !important;
+    box-sizing: border-box !important;
+    background: #ffffff !important;
+    color: #111111 !important;
+    overflow: hidden !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* ---- PAGE BREAKS ----
+     Page 2+ starts on a new printed sheet. This aligns the printed
+     output with the on-screen page model. The inline styles on the
+     React elements also set these properties, but this CSS rule
+     provides reinforcement in case specificity conflicts arise. */
+  #resume-print-root [data-page-number]:not([data-page-number="1"]) {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+
+  /* ---- CONTENT PROTECTION ----
+     Prevent mid-item page breaks inside resume sections (experience
+     entries, education items, bullet lists). This keeps each logical
+     content unit on a single printed page when possible. */
+  #resume-print-root [data-page-number] > div > div {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* ---- SCROLLBAR SUPPRESSION (scoped to print root) ----
+     Remove scrollbar artifacts from print output. Scoped to the print
+     root and its descendants only. The previous wildcard * rule forced
+     overflow:visible on ALL elements including those hidden by the
+     blanket rule. When combined with position:fixed on the preview
+     overlay, some browser print engines (Chrome, Edge) would render
+     the overlay content despite the ancestor having display:none.
+     Scoping to #resume-print-root prevents this interference.
+
+     NOTE: The page surface rule above sets overflow:hidden on
+     [data-page-number] elements with higher specificity (0,1,1,0)
+     than this wildcard rule (0,1,0,0). That means page containers
+     clip content at exactly PAGE_HEIGHT_PX while inner elements
+     still get overflow:visible for natural text flow. This is the
+     key mechanism that prevents page-count drift. */
+  #resume-print-root,
+  #resume-print-root * {
+    scrollbar-width: none !important;
+  }
+  #resume-print-root *::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+}

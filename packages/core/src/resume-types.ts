@@ -48,6 +48,28 @@ export interface ResumeSkill {
   name: string;
 }
 
+/**
+ * A single certification or license entry.
+ * Stored as a flat string (e.g. "CISSP", "CompTIA Security+").
+ * Structured sub-fields (issuer, date, expiry) can be added in a
+ * future pass without breaking the current contract.
+ */
+export interface ResumeCertification {
+  id: string;
+  name: string;
+}
+
+/**
+ * A supporting-evidence item — quantified achievements, publications,
+ * awards, or project outcomes that strengthen the resume beyond
+ * the experience bullets. Stored separately so evidence can span
+ * multiple positions and be tagged to specific KSA dimensions.
+ */
+export interface ResumeSupportingEvidence {
+  id: string;
+  text: string;
+}
+
 // ---------------------------------------------------------------------------
 // Draft
 // ---------------------------------------------------------------------------
@@ -58,6 +80,10 @@ export interface ResumeDraft {
   experience: ResumeExperience[];
   education: ResumeEducation[];
   skills: ResumeSkill[];
+  /** Professional certifications and licenses. */
+  certifications: ResumeCertification[];
+  /** Quantified achievements, awards, publications, project outcomes. */
+  supportingEvidence: ResumeSupportingEvidence[];
 }
 
 // ---------------------------------------------------------------------------
@@ -106,5 +132,7 @@ export function createDefaultDraft(): ResumeDraft {
     experience: [],
     education: [],
     skills: [],
+    certifications: [],
+    supportingEvidence: [],
   };
 }

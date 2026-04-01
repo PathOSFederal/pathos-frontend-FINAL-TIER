@@ -15,7 +15,16 @@ import {
 const SIMULATED_REPLY =
   'Thanks for your question. This is a local-only preview—PathAdvisor will use your context when connected.';
 
-export function SharedDashboardRouteShell(props: { children: React.ReactNode }) {
+export function SharedDashboardRouteShell(props: {
+  children: React.ReactNode;
+  /**
+   * When true, the PathAdvisor right rail is not rendered. Used by
+   * surfaces that provide their own section-scoped guidance model
+   * (e.g., Resume Builder) and do not want a competing assistant
+   * column.
+   */
+  hideAdvisor?: boolean;
+}) {
   const adapter = useNextNavAdapter();
   const searchParams = useSearchParams();
   const themeVariant = parseThemeVariant(searchParams.get('theme')) ?? undefined;
@@ -54,13 +63,16 @@ export function SharedDashboardRouteShell(props: { children: React.ReactNode }) 
         platform="web"
         themeVariant={themeVariant}
         rightRail={
-          <PathAdvisorRail
-            dock="right"
-            messages={advisorMessages}
-            onSend={handleAdvisorSend}
-          />
+          props.hideAdvisor
+            ? undefined
+            : <PathAdvisorRail
+                dock="right"
+                messages={advisorMessages}
+                onSend={handleAdvisorSend}
+              />
         }
         advisorDock="right"
+        hideAdvisor={props.hideAdvisor}
       >
         {props.children}
       </SharedAppShell>

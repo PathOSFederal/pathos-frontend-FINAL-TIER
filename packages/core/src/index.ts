@@ -160,6 +160,8 @@ export type {
   ResumeExperience,
   ResumeEducation,
   ResumeSkill,
+  ResumeCertification,
+  ResumeSupportingEvidence,
   ResumeDraft,
   ResumeVersion,
   ResumeStore,

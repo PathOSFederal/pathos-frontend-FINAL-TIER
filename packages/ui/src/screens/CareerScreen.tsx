@@ -56,6 +56,7 @@ import { useNav } from '@pathos/adapters';
 import { RESUME_BUILDER, SAVED_JOBS } from '../routes/routes';
 import { OVERLAY_ROOT_ID, Z_DIALOG, Z_POPOVER } from '../styles/zIndex';
 import { publishSelectionContext } from '../lib/pathAdvisorPublish';
+import { readinessTierColor, readinessBandLabel } from '../styles/scoreTiers';
 import { loadSavedJobsStore, listSavedJobs } from '@pathos/core';
 import type { Job } from '@pathos/core';
 
@@ -355,7 +356,12 @@ function TailoringTargetJobPicker(props: {
 // ---------------------------------------------------------------------------
 // Resume Readiness briefing tiles (4 tiles). Same card chrome as ModuleCard
 // and other cards on this page: border, radius, surface, 1px top accent.
-// No left accent bar; emphasis via content only (value text uses --p-accent).
+// No left accent bar; emphasis via content only.
+//
+// READINESS vs COMPLETION: The "Overall Readiness" tile uses the 5-tier
+// readiness color scale (readinessTierColor) so the color reflects the
+// readiness percentage band. Non-readiness tiles (e.g. missing fields,
+// tailor-ready) use the default accent color for their values.
 // ---------------------------------------------------------------------------
 
 function ResumeReadinessTile(props: {
@@ -363,14 +369,40 @@ function ResumeReadinessTile(props: {
   value: string;
   subtext: string;
   showInfoIcon?: boolean;
-  /** Optional 0–100 for a thin progress bar under the value (e.g. completeness). */
+  /** Optional 0–100 for a thin progress bar under the value. */
   progressPercent?: number;
+  /**
+   * When provided, the value text and progress bar use the 5-tier
+   * readiness color for this score instead of the default accent color.
+   * This makes the tile a "readiness-scored" tile where the color
+   * directly communicates the quality of the score.
+   *
+   * EXAMPLE: readinessScore=62 → green (Good band), readinessScore=38 → red (Needs work)
+   */
+  readinessScore?: number;
+  /**
+   * Optional secondary label shown below the primary value.
+   * Used for the readiness band label (e.g. "Strong", "Fair").
+   */
+  secondaryLabel?: string;
 }) {
   const showProgress =
     props.progressPercent !== undefined &&
     props.progressPercent !== null &&
     props.progressPercent >= 0 &&
     props.progressPercent <= 100;
+
+  /* Determine value color: if this is a readiness-scored tile, use the
+   * 5-tier readiness color. Otherwise use the default accent color. */
+  const hasReadinessScore =
+    props.readinessScore !== undefined && props.readinessScore !== null;
+  const valueColor = hasReadinessScore
+    ? readinessTierColor(props.readinessScore as number)
+    : 'var(--p-accent)';
+  const progressColor = hasReadinessScore
+    ? readinessTierColor(props.readinessScore as number)
+    : 'var(--p-accent)';
+
   return (
     <div
       className="rounded-[var(--p-radius-lg)] flex flex-col"
@@ -379,7 +411,9 @@ function ResumeReadinessTile(props: {
         border: '1px solid var(--p-border)',
         borderRadius: 'var(--p-radius-lg)',
         boxShadow: 'var(--p-shadow-elev-1)',
-        borderTop: '1px solid var(--p-accent-muted)',
+        borderTop: hasReadinessScore
+          ? '1px solid ' + valueColor
+          : '1px solid var(--p-accent-muted)',
       }}
     >
       <div className="p-3 flex flex-col gap-0.5">
@@ -390,7 +424,7 @@ function ResumeReadinessTile(props: {
           {props.label}
         </span>
         <div className="flex items-center gap-1.5">
-          <p className="font-semibold" style={{ color: 'var(--p-accent)', fontSize: '1rem' }}>
+          <p className="font-semibold" style={{ color: valueColor, fontSize: '1rem' }}>
             {props.value}
           </p>
           {props.showInfoIcon === true ? (
@@ -401,16 +435,30 @@ function ResumeReadinessTile(props: {
             />
           ) : null}
         </div>
+        {/* Secondary band label — shown below the value when provided */}
+        {props.secondaryLabel !== undefined && props.secondaryLabel !== null && props.secondaryLabel !== '' ? (
+          <span
+            className="text-[11px] font-medium"
+            style={{ color: 'var(--p-text-muted)' }}
+          >
+            {props.secondaryLabel}
+          </span>
+        ) : null}
         {showProgress ? (
           <div
             className="mt-1 h-1 rounded-full overflow-hidden"
             style={{ background: 'var(--p-surface2)' }}
+            role="progressbar"
+            aria-valuenow={props.progressPercent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={props.label + ' progress'}
           >
             <div
               className="h-full rounded-full"
               style={{
                 width: props.progressPercent + '%',
-                background: 'var(--p-accent)',
+                background: progressColor,
               }}
             />
           </div>
@@ -673,12 +721,15 @@ export function CareerScreen(props: CareerScreenProps) {
   );
 
   // Today's Best Move copy and CTA depend on demo state.
+  // Uses readiness language (not completion language) to stay consistent
+  // with the percentage-first readiness model. 62% readiness is the demo
+  // score; the band label provides the interpretation.
   const heroMessage =
     demoState === 'noResume'
       ? 'Add a resume to get started. Build your master resume so you can tailor it to jobs.'
       : demoState === 'incompleteResume' || demoState === 'readyResume' || demoState === 'tailorReadyWithJob'
-        ? 'Your resume is 62% complete. Completing all sections increases your chances of getting referred.'
-        : 'Your resume is 62% complete. Completing all sections increases your chances of getting referred.';
+        ? 'Your resume readiness is 62% (' + readinessBandLabel(62) + '). Improving evidence and completing sections increases your chances of getting referred.'
+        : 'Your resume readiness is 62% (' + readinessBandLabel(62) + '). Improving evidence and completing sections increases your chances of getting referred.';
   const heroCtaLabel = demoState === 'noResume' ? 'Add resume' : 'Complete Resume';
   const heroContextCopy =
     'Based on your saved jobs, resume completeness, and last update.';
@@ -868,15 +919,32 @@ export function CareerScreen(props: CareerScreenProps) {
         </p>
       </ModuleCard>
 
-      {/* Resume Readiness: 4-tile briefing row */}
+      {/* Resume Readiness: 4-tile briefing row.
+       *
+       * PERCENTAGE-FIRST DISPLAY: The first tile shows the overall
+       * readiness score as a percentage with a band label secondary.
+       * This matches the Career Readiness display pattern where
+       * the number is primary and the label is secondary.
+       *
+       * READINESS vs COMPLETION: The readiness percentage is NOT
+       * the same as completion percentage. Completion asks "are
+       * fields present?" — readiness asks "how submission-ready is
+       * this resume?" factoring in evidence quality, federal
+       * requirements, and section health. The readiness score is a
+       * composite that weights completion, severity, and evidence.
+       *
+       * MOCK DATA NOTE: Currently using a demo-derived readiness
+       * score (62). In production this will come from the store. */}
       <div>
         <SectionHeader title="RESUME READINESS" />
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <ResumeReadinessTile
-            label="Completeness"
-            value={hasResume ? '62%' : '—'}
-            subtext={hasResume ? 'sections complete' : 'No resume'}
+            label="Overall readiness"
+            value={hasResume ? '62% Ready' : '—'}
+            secondaryLabel={hasResume ? readinessBandLabel(62) : undefined}
+            subtext={hasResume ? 'Based on completeness, evidence, and federal requirements' : 'No resume'}
             progressPercent={hasResume ? 62 : undefined}
+            readinessScore={hasResume ? 62 : undefined}
           />
           <ResumeReadinessTile
             label="Missing fields"
