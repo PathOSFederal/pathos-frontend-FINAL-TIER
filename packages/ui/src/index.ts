@@ -18,6 +18,20 @@ export { Sidebar, type SidebarProps } from './shell/Sidebar';
 export { TopBar, type TopBarProps } from './shell/TopBar';
 export { PathAdvisorCard, type PathAdvisorCardProps, type PathAdvisorMessage } from './shell/PathAdvisorCard';
 export { PathAdvisorRail, type PathAdvisorRailProps, type PathAdvisorAnchorContext } from './shell/PathAdvisorRail';
+export { PathAdvisorGovernedPanel, type PathAdvisorGovernedPanelProps } from './shell/PathAdvisorGovernedPanel';
+export type {
+  PathAdvisorGovernedDomain,
+  PathAdvisorGovernedResponseState,
+  PathAdvisorFreshnessState,
+  PathAdvisorKeyFactor,
+  PathAdvisorDomainGroundingRecord,
+  PathAdvisorGroundingMetadata,
+  PathAdvisorShapedResponse,
+  PathAdvisorQualificationDraft,
+  PathAdvisorFehbDraft,
+  PathAdvisorGovernedDraft,
+  PathAdvisorGovernedResultState,
+} from './shell/pathadvisor-governed-types';
 export {
   usePathAdvisorBriefingStore,
   type PathAdvisorBriefing,

@@ -21,6 +21,7 @@ import { Tooltip } from '../components/Tooltip';
 import { Z_POPOVER } from '../styles/zIndex';
 import { usePathAdvisorBriefingStore, isFitBriefing } from '../stores/pathAdvisorBriefingStore';
 import { useDashboardHeroDoNowStore } from '../stores/dashboardHeroDoNowStore';
+import { PathAdvisorGovernedPanel } from './PathAdvisorGovernedPanel';
 import {
   usePathAdvisorContextLogStore,
   getAnchorKeysForScreen,
@@ -28,6 +29,10 @@ import {
   type PathAdvisorContextEntry,
 } from '../stores/pathAdvisorContextLogStore';
 import { useNav } from '@pathos/adapters';
+import type {
+  PathAdvisorGovernedDraft,
+  PathAdvisorGovernedResultState,
+} from './pathadvisor-governed-types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -83,6 +88,14 @@ export interface PathAdvisorCardProps {
   onRailSkipClick?: () => void;
   /** Optional: composer input placeholder (e.g. "Ask about saved jobs..."). When unset, default "Ask PathAdvisor...". */
   composerPlaceholder?: string;
+  /** Optional: bounded governed PathAdvisor request draft shown in the shared rail. */
+  governedDraft?: PathAdvisorGovernedDraft;
+  /** Optional: latest governed request state for the shared rail response surface. */
+  governedResult?: PathAdvisorGovernedResultState;
+  /** Optional: called when the bounded governed draft changes. */
+  onGovernedDraftChange?: (draft: PathAdvisorGovernedDraft) => void;
+  /** Optional: called when the user submits the bounded governed request. */
+  onGovernedSubmit?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +517,11 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
 
   const messageList = props.messages;
   const promptList = props.suggestedPrompts;
+  const isGovernedMode =
+    props.governedDraft !== undefined &&
+    props.governedResult !== undefined &&
+    props.onGovernedDraftChange !== undefined &&
+    props.onGovernedSubmit !== undefined;
 
   return (
     <ModuleCard
@@ -982,8 +1000,11 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
           </div>
         ) : null}
 
-        {/* Suggested prompts as chips. Guidance tab only; when Context Log is showing, chips are in Quick questions expander. */}
-        {activeTab === 'guidance' && !hasContextLogEntries && promptList.length > 0 ? (
+        {/* Suggested prompts as chips. Guidance tab only; when governed mode is
+         * active, the structured governed panel replaces these older prompt
+         * chips because the governed endpoints use bounded inputs rather than
+         * freeform prompt text. */}
+        {activeTab === 'guidance' && !hasContextLogEntries && !isGovernedMode && promptList.length > 0 ? (
           <div className="px-2 pb-2 flex-shrink-0">
             <p className="text-[10px] uppercase tracking-wide mb-1.5 px-1" style={{ color: 'var(--p-text-dim)' }}>
               Quick Prompts
@@ -1010,6 +1031,17 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
               })}
             </div>
           </div>
+        ) : null}
+
+        {/* Governed PathAdvisor panel. This surface replaces the old local-only
+         * prompt loop when the app shell provides the bounded contract props. */}
+        {activeTab === 'guidance' && !hasContextLogEntries && isGovernedMode ? (
+          <PathAdvisorGovernedPanel
+            draft={props.governedDraft as PathAdvisorGovernedDraft}
+            result={props.governedResult as PathAdvisorGovernedResultState}
+            onDraftChange={props.onGovernedDraftChange as (draft: PathAdvisorGovernedDraft) => void}
+            onSubmit={props.onGovernedSubmit as () => void}
+          />
         ) : null}
 
         {/* --- HISTORY TAB --- */}
@@ -1064,46 +1096,50 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
         ) : null}
       </div>
 
-        {/* Composer: pinned to bottom with top divider. Input box and send are separate controls. */}
-        <div
-          className="flex-shrink-0 pt-3"
-          style={{ borderTop: '1px solid var(--p-border)' }}
-        >
-          <form
-            onSubmit={handleSubmit}
-            className="flex items-center gap-2"
+        {/* Composer: the legacy freeform chat control remains available for
+         * non-governed surfaces such as local previews. Governed mode uses the
+         * bounded request form inside the scroll area instead. */}
+        {!isGovernedMode ? (
+          <div
+            className="flex-shrink-0 pt-3"
+            style={{ borderTop: '1px solid var(--p-border)' }}
           >
-            <div
-              className="flex flex-1 min-w-0 h-11 px-3 rounded-[var(--p-radius)] focus-within:ring-2 focus-within:ring-offset-1 focus-within:ring-[var(--p-accent)]"
-              style={{
-                background: 'var(--p-surface2)',
-                border: '1px solid var(--p-border)',
-              }}
+            <form
+              onSubmit={handleSubmit}
+              className="flex items-center gap-2"
             >
-              <input
-                type="text"
-                placeholder={props.composerPlaceholder !== undefined && props.composerPlaceholder !== '' ? props.composerPlaceholder : 'Ask PathAdvisor...'}
-                value={inputValue}
-                onChange={function (e) {
-                  setInputValue(e.target.value);
+              <div
+                className="flex flex-1 min-w-0 h-11 px-3 rounded-[var(--p-radius)] focus-within:ring-2 focus-within:ring-offset-1 focus-within:ring-[var(--p-accent)]"
+                style={{
+                  background: 'var(--p-surface2)',
+                  border: '1px solid var(--p-border)',
                 }}
-                className="flex-1 min-w-0 h-full bg-transparent outline-none border-0"
-                style={{ color: 'var(--p-text)' }}
-              />
-            </div>
-            <button
-              type="submit"
-              className="flex-shrink-0 h-11 w-11 grid place-items-center rounded-[var(--p-radius)] transition-colors"
-              style={{
-                background: 'var(--p-accent)',
-                color: 'var(--p-bg)',
-              }}
-              aria-label="Send"
-            >
-              <Send className="w-3.5 h-3.5" />
-            </button>
-          </form>
-        </div>
+              >
+                <input
+                  type="text"
+                  placeholder={props.composerPlaceholder !== undefined && props.composerPlaceholder !== '' ? props.composerPlaceholder : 'Ask PathAdvisor...'}
+                  value={inputValue}
+                  onChange={function (e) {
+                    setInputValue(e.target.value);
+                  }}
+                  className="flex-1 min-w-0 h-full bg-transparent outline-none border-0"
+                  style={{ color: 'var(--p-text)' }}
+                />
+              </div>
+              <button
+                type="submit"
+                className="flex-shrink-0 h-11 w-11 grid place-items-center rounded-[var(--p-radius)] transition-colors"
+                style={{
+                  background: 'var(--p-accent)',
+                  color: 'var(--p-bg)',
+                }}
+                aria-label="Send"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </form>
+          </div>
+        ) : null}
       </div>
     </ModuleCard>
   );
