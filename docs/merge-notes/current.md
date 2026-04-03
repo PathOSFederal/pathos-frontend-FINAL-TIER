@@ -2,6 +2,213 @@
 
 ---
 
+## Run: Day 52 — Enable and prove PathAdvisor conversation-provider execution (2026-04-03)
+
+### Branch
+
+`feature/day-52-pathadvisor-provider-enablement-proof-v1`
+
+### Summary
+
+Day 52 did not make any UI changes. The centered dashboard PathAdvisor surface
+remains visually unchanged. This run focused on the remaining backend blocker
+for bounded PathAdvisor conversation: provider enablement.
+
+The bounded request path from the dashboard was already valid, pack
+availability had already been restored, and the backend route was already
+reachable. The remaining failure was that the backend conversation service was
+still treating provider execution as disabled. This run moved the backend
+conversation path onto the dedicated conversation-role OpenAI settings, added
+focused backend coverage, and revalidated the existing frontend dashboard flow.
+
+### Root cause of provider disablement
+
+- The live technical failure reason before the fix was:
+  - `pathadvisor_openai_disabled`
+- That condition was enforced in the backend conversation service, which still
+  gated execution through the generic PathAdvisor OpenAI enablement path
+- The backend OpenAI responses client used by bounded conversation was also
+  still sourcing the generic PathAdvisor OpenAI client configuration
+- The bounded conversation path therefore remained disabled even though the
+  backend had dedicated conversation-role settings available
+
+Narrow safe fix:
+
+- keep bounded conversation backend-only
+- keep provider invocation behind governed checks
+- switch bounded conversation gating and client creation to the dedicated
+  conversation-role settings only
+
+### Files changed
+
+Frontend repo:
+
+- `docs/change-briefs/day-52.md`
+- `docs/merge-notes/current.md`
+
+Backend repo:
+
+- `C:\dev\PathOS-Repos\pathos-backend\app\integrations\openai\pathadvisor_responses.py`
+- `C:\dev\PathOS-Repos\pathos-backend\app\pathadvisor\services\conversation_service.py`
+- `C:\dev\PathOS-Repos\pathos-backend\app\pathadvisor\services\cross_domain_explanation_service.py`
+- `C:\dev\PathOS-Repos\pathos-backend\app\pathadvisor\services\fehb_explanation_service.py`
+- `C:\dev\PathOS-Repos\pathos-backend\app\pathadvisor\services\qualification_explanation_service.py`
+- `C:\dev\PathOS-Repos\pathos-backend\tests\integrations\test_pathadvisor_openai_responses.py`
+- `C:\dev\PathOS-Repos\pathos-backend\tests\pathadvisor\test_qualification_context_service.py`
+- `C:\dev\PathOS-Repos\pathos-backend\tests\services\test_pathadvisor_conversation_service.py`
+
+### Exact fix made
+
+Backend conversation-provider gating now uses the dedicated conversation-role
+settings instead of the generic PathAdvisor OpenAI flag path.
+
+The backend responses client used by bounded PathAdvisor conversation now reads:
+
+- `OPENAI_CONVERSATION_ENABLED`
+- `OPENAI_CONVERSATION_API_KEY`
+- `OPENAI_CONVERSATION_MODEL`
+- `OPENAI_CONVERSATION_TIMEOUT_SECONDS`
+
+The service still fails closed when the provider is not enabled or when the
+conversation API key is absent. Refusal short-circuiting is unchanged, and
+backend-owned governed fields remain untouched by provider execution.
+
+This run also hardened governed explanation services so an upstream provider
+request failure no longer turns governed explanation routes into raw `500`s.
+They now log and fall back safely while preserving backend-owned truth.
+
+### Tests added or updated
+
+Backend focused coverage was extended for:
+
+- conversation service behavior when provider role is disabled
+- conversation service behavior when provider role is enabled
+- proof that the generic PathAdvisor OpenAI flag no longer blocks the dedicated
+  conversation role
+- responses client wiring against conversation-role settings
+- missing conversation API key fails closed
+- governed explanation fallback when provider request fails
+- refusal path still bypasses provider invocation
+
+### Validation performed
+
+Backend focused validation:
+
+- `poetry run pytest --no-cov tests/services/test_pathadvisor_conversation_service.py tests/api/test_pathadvisor_conversation_route.py tests/integrations/test_pathadvisor_openai_responses.py tests/pathadvisor/test_qualification_context_service.py`
+  - passed
+  - `32` tests passed
+
+Frontend repo validation:
+
+- `pnpm test`
+  - passed
+  - `73` files, `1810` tests passed
+- `pnpm build`
+  - passed
+
+Pre-existing unrelated repo status:
+
+- `pnpm lint`
+  - not rerun in this slice
+  - previously known to fail in unrelated files outside PathAdvisor
+- `pnpm typecheck`
+  - not rerun in this slice
+  - previously known to fail in unrelated resume-builder test files
+
+### Live runtime outcome
+
+Before the backend fix:
+
+- bounded dashboard conversation returned `200`
+- `technical_failure: true`
+- `technical_failure_reason: pathadvisor_openai_disabled`
+
+After the backend fix:
+
+- grounded governed qualification explain route still returns `200`
+- partial governed qualification explain route still returns `200`
+- bounded conversation no longer fails with
+  `technical_failure_reason: pathadvisor_openai_disabled`
+- bounded conversation now reaches real provider execution and, in the current
+  local environment, returns:
+  - `technical_failure: true`
+  - `technical_failure_reason: openai_request_failed`
+
+Direct backend provider proof:
+
+- a direct OpenAI responses client call now executes the provider path
+- the current local backend credential returns:
+  - `AuthenticationError`
+  - OpenAI `401 invalid_api_key`
+
+That means the Day 52 code-path fix worked. The current local blocker for a
+live explanation-only model reply is the backend environment credential, not
+conversation-provider disablement.
+
+Refusal proof still holds:
+
+- a refused governed conversation request still returns `200`
+- `response_state: refused`
+- `technical_failure: false`
+- `refusal_reason: governed_qualification_pack_unavailable`
+
+### No UI changes
+
+Confirmed:
+
+- no layout changes
+- no spacing changes
+- no typography changes
+- no color changes
+- no label or microcopy changes
+- no centered PathAdvisor dashboard redesign
+
+### Remaining risks / follow-ups
+
+1. A real live provider-backed explanation reply still depends on a valid
+   backend `OPENAI_CONVERSATION_API_KEY` in the running environment.
+2. This frontend repo records the proof and artifacts, but the code fix itself
+   lives in the backend repo.
+3. Deferred follow-up only, not implemented: add a small backend diagnostic
+   surface for provider enablement state so local misconfiguration is visible
+   without reading logs.
+
+### git status
+
+```text
+M docs/merge-notes/current.md
+?? docs/change-briefs/day-52.md
+```
+
+### git branch --show-current
+
+```text
+feature/day-52-pathadvisor-provider-enablement-proof-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode  LastWriteTime       Length Name
+----  -------------       ------ ----
+-a--- 4/3/2026 5:16:03 PM      0 day-52.patch
+-a--- 4/3/2026 5:16:03 PM   7386 day-52-this-run.patch
+```
+
+---
+
 ## Run: Day 51 — Restore or prove qualification-pack availability for PathAdvisor conversation (2026-04-03)
 
 ### Branch
