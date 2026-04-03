@@ -2,6 +2,244 @@
 
 ---
 
+## Run: PathAdvisor Conversational Shell Restoration (2026-04-03)
+
+### Branch
+
+`feature/pathadvisor-conversational-shell-restoration-v1`
+
+### Summary
+
+Restored a visible conversational PathAdvisor entry point in the shared
+dashboard rail while keeping the governed panel as the structured evidence
+surface. The rail now:
+
+- shows a lightweight conversation surface again in the Guidance view
+- keeps the governed panel visible underneath the conversation layer
+- restores the composer in governed mode
+- assembles future conversation context from structured governed state only
+- preserves the existing trust-state distinctions and refresh stability
+
+### Why this change was made
+
+The governed integration and trust-state rendering were correct, but the rail
+had drifted too far toward a governed-results inspector. This slice restores the
+intended PathAdvisor product posture: conversational on top, governed evidence
+underneath, with no weakening of the backend truth boundary.
+
+### Files changed
+
+- `app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx`
+- `packages/ui/src/shell/PathAdvisorCard.tsx`
+- `packages/ui/src/shell/PathAdvisorCard.test.tsx`
+- `lib/pathadvisor-governed/conversation-context.ts`
+- `lib/pathadvisor-governed/conversation-context.test.ts`
+- `docs/change-briefs/pathadvisor-conversational-shell-restoration-v1.md`
+
+### Behavior changes
+
+- Governed mode now keeps a visible PathAdvisor composer instead of suppressing
+  it.
+- Guidance now shows a compact conversation surface above the governed panel so
+  the rail feels conversational again.
+- The governed panel still renders summary, explanation, key factors, missing
+  inputs, next steps, and trust metadata as the evidence surface.
+- Shared dashboard send behavior now builds a bounded context object from the
+  current governed draft and response, then generates a temporary local reply
+  from that structured context only.
+- Refresh stability remains in place: the prior governed response stays visible
+  while the next governed request is loading.
+
+### Validation performed
+
+- `pnpm test -- packages/ui/src/shell/PathAdvisorCard.test.tsx packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx lib/pathadvisor-governed/client.test.ts lib/pathadvisor-governed/conversation-context.test.ts`
+  - 21 tests passed
+- `pnpm eslint 'app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx' 'packages/ui/src/shell/PathAdvisorCard.tsx' 'packages/ui/src/shell/PathAdvisorCard.test.tsx' 'packages/ui/src/shell/PathAdvisorGovernedPanel.tsx' 'packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx' 'lib/pathadvisor-governed/conversation-context.ts' 'lib/pathadvisor-governed/conversation-context.test.ts'`
+  - no errors, no warnings in touched files
+- `pnpm typecheck`
+  - failed due to pre-existing resume-builder test/type errors unrelated to this slice
+  - no remaining typecheck errors came from the touched PathAdvisor files after the helper fix
+- `pnpm lint`
+  - failed due to pre-existing repo-wide lint issues in resume-builder, desktop, and other legacy areas unrelated to this slice
+
+### Known risks / follow-ups
+
+- The restored conversation replies are still a bounded local bridge, not a real
+  backend conversation endpoint.
+- The branch was created from a dirty PathAdvisor trust-refinement worktree, so
+  the current working tree and generated incremental patch include both the
+  carried-forward refinement edits and this conversational-shell restoration.
+- Mobile sanity was reviewed at the code/layout level only in this run. The
+  restored composer uses the existing rail layout and no new fixed-width
+  assumptions, but no browser-device pass was run here.
+
+### git status
+
+```text
+On branch feature/pathadvisor-conversational-shell-restoration-v1
+Changes not staged for commit:
+  modified:   app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx
+  modified:   docs/merge-notes/current.md
+  modified:   packages/ui/src/shell/PathAdvisorCard.test.tsx
+  modified:   packages/ui/src/shell/PathAdvisorCard.tsx
+  modified:   packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx
+  modified:   packages/ui/src/shell/PathAdvisorGovernedPanel.tsx
+
+Untracked files:
+  docs/change-briefs/pathadvisor-conversational-shell-restoration-v1.md
+  docs/change-briefs/pathadvisor-trust-input-completion-refinement-v1.md
+  lib/pathadvisor-governed/conversation-context.test.ts
+  lib/pathadvisor-governed/conversation-context.ts
+
+no changes added to commit
+```
+
+### git branch --show-current
+
+```text
+feature/pathadvisor-conversational-shell-restoration-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+Note: `git diff develop...HEAD` is empty because this branch still has only
+uncommitted working-tree changes. The incremental patch contains the current
+working-tree diff, which in this branch includes both the carried-forward
+PathAdvisor trust-refinement changes and this restoration slice.
+
+```text
+-rwxrwxrwx 1 joriel joriel 0 Apr  3 10:12 artifacts/pathadvisor-conversational-shell-restoration-v1.patch
+-rwxrwxrwx 1 joriel joriel 63K Apr  3 10:12 artifacts/pathadvisor-conversational-shell-restoration-v1-this-run.patch
+```
+
+---
+
+## Run: PathAdvisor Trust & Input Completion Refinement (2026-04-01)
+
+### Branch
+
+`feature/pathadvisor-trust-input-completion-refinement-v1`
+
+### Summary
+
+Refined the governed PathAdvisor rail so incomplete and refused responses read
+more honestly and are easier to act on, without changing the backend contract
+or redesigning the rail. This pass keeps the same governed structure but:
+
+- labels partial responses as incomplete
+- makes missing inputs the explicit reason an answer is incomplete
+- makes refused responses feel intentional instead of broken
+- keeps the prior governed answer visible during refresh
+- tightens the compact trust footer without hiding governed metadata
+
+### Why this change was made
+
+The governed PathAdvisor integration was already structurally correct, but the
+current rail still let partial and refused states feel too similar to normal
+success. This refinement makes the trust boundary more obvious while staying
+calm, professional, and low-noise.
+
+### Files changed
+
+- `app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx`
+- `packages/ui/src/shell/PathAdvisorGovernedPanel.tsx`
+- `packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx`
+- `docs/change-briefs/pathadvisor-trust-input-completion-refinement-v1.md`
+
+### Behavior changes
+
+- `partial` responses now render with an explicit `Incomplete` trust label.
+- Missing inputs now render as clearer guided cards instead of a plain raw list.
+- Lightweight missing-input actions point users back to the bounded request
+  inputs instead of introducing a larger workflow.
+- `refused` responses now explain that the answer is intentionally being held at
+  a trust boundary, not failing technically.
+- Loading now preserves the previous governed answer during refresh so the rail
+  does not flash empty.
+- The trust footer stays compact while still rendering domain, state, grounded
+  flag, pack reference, and freshness.
+
+### Validation performed
+
+- `pnpm test -- packages/ui/src/shell/PathAdvisorCard.test.tsx packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx lib/pathadvisor-governed/client.test.ts`
+  - 18 tests passed
+- `pnpm eslint 'app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx' 'packages/ui/src/shell/PathAdvisorGovernedPanel.tsx' 'packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx'`
+  - no errors, no warnings in touched files
+- `pnpm typecheck`
+  - failed due to pre-existing resume-builder test errors unrelated to this slice
+  - no new PathAdvisor-specific typecheck issue surfaced in this run
+- `pnpm lint`
+  - failed due to pre-existing repo-wide lint issues in resume-builder, desktop,
+    and other legacy areas unrelated to this slice
+
+### Known risks / follow-ups
+
+- Missing-input actions only redirect users back to the bounded request inputs;
+  they do not add orchestration or auto-fill behavior.
+- Cross-domain refresh still relies on the existing single-rail local state; no
+  persistence or thread memory was added in this slice.
+- Mobile sanity was reviewed at the code/layout level only in this run. The
+  refinement keeps single-column form sections, wrap-safe badges, and no new
+  fixed-width layout assumptions, but no browser-device pass was run here.
+
+### git status
+
+```text
+On branch feature/pathadvisor-trust-input-completion-refinement-v1
+Changes not staged for commit:
+  modified:   app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx
+  modified:   packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx
+  modified:   packages/ui/src/shell/PathAdvisorGovernedPanel.tsx
+
+Untracked files:
+  docs/change-briefs/pathadvisor-trust-input-completion-refinement-v1.md
+
+no changes added to commit
+```
+
+### git branch --show-current
+
+```text
+feature/pathadvisor-trust-input-completion-refinement-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+Note: `git diff develop...HEAD` is empty because this slice remains uncommitted
+in the working tree. The incremental artifact contains the actual working-tree
+changes from this run.
+
+```text
+-rwxrwxrwx 1 joriel joriel 0 Apr  1 17:25 artifacts/pathadvisor-trust-input-completion-refinement-v1.patch
+-rwxrwxrwx 1 joriel joriel 38K Apr  1 17:25 artifacts/pathadvisor-trust-input-completion-refinement-v1-this-run.patch
+```
+
+---
+
 ## Run: Deterministic PDF Final Visual-Parity Pass (2026-04-01)
 
 ### Branch

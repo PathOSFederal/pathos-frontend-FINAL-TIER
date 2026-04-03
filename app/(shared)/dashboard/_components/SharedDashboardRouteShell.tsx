@@ -18,7 +18,24 @@ import {
   buildInitialPathAdvisorDraft,
   fetchGovernedPathAdvisorResponse,
 } from '@/lib/pathadvisor-governed/client';
+import {
+  buildPathAdvisorConversationContext,
+  buildPathAdvisorLocalConversationReply,
+} from '@/lib/pathadvisor-governed/conversation-context';
 
+/**
+ * Shared dashboard shell wrapper for routes that use the canonical PathAdvisor
+ * right rail.
+ *
+ * Why this file matters to governed PathAdvisor:
+ * The app shell owns the request lifecycle and the lightweight conversation log,
+ * while the UI package stays transport-agnostic. This file is therefore the
+ * place where we preserve request determinism:
+ * - bounded draft changes stay explicit
+ * - loading, empty, error, and success remain distinct
+ * - stale governed results are not left looking current after a domain switch
+ * - the conversational shell only speaks from structured governed context
+ */
 export function SharedDashboardRouteShell(props: {
   children: React.ReactNode;
   /**
@@ -51,12 +68,29 @@ export function SharedDashboardRouteShell(props: {
     errorMessage: null,
   });
 
+  /**
+   * Load the persisted profile once for shared dashboard routes.
+   *
+   * Why this matters:
+   * The initial governed draft seeds from the profile. We still keep the
+   * governed request explicitly editable in the rail, but loading the existing
+   * profile keeps the bounded inputs useful on first render.
+   */
   useEffect(function () {
     if (!isProfileLoaded) {
       loadProfileFromStorage();
     }
   }, [isProfileLoaded, loadProfileFromStorage]);
 
+  /**
+   * Clear both the lightweight conversation log and the governed response
+   * state.
+   *
+   * Why this exists:
+   * The shared rail should reset to an honest empty state when the user clears
+   * the assistant surface. Leaving an old governed result behind would blur the
+   * current request boundary.
+   */
   const handleClearMessages = useCallback(function () {
     setAdvisorMessages([]);
     setGovernedResult({
@@ -66,6 +100,98 @@ export function SharedDashboardRouteShell(props: {
     });
   }, []);
 
+  /**
+   * Handle conversational composer sends in governed mode.
+   *
+   * Step by step:
+   * 1. Record the user's message in the lightweight local conversation log.
+   * 2. Build a bounded structured context object from the current governed
+   *    draft and result state.
+   * 3. Generate a temporary local PathAdvisor reply from that structured
+   *    context only.
+   * 4. Append the assistant reply to the same lightweight log.
+   *
+   * Why this matters:
+   * This restores the conversational shell without letting chat text become a
+   * second source of truth. The reply is intentionally bounded to the current
+   * governed state, and the helper reads authoritative fields directly instead
+   * of scraping text back out of the rendered panel.
+   */
+  const handleAdvisorConversationSend = useCallback(function (text: string) {
+    const userMessage: PathAdvisorMessage = { role: 'user', content: text };
+
+    setAdvisorMessages(function (prev) {
+      const next: PathAdvisorMessage[] = [];
+      for (let i = 0; i < prev.length; i++) {
+        next.push(prev[i]);
+      }
+      next.push(userMessage);
+      return next;
+    });
+
+    const context = buildPathAdvisorConversationContext({
+      currentView: 'shared-dashboard',
+      draft: governedDraft,
+      result: governedResult,
+    });
+
+    const assistantReply = buildPathAdvisorLocalConversationReply(context, text);
+    setAdvisorMessages(function (prev) {
+      const next: PathAdvisorMessage[] = [];
+      for (let i = 0; i < prev.length; i++) {
+        next.push(prev[i]);
+      }
+      next.push({
+        role: 'assistant',
+        content: assistantReply,
+      });
+      return next;
+    });
+  }, [governedDraft, governedResult]);
+
+  /**
+   * Apply bounded draft edits coming from the governed request form.
+   *
+   * Step by step:
+   * 1. Store the next bounded draft exactly as the panel provided it.
+   * 2. If the request domain changed, clear the existing governed result.
+   *
+   * Why only clear on domain changes:
+   * The clearest stale-state risk is switching from qualification to FEHB or
+   * cross-domain while a previous answer is still visible. Clearing on every
+   * keystroke would be more disruptive than helpful, so this refinement keeps
+   * the reset narrowly scoped to the most confusing transition.
+   */
+  const handleGovernedDraftChange = useCallback(function (nextDraft: PathAdvisorGovernedDraft) {
+    const didDomainChange = governedDraft.domain !== nextDraft.domain;
+    setGovernedDraft(nextDraft);
+
+    if (didDomainChange) {
+      setGovernedResult({
+        status: 'idle',
+        response: null,
+        errorMessage: null,
+      });
+    }
+  }, [governedDraft.domain]);
+
+  /**
+   * Submit the current bounded draft to the governed backend.
+   *
+   * Step by step:
+   * 1. Append a lightweight user message so the shared rail still has a simple
+   *    conversational log.
+   * 2. Move the governed result into loading while preserving the last success
+   *    response, if one exists, so the UI can refresh in place instead of
+   *    flashing empty.
+   * 3. Call the thin governed client boundary.
+   * 4. Distinguish empty, governed success, and technical failure explicitly.
+   *
+   * Why the trust boundary matters here:
+   * A backend refusal is still a successful governed response, so it flows
+   * through the success path and keeps its explicit response_state. Only actual
+   * transport or proxy failures become the technical error state.
+   */
   const handleGovernedSubmit = useCallback(async function () {
     const requestLabel =
       governedDraft.domain === 'qualification'
@@ -84,10 +210,12 @@ export function SharedDashboardRouteShell(props: {
       return next;
     });
 
-    setGovernedResult({
-      status: 'loading',
-      response: null,
-      errorMessage: null,
+    setGovernedResult(function (prev) {
+      return {
+        status: 'loading',
+        response: prev.status === 'success' ? prev.response : null,
+        errorMessage: null,
+      };
     });
 
     try {
@@ -162,13 +290,11 @@ export function SharedDashboardRouteShell(props: {
             : <PathAdvisorRail
                 dock="right"
                 messages={advisorMessages}
-                onSend={function () {
-                  /* Governed mode uses the bounded request form instead of the legacy composer. */
-                }}
+                onSend={handleAdvisorConversationSend}
                 onClearMessages={handleClearMessages}
                 governedDraft={governedDraft}
                 governedResult={governedResult}
-                onGovernedDraftChange={setGovernedDraft}
+                onGovernedDraftChange={handleGovernedDraftChange}
                 onGovernedSubmit={handleGovernedSubmit}
               />
         }
