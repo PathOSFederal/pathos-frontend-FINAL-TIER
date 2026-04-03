@@ -68,7 +68,7 @@ function PreviewScreenRouter() {
     return <ResumeBuilderScreen />;
   }
   // Default: dashboard
-  return <DashboardScreen isEmployee={false} userName="Jordan Rivera" />;
+  return <DashboardScreen />;
 }
 
 /** Simulated assistant reply for local-only reaction loop (no backend). */

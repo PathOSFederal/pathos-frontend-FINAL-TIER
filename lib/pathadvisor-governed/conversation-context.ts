@@ -63,9 +63,20 @@ export interface PathAdvisorGovernedConversationContext {
       comparisonTargets: string;
     };
   };
+  /**
+   * Optional bounded conversation hints for the backend conversation contract.
+   *
+   * IMPORTANT:
+   * These are not raw domain drafts. They are the only optional list-shaped
+   * `draft_inputs` fields the backend accepts for this route.
+   */
+  conversationDraftInputs?: {
+    focusTopics: string[];
+    selectedMissingInputs: string[];
+    selectedNextSteps: string[];
+  };
   selectedEntity: PathAdvisorConversationEntityContext;
   governedResponse: {
-    domain: PathAdvisorShapedResponse['domain'];
     responseState: PathAdvisorShapedResponse['responseState'];
     grounded: boolean;
     summary: string;
@@ -82,6 +93,22 @@ export interface PathAdvisorGovernedConversationContext {
     refusalReason: string | null;
     packVersionId: string | null;
     freshnessState: string | null;
+    grounding: {
+      domain: PathAdvisorShapedResponse['grounding']['domain'];
+      responseState: PathAdvisorShapedResponse['grounding']['responseState'];
+      grounded: boolean;
+      partial: boolean;
+      missingInputs: string[];
+      packId: string | null;
+      packKey: string | null;
+      versionId: string | null;
+      version: number | null;
+      freshnessState: string | null;
+      freshnessReason: string | null;
+      servingEligible: boolean;
+      conversationProvider: string;
+      providerUsed: boolean;
+    };
   } | null;
 }
 
@@ -130,7 +157,6 @@ export function buildPathAdvisorConversationContext(
   if (args.result.response !== null) {
     trustState = args.result.response.responseState;
     governedResponse = {
-      domain: args.result.response.domain,
       responseState: args.result.response.responseState,
       grounded: args.result.response.grounded,
       summary: args.result.response.summary,
@@ -153,6 +179,24 @@ export function buildPathAdvisorConversationContext(
       refusalReason: args.result.response.refusalReason,
       packVersionId: args.result.response.packVersionId,
       freshnessState: args.result.response.freshnessState,
+      grounding: {
+        domain: args.result.response.grounding.domain,
+        responseState: args.result.response.grounding.responseState,
+        grounded: args.result.response.grounding.grounded,
+        partial: args.result.response.grounding.partial,
+        missingInputs: args.result.response.grounding.missingInputs.map(function (item) {
+          return item;
+        }),
+        packId: args.result.response.grounding.packId,
+        packKey: args.result.response.grounding.packKey,
+        versionId: args.result.response.grounding.versionId,
+        version: args.result.response.grounding.version,
+        freshnessState: args.result.response.grounding.freshnessState,
+        freshnessReason: args.result.response.grounding.freshnessReason,
+        servingEligible: args.result.response.grounding.servingEligible,
+        conversationProvider: args.result.response.grounding.conversationProvider,
+        providerUsed: args.result.response.grounding.providerUsed,
+      },
     };
   }
 
@@ -176,6 +220,12 @@ export function buildPathAdvisorConversationContext(
         comparisonTargets: args.draft.fehb.comparisonTargets,
       },
     },
+    /**
+     * Safe default:
+     * The centered dashboard conversation flow does not synthesize
+     * conversation-hint lists from raw drafts. If a future surface has
+     * authoritative hint lists, it can provide them explicitly.
+     */
     selectedEntity: selectedEntity,
     governedResponse: governedResponse,
   };

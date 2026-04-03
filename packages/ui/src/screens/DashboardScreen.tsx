@@ -79,6 +79,10 @@ import { useNav } from '@pathos/adapters';
 import { usePathAdvisorScreenOverridesStore } from '../stores/pathAdvisorScreenOverridesStore';
 import { usePathAdvisorThreadStore } from '../stores/pathAdvisorThreadStore';
 import { INTERACTIVE_HOVER_CLASS } from '../styles/interactiveHover';
+import type {
+  PathAdvisorConversationRequestState,
+  PathAdvisorShapedResponse,
+} from '../shell/pathadvisor-governed-types';
 import {
   CAREER_READINESS,
   SAVED_JOBS,
@@ -167,6 +171,11 @@ export interface CompactSummary {
   lastUpdated: string;
 }
 
+export interface DashboardConversationExchange {
+  reply: string;
+  governedResponse: PathAdvisorShapedResponse;
+}
+
 /**
  * Props for the redesigned DashboardScreen.
  *
@@ -186,6 +195,14 @@ export interface DashboardScreenProps {
   onOpenReadinessBreakdown?: () => void;
   /** Called when a compact summary chip is clicked (receives chip id). */
   onSummaryChipClick?: (chipId: string) => void;
+  /**
+   * Optional live bounded conversation handler for the centered dashboard
+   * PathAdvisor surface. When provided, the screen does not use the seeded
+   * local reply loop.
+   */
+  requestConversation?: (text: string) => Promise<DashboardConversationExchange>;
+  /** Optional request state for the bounded dashboard conversation path. */
+  conversationRequestState?: PathAdvisorConversationRequestState;
 }
 
 // ============================================================================
@@ -309,6 +326,104 @@ const SEEDED_GOVERNED_RESPONSE: GovernedResponseData = {
 const SEEDED_RESPONSE_CONTENT =
   'You are competitive for GS-13 roles, but with improvements.\n' +
   'Your strongest limiting factor right now is resume evidence, not baseline qualification.';
+
+function formatDashboardResponseState(value: 'grounded' | 'partial' | 'refused'): string {
+  if (value === 'partial') {
+    return 'Partial';
+  }
+
+  if (value === 'refused') {
+    return 'Refused';
+  }
+
+  return 'Grounded';
+}
+
+/**
+ * Convert the authoritative backend-shaped governed response into the existing
+ * dashboard evidence surface model.
+ *
+ * Why this exists:
+ * The centered dashboard UI already has a fixed visual structure. This mapper
+ * keeps that structure visually stable while deriving every rendered evidence
+ * field from backend-owned governed data instead of a frontend-local seed.
+ */
+export function buildGovernedResponseDataFromShapedResponse(
+  response: PathAdvisorShapedResponse
+): GovernedResponseData {
+  let decisionVariant: 'positive' | 'caution' | 'negative' = 'positive';
+  let confidence = 'Grounded';
+  let band = 'Governed explanation';
+
+  if (response.responseState === 'partial') {
+    decisionVariant = 'caution';
+    confidence = 'Incomplete';
+    band = 'Needs more governed input';
+  } else if (response.responseState === 'refused') {
+    decisionVariant = 'negative';
+    confidence = 'Trust boundary';
+    band = 'Governed refusal';
+  }
+
+  const groundedReasons: string[] = [];
+  for (let i = 0; i < response.keyFactors.length && groundedReasons.length < 3; i++) {
+    const item = response.keyFactors[i];
+    if (item.detail.trim() !== '') {
+      groundedReasons.push(item.label + ': ' + item.detail);
+    } else if (item.label.trim() !== '') {
+      groundedReasons.push(item.label);
+    }
+  }
+  if (groundedReasons.length === 0 && response.explanation.trim() !== '') {
+    groundedReasons.push(response.explanation);
+  }
+
+  const topGaps: string[] = [];
+  for (let i = 0; i < response.missingInputs.length && topGaps.length < 3; i++) {
+    topGaps.push(response.missingInputs[i]);
+  }
+  if (topGaps.length === 0 && response.responseState === 'refused' && response.refusalReason !== null) {
+    topGaps.push(response.refusalReason);
+  }
+
+  let nextStepLabel = 'Review the governed evidence details.';
+  if (response.nextSteps.length > 0 && response.nextSteps[0].trim() !== '') {
+    nextStepLabel = response.nextSteps[0];
+  }
+
+  let estimatedImpact = 'Governed';
+  if (response.packVersionId !== null && response.packVersionId !== '') {
+    estimatedImpact = response.packVersionId;
+  } else if (response.freshnessState !== null) {
+    estimatedImpact = response.freshnessState;
+  }
+
+  let estimatedTime = 'Current';
+  if (response.responseState === 'partial') {
+    estimatedTime = 'Needs input';
+  } else if (response.responseState === 'refused') {
+    estimatedTime = 'Not available';
+  }
+
+  return {
+    decision: formatDashboardResponseState(response.responseState),
+    decisionVariant: decisionVariant,
+    confidence: confidence,
+    band: band,
+    groundedReasons: groundedReasons,
+    topGaps: topGaps,
+    recommendedNextStep: {
+      label: nextStepLabel,
+      estimatedImpact: estimatedImpact,
+      estimatedTime: estimatedTime,
+    },
+    actions: [
+      { label: 'Start improvement', variant: 'primary', actionId: 'start-improvement' },
+      { label: 'Open Resume Builder', variant: 'secondary', actionId: 'open-resume-builder' },
+      { label: 'See full readiness breakdown', variant: 'secondary', actionId: 'open-readiness' },
+    ],
+  };
+}
 
 /**
  * Suggested prompt chips shown in the empty/home state.
@@ -529,6 +644,7 @@ function ConversationInput(props: {
   onSend: (text: string) => void;
   /** Visual variant: 'hero' for the empty state (larger), 'compact' for thread follow-up. */
   variant?: 'hero' | 'compact';
+  disabled?: boolean;
 }) {
   const [value, setValue] = useState('');
   const variant = props.variant !== undefined ? props.variant : 'hero';
@@ -553,24 +669,24 @@ function ConversationInput(props: {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         const trimmed = value.trim();
-        if (trimmed !== '') {
+        if (trimmed !== '' && props.disabled !== true) {
           onSend(trimmed);
           setValue('');
         }
       }
     },
-    [value, onSend]
+    [value, onSend, props.disabled]
   );
 
   const handleSendClick = useCallback(
     function () {
       const trimmed = value.trim();
-      if (trimmed !== '') {
+      if (trimmed !== '' && props.disabled !== true) {
         onSend(trimmed);
         setValue('');
       }
     },
-    [value, onSend]
+    [value, onSend, props.disabled]
   );
 
   const handleChange = useCallback(function (e: React.ChangeEvent<HTMLTextAreaElement>) {
@@ -611,11 +727,12 @@ function ConversationInput(props: {
           maxHeight: '120px',
         }}
         aria-label="Message PathAdvisor"
+        disabled={props.disabled === true}
       />
       <button
         type="button"
         onClick={handleSendClick}
-        disabled={value.trim() === ''}
+        disabled={value.trim() === '' || props.disabled === true}
         className={
           'flex-shrink-0 rounded-lg p-2 transition-all duration-150 ' +
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ' +
@@ -716,6 +833,7 @@ function SuggestedPromptChips(props: {
 
 function PathAdvisorEmptyState(props: {
   onSend: (text: string) => void;
+  conversationRequestState?: PathAdvisorConversationRequestState;
 }) {
   return (
     <div className="flex flex-col items-center justify-center px-4">
@@ -753,7 +871,24 @@ function PathAdvisorEmptyState(props: {
           placeholder="Ask about your readiness, explore jobs, or get guidance on your next move..."
           onSend={props.onSend}
           variant="hero"
+          disabled={
+            props.conversationRequestState !== undefined &&
+            props.conversationRequestState.status === 'loading'
+          }
         />
+        {props.conversationRequestState !== undefined &&
+        props.conversationRequestState.status === 'loading' ? (
+          <p className="text-xs mt-2 text-center" style={{ color: 'var(--p-text-dim)' }}>
+            PathAdvisor is requesting a governed explanation.
+          </p>
+        ) : null}
+        {props.conversationRequestState !== undefined &&
+        props.conversationRequestState.status === 'error' &&
+        props.conversationRequestState.errorMessage !== null ? (
+          <p className="text-xs mt-2 text-center" style={{ color: 'var(--p-danger)' }}>
+            {props.conversationRequestState.errorMessage}
+          </p>
+        ) : null}
       </div>
 
       {/* Suggested prompt chips — conversation starters */}
@@ -1369,6 +1504,7 @@ function ConversationThread(props: {
   messages: ThreadMessage[];
   onSend: (text: string) => void;
   onAction: (actionId: string) => void;
+  conversationRequestState?: PathAdvisorConversationRequestState;
 }) {
   return (
     <div className="px-4">
@@ -1396,7 +1532,24 @@ function ConversationThread(props: {
           placeholder="Ask a follow-up about readiness, jobs, or your next move\u2026"
           onSend={props.onSend}
           variant="compact"
+          disabled={
+            props.conversationRequestState !== undefined &&
+            props.conversationRequestState.status === 'loading'
+          }
         />
+        {props.conversationRequestState !== undefined &&
+        props.conversationRequestState.status === 'loading' ? (
+          <p className="text-xs mt-2" style={{ color: 'var(--p-text-dim)' }}>
+            PathAdvisor is requesting a governed explanation.
+          </p>
+        ) : null}
+        {props.conversationRequestState !== undefined &&
+        props.conversationRequestState.status === 'error' &&
+        props.conversationRequestState.errorMessage !== null ? (
+          <p className="text-xs mt-2" style={{ color: 'var(--p-danger)' }}>
+            {props.conversationRequestState.errorMessage}
+          </p>
+        ) : null}
       </div>
 
       {/* Trust note — subtle governance attribution */}
@@ -1448,6 +1601,8 @@ export function DashboardScreen(props: DashboardScreenProps) {
   const propOnOpenResumeBuilder = props.onOpenResumeBuilder;
   const propOnOpenReadinessBreakdown = props.onOpenReadinessBreakdown;
   const propOnSummaryChipClick = props.onSummaryChipClick;
+  const propRequestConversation = props.requestConversation;
+  const propConversationRequestState = props.conversationRequestState;
 
   // ==========================================================================
   // THREAD STORE INTEGRATION
@@ -1644,18 +1799,37 @@ export function DashboardScreen(props: DashboardScreenProps) {
       addMessageToThread(targetThreadId, 'user', text);
     }
 
+    if (propRequestConversation !== undefined && propRequestConversation !== null) {
+      propRequestConversation(text)
+        .then(function (exchange) {
+          const assistantMsgId = addMessageToThread(
+            targetThreadId,
+            'advisor',
+            exchange.reply
+          );
+
+          setGovernedDataMap(function (prev) {
+            const next: Record<string, GovernedResponseData> = Object.assign({}, prev);
+            next[assistantMsgId] = buildGovernedResponseDataFromShapedResponse(
+              exchange.governedResponse
+            );
+            return next;
+          });
+        })
+        .catch(function () {
+          /* The app layer owns the request error state; preserve current governed evidence. */
+        });
+      return;
+    }
+
     /**
      * Simulate PathAdvisor response after a brief delay.
      *
-     * WHY setTimeout:
-     * In the real implementation, this will be an async API call. The
-     * setTimeout placeholder preserves the same async pattern so the
-     * UI already handles the "response arrives later" flow correctly.
-     *
-     * WHY 300ms:
-     * Brief enough to feel responsive, long enough to prevent the response
-     * from appearing simultaneously with the user message (which would
-     * feel jarring and unrealistic).
+     * WHY THIS FALLBACK REMAINS:
+     * Non-dashboard preview contexts can still exercise the composition
+     * without a live app-layer callback. The real dashboard page now passes a
+     * bounded backend conversation handler and therefore does not use this
+     * local seed path.
      */
     setTimeout(function () {
       const assistantMsgId = addMessageToThread(
@@ -1664,23 +1838,13 @@ export function DashboardScreen(props: DashboardScreenProps) {
         SEEDED_RESPONSE_CONTENT
       );
 
-      /**
-       * Store the governed data in the ephemeral map, keyed by message ID.
-       *
-       * WHY NOT IN THE THREAD STORE:
-       * Governed data is large (grounded reasons, gaps, actions, etc.) and
-       * is specific to the rendering session. In production, it would be
-       * regenerated from the API. Persisting it to localStorage would bloat
-       * storage for no benefit. The ephemeral map keeps it available for
-       * the current session's rendering only.
-       */
       setGovernedDataMap(function (prev) {
         const next: Record<string, GovernedResponseData> = Object.assign({}, prev);
         next[assistantMsgId] = SEEDED_GOVERNED_RESPONSE;
         return next;
       });
     }, 300);
-  }, [createThreadWithMessage, addMessageToThread]);
+  }, [createThreadWithMessage, addMessageToThread, propRequestConversation]);
 
   /**
    * Handle action button clicks from the response block.
@@ -1810,10 +1974,12 @@ export function DashboardScreen(props: DashboardScreenProps) {
             messages={messages}
             onSend={handleSend}
             onAction={handleAction}
+            conversationRequestState={propConversationRequestState}
           />
         ) : (
           <PathAdvisorEmptyState
             onSend={handleSend}
+            conversationRequestState={propConversationRequestState}
           />
         )}
       </div>

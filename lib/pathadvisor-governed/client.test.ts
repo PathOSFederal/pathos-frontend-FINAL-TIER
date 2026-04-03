@@ -17,6 +17,7 @@ import {
   fetchGovernedPathAdvisorResponse,
 } from './client';
 import { buildPathAdvisorConversationContext } from './conversation-context';
+import { buildPathAdvisorConversationRequestPayload } from './conversation-request';
 
 const originalFetch = globalThis.fetch;
 
@@ -296,6 +297,12 @@ describe('governed PathAdvisor client', function () {
       'What does this result mean?',
       conversationContext
     );
+    const requestInit = fetchMock.mock.calls[0][1];
+    const requestBody = JSON.parse(String(requestInit.body));
+    const expectedRequest = buildPathAdvisorConversationRequestPayload(
+      'What does this result mean?',
+      conversationContext
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe('/api/pathadvisor/conversation');
@@ -303,8 +310,40 @@ describe('governed PathAdvisor client', function () {
       method: 'POST',
       cache: 'no-store',
     });
+    expect(requestBody).toEqual(expectedRequest);
+    expect('draft_inputs' in requestBody).toBe(false);
+    expect('request_id' in requestBody).toBe(false);
+    expect(requestBody.route).toBe('qualification_explanation');
+    expect(requestBody.trust_state).toBe('governed');
+    expect(requestBody.governed_context.pack_version_id).toBe('pack-version-1');
+    expect(requestBody.governed_context.grounding.conversation_provider).toBe('fake-provider');
+    expect('context' in requestBody).toBe(false);
+    expect('qualification' in requestBody).toBe(false);
     expect(response.reply).toBe('This is the backend conversation reply.');
     expect(response.responseState).toBe('grounded');
+  });
+
+  it('throws a clear local error when the conversation request lacks governed context', async function () {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const conversationContext = buildPathAdvisorConversationContext({
+      currentView: 'dashboard',
+      draft: buildInitialPathAdvisorDraft(demoJobSeekerProfile),
+      result: {
+        status: 'idle',
+        response: null,
+        errorMessage: null,
+      },
+    });
+
+    await expect(
+      fetchPathAdvisorConversationResponse(
+        'What can you explain?',
+        conversationContext
+      )
+    ).rejects.toThrow('PathAdvisor needs a governed result before it can request a bounded conversation explanation.');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('throws a technical error when the conversation proxy route fails', async function () {
@@ -323,8 +362,45 @@ describe('governed PathAdvisor client', function () {
       currentView: 'dashboard',
       draft: buildInitialPathAdvisorDraft(demoJobSeekerProfile),
       result: {
-        status: 'idle',
-        response: null,
+        status: 'success',
+        response: {
+          domain: 'qualification',
+          responseState: 'grounded',
+          grounded: true,
+          summary: 'Governed summary',
+          explanation: 'Governed explanation',
+          keyFactors: [],
+          missingInputs: [],
+          nextSteps: [],
+          refusalReason: null,
+          packVersionId: 'pack-version-1',
+          freshnessState: 'fresh',
+          grounding: {
+            domain: 'qualification',
+            responseState: 'grounded',
+            grounded: true,
+            partial: false,
+            refusalReason: null,
+            missingInputs: [],
+            packId: 'pack-1',
+            packKey: 'qualification.pack',
+            versionId: 'pack-version-1',
+            version: 1,
+            freshnessState: 'fresh',
+            freshnessReason: 'Fresh.',
+            effectiveAt: null,
+            reviewedAt: null,
+            reviewBy: null,
+            expiresAt: null,
+            servingEligible: true,
+            sourceSummary: null,
+            conversationProvider: 'fake-provider',
+            providerUsed: true,
+            refusalDomain: null,
+            domains: [],
+          },
+          servedAt: '2026-04-03T12:00:00Z',
+        },
         errorMessage: null,
       },
     });

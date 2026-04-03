@@ -121,6 +121,9 @@ describe('governed PathAdvisor conversation context', function () {
     }
     expect(context.governedResponse.summary).toBe('You have a grounded governed answer.');
     expect(context.governedResponse.explanation).toBe('Authoritative explanation from the backend contract.');
+    expect(context.governedResponse.grounding.partial).toBe(false);
+    expect(context.governedResponse.grounding.conversationProvider).toBe('fake-provider');
+    expect(context.governedResponse.grounding.providerUsed).toBe(true);
     expect('Current governed state: grounded qualification' in context).toBe(false);
   });
 
