@@ -2,6 +2,123 @@
 
 ---
 
+## Run: PathAdvisor Dashboard Conversation Redesign (2026-04-03)
+
+### Branch
+
+`redesign/dashboard-pathadvisor`
+
+### Summary
+
+Replaced the old "Command Center" card-grid dashboard with a PathAdvisor-centered
+conversation workspace. The dashboard now presents PathAdvisor as the main canvas
+with compact status chips, suggested prompt chips, and a seeded conversation thread
+with structured governed evidence rendering.
+
+**Layout refinement (same run):** Adjusted the conversation canvas to use state-aware
+vertical alignment. The empty state hero is now flex-centered in the remaining space
+below the summary chips (viewport-responsive). The active thread uses a viewport-
+relative top offset (`pt-[8vh]`) for an intentionally staged feel. Removed fixed
+`py-16`/`py-6` padding from the sub-components in favor of parent-driven placement.
+
+### Why this change was made
+
+The prior dashboard felt like a wall of cards (briefing tiles, Today's Focus hero,
+Active Tracks, Signals). The redesign shifts to a calm, conversation-first experience
+where users ask PathAdvisor questions, receive conversational answers followed by
+governed evidence, and take action from the response.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `packages/ui/src/screens/DashboardScreen.tsx` | Complete rewrite — PathAdvisor conversation workspace |
+| `packages/ui/src/screens/DashboardScreen.test.tsx` | Complete rewrite — 12 tests for new layout |
+| `app/(shared)/dashboard/page.tsx` | Simplified — removed card-grid callbacks, added hideAdvisor |
+| `packages/ui/src/index.ts` | Added ThreadMessage, GovernedResponseData, CompactSummary exports |
+
+### Behavior changes
+
+- Dashboard renders PathAdvisor empty state (icon, heading, input, 6 prompt chips, trust note)
+- Compact summary chips replace briefing tiles (Readiness, Saved jobs, Applications, Updated)
+- Sending any message transitions to active thread with seeded GS-13 response
+- Response shows headline answer, verdict strip, grounded reasons, top gaps, recommended next step, action buttons
+- Follow-up input appears below thread
+- Right-rail PathAdvisorRail hidden on dashboard (PathAdvisor IS the main canvas)
+- Old elements removed: Dashboard heading, "Your command center" subtitle, Briefing tiles, Today's Focus, Active Tracks, Signals, Weekly Briefing modal
+
+### Commands run
+
+```
+git status
+git branch --show-current
+git diff --stat
+git diff --name-status develop...HEAD
+npx eslint (changed files) — 0 errors, 0 warnings
+npx vitest run DashboardScreen.test.tsx — 12/12 passed
+npx vitest run (full suite) — 69 files, 1739 tests passed
+npx tsc --noEmit (packages/ui) — pre-existing errors only (resume-builder tests), zero new errors
+pnpm lint — pre-existing errors only, zero new errors in changed files
+```
+
+### Validation results
+
+- Lint: PASS (0 errors in changed files)
+- Typecheck: PASS (0 new errors; pre-existing resume-builder test type errors unrelated)
+- Tests: PASS (12/12 DashboardScreen tests, 1739/1739 full suite)
+
+### git status
+
+```
+On branch redesign/dashboard-pathadvisor
+Changes not staged for commit:
+  modified:   app/(shared)/dashboard/page.tsx
+  modified:   packages/ui/src/index.ts
+  modified:   packages/ui/src/screens/DashboardScreen.test.tsx
+  modified:   packages/ui/src/screens/DashboardScreen.tsx
+```
+
+### git branch --show-current
+
+```
+redesign/dashboard-pathadvisor
+```
+
+### git diff --stat
+
+```
+ app/(shared)/dashboard/page.tsx                  |  175 +-
+ packages/ui/src/index.ts                         |    3 +
+ packages/ui/src/screens/DashboardScreen.test.tsx  |  257 +-
+ packages/ui/src/screens/DashboardScreen.tsx       | 2745 ++++++++++++----------
+ 4 files changed, 1767 insertions(+), 1413 deletions(-)
+```
+
+### Patch artifacts
+
+| Artifact | Size |
+|----------|------|
+| `artifacts/pathadvisor-dashboard-conversation-redesign.patch` | ~134 KB |
+| `artifacts/pathadvisor-dashboard-conversation-redesign-this-run.patch` | ~134 KB |
+
+### Known follow-ups
+
+1. Active thread state needs real governed API integration (currently uses seeded demo data)
+2. Multi-turn follow-up responses need backend conversation endpoint
+3. DOM-based interaction tests (e.g. @testing-library/react) for click → thread transition
+4. Mobile viewport stress testing for prompt chip wrapping and thread layout
+5. The old DashboardData type is preserved for backward compat — remove when mockDashboardData consumers migrate
+6. Consider persisting thread state in Zustand store for cross-navigation resilience
+7. Human simulation gate: runtime validation of the full flow recommended before merge
+
+### Human simulation gate
+
+Decision: RECOMMENDED but not blocking for this slice.
+Triggers: visual composition verification (response hierarchy, verdict strip, chip layout, mobile overflow).
+Evidence needed: visual inspection in browser on dark theme at 1440px and 768px viewports.
+
+---
+
 ## Run: PathAdvisor Conversation API Wiring v1 (2026-04-03)
 
 ### Branch

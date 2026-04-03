@@ -1,128 +1,87 @@
+/**
+ * ============================================================================
+ * DASHBOARD ROUTE PAGE — PathAdvisor Conversation Workspace
+ * ============================================================================
+ *
+ * WHY THIS FILE EXISTS:
+ * This is the Next.js App Router page for the /dashboard route. It wires
+ * the transport-agnostic DashboardScreen (from @pathos/ui) into the Next.js
+ * navigation and routing system via SharedDashboardRouteShell.
+ *
+ * WHY THE CHANGE:
+ * The old page.tsx mounted the DashboardScreen with numerous card-grid
+ * callbacks (onOpenWeeklyBriefing, onFixResumeGap, etc.) and a Weekly
+ * Briefing modal. The new page is dramatically simpler because:
+ * 1. PathAdvisor is now the center of the dashboard, not a sidebar.
+ * 2. The right-rail PathAdvisor is hidden (hideAdvisor) since the
+ *    conversation canvas IS the main content.
+ * 3. Action callbacks route to the appropriate pages via Next router.
+ * 4. The Weekly Briefing modal is removed (no longer part of the design).
+ *
+ * HOW IT FITS:
+ * - SharedDashboardRouteShell provides the app shell (sidebar, top bar)
+ *   via SharedAppShell, plus NavigationProvider for route adapters.
+ * - hideAdvisor={true} suppresses the right-rail PathAdvisorRail since
+ *   the dashboard now embeds PathAdvisor directly in its main canvas.
+ * - DashboardScreen receives navigation callbacks and renders the
+ *   conversation-first experience.
+ *
+ * ARCHITECTURE:
+ * app/(shared)/dashboard/page.tsx (this file — Next.js routing glue)
+ *   → SharedDashboardRouteShell (shell + nav adapter)
+ *     → SharedAppShell (sidebar, top bar, scroll region)
+ *       → DashboardScreen (PathAdvisor conversation workspace)
+ */
+
 'use client';
 
-import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { DashboardScreen } from '@pathos/ui';
 import { SharedDashboardRouteShell } from './_components/SharedDashboardRouteShell';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog';
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
-import { useToast } from '@/hooks/use-toast';
-const RESUME_BUILDER_ROUTE = '/dashboard/resume-builder';
-const TRACKED_APPLICATIONS_ROUTE = '/import';
-const GUIDED_APPLY_ROUTE = '/guided-apply';
 
 /**
- * Weekly briefing (60–90s) modal: script preview (6–10 lines), Regenerate script,
- * Edit script, Generate video disabled with tooltip "Coming soon".
- * Styling consistent with existing app dialogs.
+ * Route constants for navigation targets.
+ *
+ * WHY DEFINED HERE:
+ * These routes are the Next.js paths that the DashboardScreen's action
+ * buttons navigate to. They're defined at the page level because routing
+ * is a transport concern — the shared UI package doesn't know about Next.js
+ * route paths (it uses its own route constants via useNav).
  */
-function WeeklyBriefingExplainerModal(props: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const scriptLines = [
-    'This week you have 3 saved jobs and 2 tracked applications.',
-    'Your top priority: fix the resume gap for GS-0343 specialized experience.',
-    'One application (Program Analyst - HHS) moved to Received.',
-    'Resume completeness is at 50%; add quantified accomplishments next.',
-    'Referral timelines are typically 2–6 weeks from submission.',
-  ];
+const RESUME_BUILDER_ROUTE = '/dashboard/resume-builder';
+const CAREER_READINESS_ROUTE = '/dashboard/career-readiness';
 
-  function handleRegenerate() {
-    // Stub: no-op for mockup parity pass.
-  }
-
-  function handleEdit() {
-    // Stub: no-op for mockup parity pass.
-  }
-
-  return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent showCloseButton>
-        <DialogHeader>
-          <DialogTitle>Weekly briefing (60–90s)</DialogTitle>
-        </DialogHeader>
-        <div className="min-h-[120px] rounded-md border border-border p-3 text-sm text-muted-foreground">
-          <pre className="whitespace-pre-wrap font-sans text-left text-sm">
-            {scriptLines.join('\n')}
-          </pre>
-        </div>
-        <DialogFooter>
-          <button
-            type="button"
-            onClick={handleRegenerate}
-            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-          >
-            Regenerate script
-          </button>
-          <button
-            type="button"
-            onClick={handleEdit}
-            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-          >
-            Edit script
-          </button>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  disabled
-                  className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground opacity-50 cursor-not-allowed"
-                >
-                  Generate video
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs">
-                <p className="font-semibold">Generate video</p>
-                <p>Coming soon.</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
+/**
+ * Dashboard page component.
+ *
+ * WHAT IT DOES:
+ * 1. Wraps DashboardScreen in SharedDashboardRouteShell with hideAdvisor
+ *    so the right rail is suppressed.
+ * 2. Provides navigation callbacks that use Next.js router.push to navigate
+ *    to the appropriate pages when action buttons are clicked.
+ *
+ * WHY hideAdvisor:
+ * The dashboard redesign moves PathAdvisor from a sidebar widget to the
+ * main canvas. Showing both a right-rail PathAdvisor AND a centered
+ * PathAdvisor conversation would be confusing and redundant. Other routes
+ * under /dashboard/* (job-search, resume-builder, etc.) still use the
+ * right rail via their own page.tsx files.
+ */
 export default function DashboardPage() {
   const router = useRouter();
-  const toast = useToast().toast;
-  const [explainerOpen, setExplainerOpen] = useState(false);
-
-  function goToRouteOrComingSoon(route: string) {
-    if (!route) {
-      toast({ title: 'Coming soon' });
-      return;
-    }
-    router.push(route);
-  }
 
   return (
-    <SharedDashboardRouteShell>
+    <SharedDashboardRouteShell hideAdvisor>
       <DashboardScreen
-        onOpenWeeklyBriefing={function () {
-          setExplainerOpen(true);
+        onStartImprovement={function () {
+          router.push(CAREER_READINESS_ROUTE + '#action-plan');
         }}
-        onFixResumeGap={function () {
-          goToRouteOrComingSoon(RESUME_BUILDER_ROUTE);
+        onOpenResumeBuilder={function () {
+          router.push(RESUME_BUILDER_ROUTE);
         }}
-        onDecodeTrackedApp={function () {
-          goToRouteOrComingSoon(TRACKED_APPLICATIONS_ROUTE);
+        onOpenReadinessBreakdown={function () {
+          router.push(CAREER_READINESS_ROUTE);
         }}
-        onReviewQuestionnaire={function () {
-          goToRouteOrComingSoon(GUIDED_APPLY_ROUTE);
-        }}
-      />
-      <WeeklyBriefingExplainerModal
-        open={explainerOpen}
-        onOpenChange={setExplainerOpen}
       />
     </SharedDashboardRouteShell>
   );
