@@ -2,6 +2,209 @@
 
 ---
 
+## Run: Day 51 — Restore or prove qualification-pack availability for PathAdvisor conversation (2026-04-03)
+
+### Branch
+
+`feature/day-51-qualification-pack-availability-conversation-proof-v1`
+
+### Summary
+
+Day 51 restored local governed qualification-pack availability without changing
+the frontend UI. The live blocker was backend runtime state, not the centered
+dashboard PathAdvisor surface: the backend SQLite file had been stamped to the
+current Alembic revision while still carrying legacy RIS pack tables. That
+schema drift prevented governed qualification packs from being created or
+promoted, so the frontend honestly rendered a refusal.
+
+This run fixed the runtime side in the backend repo, repaired the local SQLite
+file, seeded one serving-eligible governed qualification bootstrap pack, and
+then validated the existing centered dashboard PathAdvisor flow through the
+frontend proxy. The dashboard now receives live grounded and partial governed
+qualification responses again. No frontend visual changes were made.
+
+### Root cause
+
+- The live refusal reason was correct:
+  - `governed_qualification_pack_unavailable`
+- The local backend DB had:
+  - `knowledge_packs = 1`
+  - `knowledge_pack_versions = 0`
+  - `knowledge_promotions = 0`
+  - no qualification packs
+- The same DB reported `alembic_version = 20260401_000001`
+- But `knowledge_pack_versions` and `knowledge_promotions` still used legacy
+  column layouts
+- Attempting to bootstrap a qualification pack failed with:
+  - `sqlite3.OperationalError: table knowledge_pack_versions has no column named base_version_id`
+
+That means the refusal was not a selector bug and not a frontend bug. Runtime
+had no serving-eligible governed qualification pack because current RIS writes
+could not complete on the stale SQLite schema.
+
+### Files changed
+
+Frontend repo:
+
+- `docs/change-briefs/day-51.md`
+- `docs/merge-notes/current.md`
+
+Backend repo:
+
+- `C:\dev\PathOS-Repos\pathos-backend\app\db\connection.py`
+- `C:\dev\PathOS-Repos\pathos-backend\tests\test_migrations_runner.py`
+
+### Exact fix made
+
+The backend SQLite startup path now repairs legacy RIS governed-pack tables
+when it detects that:
+
+- `knowledge_pack_versions` is missing current governed-pack columns, or
+- `knowledge_promotions` is missing current review-policy columns
+
+The repair is intentionally narrow:
+
+- SQLite only
+- RIS pack tables only
+- only auto-repairs when
+  `knowledge_pack_versions`, `knowledge_promotions`, and
+  `knowledge_serving_audit` are empty
+- recreates those tables with the current governed-pack schema
+- refuses silent automatic repair if persisted governed-pack rows already exist
+
+After the repair, a live qualification bootstrap pack was created and promoted:
+
+- `pack_key: qualification.qualification-dashboard-pack-job`
+- `pack_version_id: 75ec9ca8-9e46-4403-a84e-431ee90b2c95`
+- `serving_eligible: true`
+- `freshness_state: fresh`
+
+### Live runtime outcome
+
+Refusal proof before repair:
+
+- frontend proxy returned `200`
+- `response_state: refused`
+- `refusal_reason: governed_qualification_pack_unavailable`
+- `pack_version_id: null`
+- `grounding.serving_eligible: false`
+
+Grounded proof after repair:
+
+- live `POST /api/pathadvisor/qualification/explain` through the frontend proxy
+  returned `200`
+- `response_state: grounded`
+- `grounded: true`
+- `pack_version_id: 75ec9ca8-9e46-4403-a84e-431ee90b2c95`
+- `grounding.pack_key: qualification.qualification-dashboard-pack-job`
+- `grounding.serving_eligible: true`
+
+Partial proof after repair:
+
+- live `POST /api/pathadvisor/qualification/explain` with missing
+  `skills` and `target_roles` returned `200`
+- `response_state: partial`
+- `grounded: true`
+- `missing_inputs: ["skills", "target_roles"]`
+
+Conversation route check after repair:
+
+- live `POST /api/pathadvisor/conversation` with bounded governed context
+  returned `200`
+- no `422`
+- current reply remained a technical failure because backend conversation
+  provider enablement is off:
+  - `technical_failure_reason: pathadvisor_openai_disabled`
+
+That technical failure is distinct from the availability problem fixed in this
+run and does not erase the governed evidence returned by the dashboard flow.
+
+### Validation performed
+
+Frontend repo:
+
+- `pnpm test`
+  - passed
+  - `73` files, `1810` tests
+- `pnpm build`
+  - passed
+- `pnpm lint`
+  - failed due pre-existing unrelated repo-wide lint errors
+- `pnpm typecheck`
+  - failed due pre-existing unrelated resume-builder test errors
+
+Backend repo focused validation:
+
+- `poetry run pytest --no-cov tests/test_migrations_runner.py tests/api/test_pathadvisor_conversation_route.py`
+  - passed
+- `poetry run pytest --no-cov tests/pathadvisor/test_qualification_context_service.py tests/api/test_runtime_routes_v1.py tests/services/test_pathadvisor_conversation_service.py`
+  - passed
+
+### No UI changes
+
+Confirmed:
+
+- no layout changes
+- no spacing changes
+- no typography changes
+- no color changes
+- no label changes
+- no visual redesign of the centered PathAdvisor surface
+
+### Remaining risks / follow-ups
+
+1. The frontend repo patch artifacts below do not include the backend repo code
+   change itself; they only include this repo's docs/artifacts updates.
+2. The centered dashboard conversation route is no longer blocked by pack
+   availability, but live conversational rendering still depends on backend
+   conversation provider enablement and credentials.
+3. If a local SQLite DB has persisted governed-pack rows under the legacy RIS
+   schema, the new repair path intentionally fails closed instead of rewriting
+   those rows implicitly.
+4. Deferred follow-up only, not implemented: the frontend proxy currently
+   masks backend `422` bodies behind a generic route error, which can slow
+   future diagnosis.
+
+### git status
+
+```text
+On branch feature/day-51-qualification-pack-availability-conversation-proof-v1
+Changes not staged for commit:
+  modified:   docs/merge-notes/current.md
+
+Untracked files:
+  docs/change-briefs/day-51.md
+```
+
+### git branch --show-current
+
+```text
+feature/day-51-qualification-pack-availability-conversation-proof-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode  LastWriteTime       Length Name
+----  -------------       ------ ----
+-a--- 4/3/2026 4:54:37 PM      0 day-51.patch
+-a--- 4/3/2026 4:54:38 PM   6996 day-51-this-run.patch
+```
+
+---
+
 ## Run: PathAdvisor Thread History — Scrollable Conversation List Hardening (2026-04-03)
 
 ### Branch
