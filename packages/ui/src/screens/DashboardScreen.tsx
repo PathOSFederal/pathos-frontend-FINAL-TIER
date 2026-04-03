@@ -77,6 +77,7 @@ import {
 } from 'lucide-react';
 import { useNav } from '@pathos/adapters';
 import { usePathAdvisorScreenOverridesStore } from '../stores/pathAdvisorScreenOverridesStore';
+import { usePathAdvisorThreadStore } from '../stores/pathAdvisorThreadStore';
 import { INTERACTIVE_HOVER_CLASS } from '../styles/interactiveHover';
 import {
   CAREER_READINESS,
@@ -333,22 +334,6 @@ const DASHBOARD_SCREEN_PROMPTS: string[] = [
   'Why did my readiness score change?',
   'When can I expect a referral decision?',
 ];
-
-/** Simple counter for generating unique message IDs within a session. */
-let messageIdCounter = 0;
-
-/**
- * Generate a unique string ID for a thread message.
- *
- * WHY A COUNTER:
- * Using Date.now() can collide when two messages are created in the same
- * millisecond (e.g. user message + immediate seeded response). A monotonic
- * counter avoids that without adding a UUID dependency.
- */
-function nextMessageId(): string {
-  messageIdCounter = messageIdCounter + 1;
-  return 'msg-' + String(messageIdCounter);
-}
 
 
 // ============================================================================
@@ -1464,16 +1449,115 @@ export function DashboardScreen(props: DashboardScreenProps) {
   const propOnOpenReadinessBreakdown = props.onOpenReadinessBreakdown;
   const propOnSummaryChipClick = props.onSummaryChipClick;
 
+  // ==========================================================================
+  // THREAD STORE INTEGRATION
+  // ==========================================================================
+  //
+  // WHY THE THREAD STORE REPLACES LOCAL useState:
+  // The original DashboardScreen used useState<ThreadMessage[]> for messages.
+  // That meant conversations were lost on every page navigation or refresh.
+  // The thread store provides:
+  //   1. Persistence: threads survive page refresh via localStorage.
+  //   2. Multi-thread: users can switch between saved conversations.
+  //   3. Sidebar integration: threads appear in the left nav.
+  //
+  // HOW THE INTEGRATION WORKS:
+  // - The store owns the data (threads, messages, activeThreadId).
+  // - DashboardScreen reads the active thread's messages and maps them
+  //   to its own ThreadMessage format (which includes `governed` data).
+  // - On send: if no active thread, createThreadWithMessage(); otherwise
+  //   addMessageToThread() to the active thread.
+  // - The governed data is local ephemeral state (not persisted) since it
+  //   would be regenerated from the API in production.
+
+  const activeThreadId = usePathAdvisorThreadStore(function (s) { return s.activeThreadId; });
+  const storeThreads = usePathAdvisorThreadStore(function (s) { return s.threads; });
+  const hydrated = usePathAdvisorThreadStore(function (s) { return s.hydrated; });
+  const hydrateStore = usePathAdvisorThreadStore(function (s) { return s.hydrate; });
+  const createThreadWithMessage = usePathAdvisorThreadStore(function (s) { return s.createThreadWithMessage; });
+  const addMessageToThread = usePathAdvisorThreadStore(function (s) { return s.addMessageToThread; });
+
   /**
-   * Thread messages — the core state driving empty vs active rendering.
+   * Hydrate the thread store from localStorage on mount.
    *
-   * WHY useState INSTEAD OF A STORE:
-   * For this first slice, local state is sufficient. The thread doesn't
-   * persist across page navigations (intentional — each visit starts fresh).
-   * A Zustand store can replace this later if persistence or cross-component
-   * access is needed.
+   * WHY HERE AND NOT ONLY IN SIDEBAR:
+   * If the user navigates directly to /dashboard (e.g. bookmark, refresh),
+   * the sidebar may not have mounted yet or may mount asynchronously.
+   * Hydrating in DashboardScreen ensures the active thread is available
+   * immediately. The hydrate() function is idempotent, so calling it from
+   * both sidebar and dashboard is safe.
    */
-  const [messages, setMessages] = useState<ThreadMessage[]>([]);
+  useEffect(function () {
+    if (!hydrated) {
+      hydrateStore();
+    }
+  }, [hydrated, hydrateStore]);
+
+  /**
+   * Build the ThreadMessage array from the active thread's stored messages.
+   *
+   * WHY MAP BETWEEN TYPES:
+   * The store uses AdvisorThreadMessage (lean, persistence-focused).
+   * The UI uses ThreadMessage (includes `governed` for structured rendering).
+   * We map from store → UI format here. The `governed` field is null for
+   * persisted messages; the seeded governed response is only attached to
+   * messages created in the current session via the ephemeral governed map.
+   *
+   * WHY useMemo:
+   * Prevents rebuilding the messages array on every render. Only recalculates
+   * when the thread store state changes (activeThreadId or threads).
+   */
+  const [governedDataMap, setGovernedDataMap] = useState<Record<string, GovernedResponseData>>({});
+
+  const messages: ThreadMessage[] = useMemo(function () {
+    if (activeThreadId === null) {
+      return [];
+    }
+
+    /** Find the active thread by iterating (no optional chaining). */
+    let activeThread = null;
+    for (let i = 0; i < storeThreads.length; i++) {
+      if (storeThreads[i].id === activeThreadId) {
+        activeThread = storeThreads[i];
+        break;
+      }
+    }
+
+    if (activeThread === null) {
+      return [];
+    }
+
+    /** Map AdvisorThreadMessage → ThreadMessage for the UI. */
+    const mapped: ThreadMessage[] = [];
+    for (let i = 0; i < activeThread.messages.length; i++) {
+      const storeMsg = activeThread.messages[i];
+      /**
+       * Map 'advisor' role to 'assistant' for UI rendering.
+       * The store uses 'advisor' (product vocabulary); the UI uses
+       * 'assistant' (rendering convention established in the original code).
+       */
+      const uiRole: 'user' | 'assistant' = storeMsg.role === 'advisor' ? 'assistant' : 'user';
+
+      /**
+       * Look up ephemeral governed data for this message.
+       * Governed data is NOT persisted (it's large and would be regenerated
+       * from the API in production). It's stored in a local map keyed by
+       * message ID for the current session only.
+       */
+      const governed = governedDataMap[storeMsg.id] !== undefined
+        ? governedDataMap[storeMsg.id]
+        : null;
+
+      mapped.push({
+        id: storeMsg.id,
+        role: uiRole,
+        content: storeMsg.content,
+        governed: governed,
+      });
+    }
+
+    return mapped;
+  }, [activeThreadId, storeThreads, governedDataMap]);
 
   /**
    * Resolve the compact summary — use provided data or fall back to defaults.
@@ -1520,46 +1604,45 @@ export function DashboardScreen(props: DashboardScreenProps) {
   /**
    * Handle sending a message (from any input surface).
    *
-   * STEP BY STEP:
-   * 1. Create a user message and add it to the thread.
-   * 2. After a brief delay (simulating API latency), add the seeded
-   *    PathAdvisor response with governed data.
+   * THREAD CREATION RULE (CRITICAL):
+   * - If NO active thread: createThreadWithMessage() creates the thread
+   *   and its first message in one atomic operation. This is the ONLY way
+   *   threads are created — never on "new conversation" click.
+   * - If ACTIVE thread exists: addMessageToThread() appends the message.
    *
-   * WHY THE DELAY:
-   * A 300ms delay simulates network latency and prevents the response
-   * from appearing simultaneously with the user message, which would
-   * feel jarring and unrealistic.
-   *
-   * WHY ALWAYS THE SEEDED RESPONSE:
-   * In this demo slice, every message gets the same GS-13 competitiveness
-   * response. This lets us validate the full response composition. In
-   * production, the response will come from the governed API based on
-   * the actual user query.
+   * SEEDED RESPONSE:
+   * After the user message, a simulated PathAdvisor response is added
+   * after a 300ms delay. In production, this will be a real API call.
+   * The governed data is stored in an ephemeral local map (not persisted)
+   * and associated with the response message's ID for rendering.
    */
   const handleSend = useCallback(function (text: string) {
-    const userMsg: ThreadMessage = {
-      id: nextMessageId(),
-      role: 'user',
-      content: text,
-      governed: null,
-    };
-
     /**
-     * Build the new messages array WITHOUT spread operator.
+     * Determine whether we need to create a new thread or add to an existing one.
      *
-     * WHY EXPLICIT ARRAY CONSTRUCTION:
-     * The repo's hard constraints prohibit the spread operator (...).
-     * We construct the new array by iterating and pushing, which is
-     * explicit and avoids the performance concern of spread in hot paths.
+     * WHY READ activeThreadId DIRECTLY FROM STORE:
+     * useCallback dependencies would create a stale closure if we used the
+     * component-level activeThreadId. Reading from the store's getState()
+     * ensures we always have the current value at call time.
      */
-    setMessages(function (prev) {
-      const next: ThreadMessage[] = [];
-      for (let i = 0; i < prev.length; i++) {
-        next.push(prev[i]);
-      }
-      next.push(userMsg);
-      return next;
-    });
+    const currentActiveId = usePathAdvisorThreadStore.getState().activeThreadId;
+
+    let targetThreadId: string;
+
+    if (currentActiveId === null) {
+      /**
+       * NO ACTIVE THREAD — create a new thread with this as the first message.
+       * createThreadWithMessage() handles: ID generation, title generation,
+       * message creation, setting activeThreadId, and localStorage persistence.
+       */
+      targetThreadId = createThreadWithMessage(text);
+    } else {
+      /**
+       * ACTIVE THREAD EXISTS — add the user message to it.
+       */
+      targetThreadId = currentActiveId;
+      addMessageToThread(targetThreadId, 'user', text);
+    }
 
     /**
      * Simulate PathAdvisor response after a brief delay.
@@ -1568,25 +1651,36 @@ export function DashboardScreen(props: DashboardScreenProps) {
      * In the real implementation, this will be an async API call. The
      * setTimeout placeholder preserves the same async pattern so the
      * UI already handles the "response arrives later" flow correctly.
+     *
+     * WHY 300ms:
+     * Brief enough to feel responsive, long enough to prevent the response
+     * from appearing simultaneously with the user message (which would
+     * feel jarring and unrealistic).
      */
     setTimeout(function () {
-      const assistantMsg: ThreadMessage = {
-        id: nextMessageId(),
-        role: 'assistant',
-        content: SEEDED_RESPONSE_CONTENT,
-        governed: SEEDED_GOVERNED_RESPONSE,
-      };
+      const assistantMsgId = addMessageToThread(
+        targetThreadId,
+        'advisor',
+        SEEDED_RESPONSE_CONTENT
+      );
 
-      setMessages(function (prev) {
-        const next: ThreadMessage[] = [];
-        for (let i = 0; i < prev.length; i++) {
-          next.push(prev[i]);
-        }
-        next.push(assistantMsg);
+      /**
+       * Store the governed data in the ephemeral map, keyed by message ID.
+       *
+       * WHY NOT IN THE THREAD STORE:
+       * Governed data is large (grounded reasons, gaps, actions, etc.) and
+       * is specific to the rendering session. In production, it would be
+       * regenerated from the API. Persisting it to localStorage would bloat
+       * storage for no benefit. The ephemeral map keeps it available for
+       * the current session's rendering only.
+       */
+      setGovernedDataMap(function (prev) {
+        const next: Record<string, GovernedResponseData> = Object.assign({}, prev);
+        next[assistantMsgId] = SEEDED_GOVERNED_RESPONSE;
         return next;
       });
     }, 300);
-  }, []);
+  }, [createThreadWithMessage, addMessageToThread]);
 
   /**
    * Handle action button clicks from the response block.
