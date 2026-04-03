@@ -35,9 +35,23 @@
 
 'use client';
 
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { DashboardScreen } from '@pathos/ui';
+import {
+  DashboardScreen,
+  type DashboardConversationExchange,
+  type PathAdvisorConversationRequestState,
+  type PathAdvisorGovernedDraft,
+  type PathAdvisorGovernedResultState,
+} from '@pathos/ui';
 import { SharedDashboardRouteShell } from './_components/SharedDashboardRouteShell';
+import { useProfileStore } from '@/store/profileStore';
+import {
+  buildInitialPathAdvisorDraft,
+  fetchGovernedPathAdvisorResponse,
+  fetchPathAdvisorConversationResponse,
+} from '@/lib/pathadvisor-governed/client';
+import { buildPathAdvisorConversationContext } from '@/lib/pathadvisor-governed/conversation-context';
 
 /**
  * Route constants for navigation targets.
@@ -69,10 +83,114 @@ const CAREER_READINESS_ROUTE = '/dashboard/career-readiness';
  */
 export default function DashboardPage() {
   const router = useRouter();
+  const profile = useProfileStore(function (state) {
+    return state.profile;
+  });
+  const isProfileLoaded = useProfileStore(function (state) {
+    return state.isLoaded;
+  });
+  const loadProfileFromStorage = useProfileStore(function (state) {
+    return state.loadFromStorage;
+  });
+  const [governedDraft, setGovernedDraft] = useState<PathAdvisorGovernedDraft>(
+    buildInitialPathAdvisorDraft(profile)
+  );
+  const [governedResult, setGovernedResult] = useState<PathAdvisorGovernedResultState>({
+    status: 'idle',
+    response: null,
+    errorMessage: null,
+  });
+  const [conversationState, setConversationState] = useState<PathAdvisorConversationRequestState>({
+    status: 'idle',
+    errorMessage: null,
+  });
+
+  useEffect(function () {
+    if (!isProfileLoaded) {
+      loadProfileFromStorage();
+    }
+  }, [isProfileLoaded, loadProfileFromStorage]);
+
+  useEffect(function () {
+    setGovernedDraft(buildInitialPathAdvisorDraft(profile));
+  }, [profile]);
+
+  const requestDashboardConversation = useCallback(async function (
+    text: string
+  ): Promise<DashboardConversationExchange> {
+    setConversationState({
+      status: 'loading',
+      errorMessage: null,
+    });
+
+    let nextGovernedResponse = governedResult.response;
+
+    try {
+      if (nextGovernedResponse === null) {
+        setGovernedResult(function (prev) {
+          return {
+            status: 'loading',
+            response: prev.status === 'success' ? prev.response : null,
+            errorMessage: null,
+          };
+        });
+
+        const governedResponse = await fetchGovernedPathAdvisorResponse(governedDraft, profile);
+        if (governedResponse === null) {
+          setGovernedResult({
+            status: 'empty',
+            response: null,
+            errorMessage: null,
+          });
+          throw new Error('PathAdvisor could not load governed evidence for this explanation.');
+        }
+
+        nextGovernedResponse = governedResponse;
+        setGovernedResult({
+          status: 'success',
+          response: governedResponse,
+          errorMessage: null,
+        });
+      }
+
+      const governedResultForConversation: PathAdvisorGovernedResultState = {
+        status: 'success',
+        response: nextGovernedResponse,
+        errorMessage: null,
+      };
+      const context = buildPathAdvisorConversationContext({
+        currentView: 'dashboard',
+        draft: governedDraft,
+        result: governedResultForConversation,
+      });
+      const conversationResponse = await fetchPathAdvisorConversationResponse(text, context);
+
+      setConversationState({
+        status: 'idle',
+        errorMessage: null,
+      });
+
+      return {
+        reply: conversationResponse.reply,
+        governedResponse: nextGovernedResponse,
+      };
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : 'The PathAdvisor conversation request failed.';
+      setConversationState({
+        status: 'error',
+        errorMessage: message,
+      });
+      throw error;
+    }
+  }, [governedDraft, governedResult.response, profile]);
 
   return (
     <SharedDashboardRouteShell hideAdvisor>
       <DashboardScreen
+        requestConversation={requestDashboardConversation}
+        conversationRequestState={conversationState}
         onStartImprovement={function () {
           router.push(CAREER_READINESS_ROUTE + '#action-plan');
         }}

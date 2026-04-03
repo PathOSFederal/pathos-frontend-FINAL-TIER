@@ -1985,3 +1985,483 @@ Note: the branch-level `develop...HEAD` diff is empty because this work remains 
 pathadvisor-frontend-governed-api-integration.patch                 22128 bytes   2026-04-01 4:59:53 PM
 pathadvisor-frontend-governed-api-integration-this-run.patch        22128 bytes   2026-04-01 4:59:53 PM
 ```
+
+---
+
+## Run: Day 50 — Safe frontend wiring for bounded PathAdvisor conversation (2026-04-03)
+
+### Branch
+
+`feature/day-50-pathadvisor-frontend-conversation-wiring-v1`
+
+### Summary
+
+Replaced the remaining temporary frontend-local PathAdvisor conversation bridge
+with a strict bounded request path shared by the browser client and the
+same-origin proxy route. The governed evidence panel remains the authority
+surface, and the conversation request now carries only the allowed structured
+context fields.
+
+### Why this change was made
+
+The Day 50 objective is contract safety, not UX expansion. The previous wiring
+already called the backend conversation endpoint from the shell, but the route
+validator and request builder had drifted and the payload still carried extra
+frontend transport state. This pass narrows the contract so the frontend does
+not invent truth, does not widen the request shape, and keeps refused,
+partial, disabled, and technical-failure states honest.
+
+### Files changed
+
+- `app/api/pathadvisor/conversation/route.ts`
+- `app/api/pathadvisor/conversation/route.test.ts`
+- `docs/change-briefs/day-50.md`
+- `lib/pathadvisor-governed/client.ts`
+- `lib/pathadvisor-governed/client.test.ts`
+- `lib/pathadvisor-governed/conversation-request.ts`
+- `lib/pathadvisor-governed/conversation-request.test.ts`
+- `packages/ui/src/shell/PathAdvisorCard.test.tsx`
+
+### Behavior changes
+
+- The conversation request now uses one shared bounded contract builder and one
+  shared exact validator.
+- The request payload includes only `user_message`, `route.view`, `domain`,
+  `trust_state`, `selected_entity`, `draft_inputs`, and `governed_context`.
+- The extra frontend `request_id` was removed from the conversation path.
+- The proxy route now rejects widened payloads with unknown keys before any
+  backend call is made.
+- The proxy forwards the validated payload without reshaping backend business
+  fields.
+- Governed conversation loading and technical failure continue to preserve the
+  governed evidence panel and do not blur partial or refused states.
+
+### Validation performed
+
+- `pnpm lint`
+  - failed due to pre-existing repo-wide lint errors in resume-builder and
+    other unrelated files
+  - no new lint failures were introduced by the Day 50 PathAdvisor files
+- `pnpm typecheck`
+  - failed due to pre-existing repo-wide typecheck errors in
+    `app/desktop-preview/page.tsx` and resume-builder test files
+  - one new helper type issue introduced during this run was fixed
+- `pnpm test`
+  - passed
+  - 73 files passed, 1800 tests passed
+- `pnpm build`
+  - passed
+- Focused verification also passed:
+  - `pnpm test -- lib/pathadvisor-governed/conversation-request.test.ts lib/pathadvisor-governed/conversation-context.test.ts lib/pathadvisor-governed/client.test.ts app/api/pathadvisor/conversation/route.test.ts packages/ui/src/shell/PathAdvisorCard.test.tsx`
+
+### Known risks / follow-ups
+
+- `pnpm lint` and `pnpm typecheck` are still blocked by unrelated pre-existing
+  repo issues outside this Day 50 slice.
+- The branch-level `develop...HEAD` diff is empty because this run remains
+  uncommitted in the working tree, so the requested cumulative artifact is an
+  empty UTF-8 file.
+- No visual changes were made in this run. If future work revisits the
+  conversation shell presentation, treat that as a separate deferred UI task.
+
+### Human simulation gate
+
+Decision: not required for this run.
+
+Reason:
+- this slice is non-visual wiring only
+- the acceptance criteria are covered by request-shape, proxy, client, and
+  governed-shell tests
+- the UI presentation was intentionally kept visually equivalent
+
+### git status
+
+```text
+On branch feature/day-50-pathadvisor-frontend-conversation-wiring-v1
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app/api/pathadvisor/conversation/route.ts
+	modified:   docs/change-briefs/day-50.md
+	modified:   docs/merge-notes/current.md
+	modified:   lib/pathadvisor-governed/client.test.ts
+	modified:   lib/pathadvisor-governed/client.ts
+	modified:   packages/ui/src/shell/PathAdvisorCard.test.tsx
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	app/api/pathadvisor/conversation/route.test.ts
+	lib/pathadvisor-governed/conversation-request.test.ts
+	lib/pathadvisor-governed/conversation-request.ts
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+### git branch --show-current
+
+```text
+feature/day-50-pathadvisor-frontend-conversation-wiring-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode  LastWriteTime       Length Name
+----  -------------       ------ ----
+-a--- 4/3/2026 3:10:09 PM      2 day-50.patch
+-a--- 4/3/2026 3:09:48 PM  22376 day-50-this-run.patch
+```
+
+---
+
+## Run: Day 50 — Fix 422 bounded contract mismatch on dashboard PathAdvisor (2026-04-03)
+
+### Branch
+
+`feature/day-50-pathadvisor-frontend-conversation-wiring-v1`
+
+### Summary
+
+Fixed the frontend request-shape mismatch that was causing `422 Unprocessable
+Entity` responses from the backend bounded conversation route. The centered
+dashboard PathAdvisor surface now owns the real bounded conversation flow:
+it fetches or reuses an existing governed response, builds the exact backend
+conversation payload, sends it through the thin same-origin proxy, and keeps
+the governed evidence surface authoritative throughout loading and technical
+failure states.
+
+### Why this change was made
+
+The backend route was already reachable and working, but the frontend contract
+had drifted. The previous builder still emitted the wrong shape, including old
+frontend-oriented fields and missing required governed grounding fields. At the
+same time, the new centered dashboard PathAdvisor UI was still using a local
+seeded reply loop instead of the bounded backend conversation path. This run
+corrects both problems without changing the visual UI.
+
+### Files changed
+
+- `app/(shared)/dashboard/page.tsx`
+- `app/api/pathadvisor/conversation/route.test.ts`
+- `app/desktop-preview/page.tsx`
+- `docs/change-briefs/day-50.md`
+- `docs/merge-notes/current.md`
+- `lib/pathadvisor-governed/client.test.ts`
+- `lib/pathadvisor-governed/conversation-context.test.ts`
+- `lib/pathadvisor-governed/conversation-context.ts`
+- `lib/pathadvisor-governed/conversation-request.test.ts`
+- `lib/pathadvisor-governed/conversation-request.ts`
+- `packages/ui/src/index.ts`
+- `packages/ui/src/screens/DashboardScreen.test.tsx`
+- `packages/ui/src/screens/DashboardScreen.tsx`
+
+### Exact payload-shape fix
+
+The bounded request now matches the backend contract exactly.
+
+Required top-level fields:
+- `route`
+- `domain`
+- `user_message`
+- `governed_context`
+
+Optional top-level fields only:
+- `trust_state`
+- `entity`
+- `draft_inputs`
+
+Removed invalid or widened fields:
+- `context`
+- `request_id`
+- `history`
+- `messages`
+- `threadId`
+- `uiText`
+- `renderedText`
+
+Required governed grounding fields now sent:
+- `domain`
+- `response_state`
+- `grounded`
+- `partial`
+- `conversation_provider`
+- `provider_used`
+
+### Behavior changes
+
+- The centered dashboard PathAdvisor composer now uses the bounded backend
+  conversation flow rather than the local seeded reply loop.
+- The dashboard page reuses existing backend-shaped governed truth already in
+  screen state and does not synthesize backend business fields.
+- The proxy forwards validated JSON unchanged to the backend.
+- Partial remains distinct from failure.
+- Refused remains distinct from technical failure.
+- Governed evidence stays visible during send and after technical failure.
+- Non-dashboard preview contexts still keep the local seeded fallback path.
+
+### Tests added or updated
+
+- `lib/pathadvisor-governed/conversation-context.test.ts`
+  - verifies governed grounding fields are preserved from backend-shaped state
+- `lib/pathadvisor-governed/conversation-request.test.ts`
+  - verifies exact snake_case bounded payload and rejects old nested `context`
+- `lib/pathadvisor-governed/client.test.ts`
+  - verifies exact body sent to `/api/pathadvisor/conversation`
+  - verifies no send occurs without governed context
+- `app/api/pathadvisor/conversation/route.test.ts`
+  - verifies exact forwarded JSON and rejects widened payload
+- `packages/ui/src/screens/DashboardScreen.test.tsx`
+  - verifies loading/error conversation request states render on the centered dashboard surface
+  - verifies partial and refused remain distinct in governed evidence mapping
+
+### Validation performed
+
+- `pnpm lint`
+  - failed due to pre-existing repo-wide lint errors in resume-builder and
+    other unrelated files
+- `pnpm typecheck`
+  - still fails due to pre-existing repo-wide type errors in resume-builder
+    tests
+  - one new dashboard-related regression in `app/desktop-preview/page.tsx`
+    was fixed in this run
+- `pnpm test`
+  - passed
+  - 73 files passed, 1807 tests passed
+- `pnpm build`
+  - passed
+- Focused verification also passed:
+  - `pnpm test -- lib/pathadvisor-governed/conversation-context.test.ts lib/pathadvisor-governed/conversation-request.test.ts lib/pathadvisor-governed/client.test.ts app/api/pathadvisor/conversation/route.test.ts packages/ui/src/screens/DashboardScreen.test.tsx`
+
+### Remaining risks / follow-ups
+
+- Full repo `lint` and `typecheck` are still blocked by unrelated existing
+  issues outside this PathAdvisor slice.
+- The repo does not currently include `jsdom`, so dashboard interaction tests
+  for the centered composer remain limited to SSR-safe coverage rather than
+  DOM event simulation.
+- Any future visual refinements to the dashboard PathAdvisor surface should be
+  handled in a separate run; this pass intentionally avoided UI drift.
+
+### git status
+
+```text
+On branch feature/day-50-pathadvisor-frontend-conversation-wiring-v1
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app/(shared)/dashboard/page.tsx
+	modified:   app/api/pathadvisor/conversation/route.ts
+	modified:   app/desktop-preview/page.tsx
+	modified:   docs/change-briefs/day-50.md
+	modified:   docs/merge-notes/current.md
+	modified:   lib/pathadvisor-governed/client.test.ts
+	modified:   lib/pathadvisor-governed/client.ts
+	modified:   lib/pathadvisor-governed/conversation-context.test.ts
+	modified:   lib/pathadvisor-governed/conversation-context.ts
+	modified:   packages/ui/src/index.ts
+	modified:   packages/ui/src/screens/DashboardScreen.test.tsx
+	modified:   packages/ui/src/screens/DashboardScreen.tsx
+	modified:   packages/ui/src/shell/PathAdvisorCard.test.tsx
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	app/api/pathadvisor/conversation/route.test.ts
+	lib/pathadvisor-governed/conversation-request.test.ts
+	lib/pathadvisor-governed/conversation-request.ts
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+### git branch --show-current
+
+```text
+feature/day-50-pathadvisor-frontend-conversation-wiring-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode  LastWriteTime       Length Name
+----  -------------       ------ ----
+-a--- 4/3/2026 4:06:43 PM      0 day-50.patch
+-a--- 4/3/2026 4:06:44 PM  67457 day-50-this-run.patch
+```
+
+---
+
+## Run: Day 50 — Correct `draft_inputs` for bounded PathAdvisor conversation (2026-04-03)
+
+### Branch
+
+`feature/day-50-pathadvisor-frontend-conversation-wiring-v1`
+
+### Summary
+
+Fixed the remaining backend `422` on the bounded PathAdvisor conversation
+route by removing forbidden nested raw domain drafts from `draft_inputs`.
+The request builder now omits `draft_inputs` by default for the centered
+dashboard PathAdvisor flow and only allows the backend-safe list fields
+`focus_topics`, `selected_missing_inputs`, and `selected_next_steps`.
+
+### Why this change was made
+
+The route was reachable and the main request contract was already narrowed, but
+the frontend still sent `draft_inputs.qualification` and `draft_inputs.fehb`.
+Those nested raw objects are forbidden by the backend contract and caused the
+remaining `422 Unprocessable Entity` failure. This run removes that mismatch
+without changing any backend behavior or any UI.
+
+### Files changed
+
+- `app/api/pathadvisor/conversation/route.test.ts`
+- `docs/change-briefs/day-50.md`
+- `docs/merge-notes/current.md`
+- `lib/pathadvisor-governed/client.test.ts`
+- `lib/pathadvisor-governed/conversation-context.ts`
+- `lib/pathadvisor-governed/conversation-request.test.ts`
+- `lib/pathadvisor-governed/conversation-request.ts`
+
+### Exact `draft_inputs` fix
+
+Removed invalid frontend payload shape:
+
+```json
+{
+  "draft_inputs": {
+    "qualification": { "...": "..." },
+    "fehb": { "...": "..." }
+  }
+}
+```
+
+New allowed frontend payload behavior:
+
+- omit `draft_inputs` entirely when no explicit conversation-hint lists exist
+- include `draft_inputs` only as:
+
+```json
+{
+  "draft_inputs": {
+    "focus_topics": ["qualification"],
+    "selected_missing_inputs": [],
+    "selected_next_steps": ["Review the duties."]
+  }
+}
+```
+
+### Tests added or updated
+
+- `lib/pathadvisor-governed/conversation-request.test.ts`
+  - verifies `draft_inputs` is omitted when only raw bounded drafts exist
+  - verifies `draft_inputs` is included only with allowed list fields
+  - rejects forbidden raw `qualification` and `fehb` nested objects
+- `lib/pathadvisor-governed/client.test.ts`
+  - verifies the centered dashboard conversation client sends a valid request
+    when `draft_inputs` is omitted
+- `app/api/pathadvisor/conversation/route.test.ts`
+  - verifies forwarded payloads do not include `draft_inputs.qualification`
+    or `draft_inputs.fehb`
+  - verifies allowed list-shaped `draft_inputs` forwards unchanged
+
+### Validation performed
+
+- Focused verification:
+  - `pnpm test -- lib/pathadvisor-governed/conversation-request.test.ts lib/pathadvisor-governed/client.test.ts app/api/pathadvisor/conversation/route.test.ts packages/ui/src/screens/DashboardScreen.test.tsx`
+  - passed
+  - 4 files passed, 33 tests passed
+- `pnpm test`
+  - passed
+  - 73 files passed, 1810 tests passed
+- `pnpm build`
+  - passed
+- Pre-existing repo-wide failures still remain outside this slice:
+  - `pnpm lint`
+  - `pnpm typecheck`
+
+### Remaining risks / follow-ups
+
+- The centered dashboard flow currently omits `draft_inputs` unless a future
+  authoritative surface provides explicit conversation-hint lists.
+- Repo-wide lint and typecheck are still blocked by unrelated existing issues
+  outside the PathAdvisor conversation files.
+
+### git status
+
+```text
+On branch feature/day-50-pathadvisor-frontend-conversation-wiring-v1
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app/(shared)/dashboard/page.tsx
+	modified:   app/api/pathadvisor/conversation/route.ts
+	modified:   app/desktop-preview/page.tsx
+	modified:   docs/change-briefs/day-50.md
+	modified:   docs/merge-notes/current.md
+	modified:   lib/pathadvisor-governed/client.test.ts
+	modified:   lib/pathadvisor-governed/client.ts
+	modified:   lib/pathadvisor-governed/conversation-context.test.ts
+	modified:   lib/pathadvisor-governed/conversation-context.ts
+	modified:   packages/ui/src/index.ts
+	modified:   packages/ui/src/screens/DashboardScreen.test.tsx
+	modified:   packages/ui/src/screens/DashboardScreen.tsx
+	modified:   packages/ui/src/shell/PathAdvisorCard.test.tsx
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	app/api/pathadvisor/conversation/route.test.ts
+	lib/pathadvisor-governed/conversation-request.test.ts
+	lib/pathadvisor-governed/conversation-request.ts
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+### git branch --show-current
+
+```text
+feature/day-50-pathadvisor-frontend-conversation-wiring-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode  LastWriteTime       Length Name
+----  -------------       ------ ----
+-a--- 4/3/2026 4:06:54 PM      2 day-50.patch
+-a--- 4/3/2026 4:06:54 PM  67459 day-50-this-run.patch
+```

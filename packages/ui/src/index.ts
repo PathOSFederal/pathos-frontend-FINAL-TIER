@@ -55,10 +55,12 @@ export { THREAD_LIST_MAX_HEIGHT_PX } from './shell/Sidebar';
 // Screens
 export {
   DashboardScreen,
+  type DashboardConversationExchange,
   type DashboardScreenProps,
   type DashboardData,
   type ThreadMessage,
   type GovernedResponseData,
+  buildGovernedResponseDataFromShapedResponse,
   type CompactSummary,
 } from './screens/DashboardScreen';
 export { CareerReadinessScreen } from './screens/CareerReadinessScreen';

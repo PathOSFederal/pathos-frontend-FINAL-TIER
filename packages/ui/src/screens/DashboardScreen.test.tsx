@@ -32,14 +32,19 @@
  */
 
 import React from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import {
   NavigationProvider,
   type NavigationAdapter,
   type NavLinkProps,
 } from '@pathos/adapters';
-import { DashboardScreen } from './DashboardScreen';
+import {
+  DashboardScreen,
+  buildGovernedResponseDataFromShapedResponse,
+} from './DashboardScreen';
+import { usePathAdvisorThreadStore } from '../stores/pathAdvisorThreadStore';
+import type { PathAdvisorShapedResponse } from '../shell/pathadvisor-governed-types';
 
 /**
  * No-op navigation callback for test adapter.
@@ -125,6 +130,78 @@ function renderDashboardWithSummary(summary: {
     </NavigationProvider>
   );
 }
+
+function resetDashboardThreadStore() {
+  localStorage.removeItem('pathos-pathadvisor-threads-v1');
+  usePathAdvisorThreadStore.setState({
+    threads: [],
+    activeThreadId: null,
+    hydrated: true,
+  });
+}
+
+function buildShapedResponse(
+  responseState: 'grounded' | 'partial' | 'refused'
+): PathAdvisorShapedResponse {
+  return {
+    domain: responseState === 'refused' ? 'cross_domain' : 'qualification',
+    responseState: responseState,
+    grounded: responseState !== 'refused',
+    summary: responseState === 'partial'
+      ? 'Partial governed summary'
+      : responseState === 'refused'
+        ? 'Refused governed summary'
+        : 'Grounded governed summary',
+    explanation: responseState === 'refused'
+      ? 'Governed refusal explanation'
+      : 'Governed explanation',
+    keyFactors: [
+      {
+        factorType: 'finding',
+        label: 'Evidence',
+        detail: 'Authoritative governed evidence.',
+        code: 'evidence',
+        severity: 'low',
+      },
+    ],
+    missingInputs: responseState === 'partial' ? ['expected_utilization'] : [],
+    nextSteps: responseState === 'refused'
+      ? ['Wait for governed coverage.']
+      : ['Review the governed explanation details.'],
+    refusalReason: responseState === 'refused' ? 'cross_domain_fehb_unavailable' : null,
+    packVersionId: 'pack-version-1',
+    freshnessState: 'fresh',
+    grounding: {
+      domain: responseState === 'refused' ? 'cross_domain' : 'qualification',
+      responseState: responseState,
+      grounded: responseState !== 'refused',
+      partial: responseState === 'partial',
+      refusalReason: responseState === 'refused' ? 'cross_domain_fehb_unavailable' : null,
+      missingInputs: responseState === 'partial' ? ['expected_utilization'] : [],
+      packId: 'pack-1',
+      packKey: 'qualification.pack',
+      versionId: 'pack-version-1',
+      version: 1,
+      freshnessState: 'fresh',
+      freshnessReason: 'Fresh.',
+      effectiveAt: null,
+      reviewedAt: null,
+      reviewBy: null,
+      expiresAt: null,
+      servingEligible: responseState !== 'refused',
+      sourceSummary: null,
+      conversationProvider: 'governed_only',
+      providerUsed: false,
+      refusalDomain: responseState === 'refused' ? 'fehb' : null,
+      domains: [],
+    },
+    servedAt: '2026-04-03T12:00:00Z',
+  };
+}
+
+beforeEach(function () {
+  resetDashboardThreadStore();
+});
 
 
 describe('DashboardScreen — Empty / Home State', function () {
@@ -288,4 +365,52 @@ describe('DashboardScreen — Active Thread State (seeded)', function () {
     expect(output).toContain('aria-label="Dashboard status summary"');
   });
 
+});
+
+describe('DashboardScreen — Live bounded conversation path', function () {
+  it('renders loading request copy in the centered dashboard surface', function () {
+    const output = renderToString(
+      <NavigationProvider adapter={testAdapter} linkComponent={TestLink}>
+        <DashboardScreen
+          conversationRequestState={{
+            status: 'loading',
+            errorMessage: null,
+          }}
+        />
+      </NavigationProvider>
+    );
+
+    expect(output).toContain('PathAdvisor is requesting a governed explanation.');
+  });
+
+  it('renders technical conversation failure copy in the centered dashboard surface', function () {
+    const output = renderToString(
+      <NavigationProvider adapter={testAdapter} linkComponent={TestLink}>
+        <DashboardScreen
+          conversationRequestState={{
+            status: 'error',
+            errorMessage: 'Conversation backend is unavailable.',
+          }}
+        />
+      </NavigationProvider>
+    );
+
+    expect(output).toContain('Conversation backend is unavailable.');
+  });
+
+  it('maps partial governed responses distinctly for the centered dashboard evidence surface', function () {
+    const mapped = buildGovernedResponseDataFromShapedResponse(buildShapedResponse('partial'));
+
+    expect(mapped.decision).toBe('Partial');
+    expect(mapped.decisionVariant).toBe('caution');
+    expect(mapped.topGaps).toEqual(['expected_utilization']);
+  });
+
+  it('maps refused governed responses distinctly from technical failure', function () {
+    const mapped = buildGovernedResponseDataFromShapedResponse(buildShapedResponse('refused'));
+
+    expect(mapped.decision).toBe('Refused');
+    expect(mapped.decisionVariant).toBe('negative');
+    expect(mapped.topGaps).toContain('cross_domain_fehb_unavailable');
+  });
 });

@@ -360,6 +360,7 @@ describe('PathAdvisorCard', function () {
     expect(output).toContain('backend conversation layer');
     expect(output).toContain('pathadvisor-governed-panel');
     expect(output).toContain('Incomplete');
+    expect(output).not.toContain('Technical conversation request failure');
   });
 
   it('renders a distinct governed conversation technical error without blurring refused state', function () {
