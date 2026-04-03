@@ -44,6 +44,13 @@ export {
   type PathAdvisorScreenOverrides,
   type PathAdvisorRailContent,
 } from './stores/pathAdvisorScreenOverridesStore';
+export {
+  usePathAdvisorThreadStore,
+  generateThreadTitle,
+  type AdvisorThread,
+  type AdvisorThreadMessage,
+} from './stores/pathAdvisorThreadStore';
+export { THREAD_LIST_MAX_HEIGHT_PX } from './shell/Sidebar';
 
 // Screens
 export {

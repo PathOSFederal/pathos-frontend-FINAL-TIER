@@ -105,6 +105,20 @@ export const BENEFITS_WORKSPACE_STORAGE_KEY = 'pathos-benefits-workspace-v1';
 export const GUIDED_USAJOBS_GOALS_STORAGE_KEY = 'pathos-guided-usajobs-goals-v1';
 
 /**
+ * Storage key for PathAdvisor conversation threads.
+ *
+ * WHY THIS EXISTS:
+ * PathAdvisor threads persist across page refreshes via localStorage. This key
+ * stores the full array of conversation threads (each with id, title, messages,
+ * timestamps). The thread store reads/writes this key on every mutation so the
+ * user can return to previous conversations after refresh or navigation.
+ *
+ * DATA SHAPE (serialized JSON):
+ * { threads: AdvisorThread[], activeThreadId: string | null }
+ */
+export const PATHADVISOR_THREADS_STORAGE_KEY = 'pathos-pathadvisor-threads-v1';
+
+/**
  * ============================================================================
  * STORAGE_KEYS OBJECT (Day 23)
  * ============================================================================
@@ -135,4 +149,5 @@ export const STORAGE_KEYS = {
   GUIDED_TOUR: GUIDED_TOUR_STORAGE_KEY,
   BENEFITS_WORKSPACE: BENEFITS_WORKSPACE_STORAGE_KEY,
   GUIDED_USAJOBS_GOALS: GUIDED_USAJOBS_GOALS_STORAGE_KEY,
+  PATHADVISOR_THREADS: PATHADVISOR_THREADS_STORAGE_KEY,
 } as const;

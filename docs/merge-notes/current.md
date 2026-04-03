@@ -2,6 +2,318 @@
 
 ---
 
+## Run: PathAdvisor Thread History — Scrollable Conversation List Hardening (2026-04-03)
+
+### Branch
+
+`feature/day-37-pathadvisor-thread-history-v1`
+
+### Summary
+
+Hardened the Recent conversations section in the sidebar so the thread list body
+scrolls internally when many conversations exist. The three-zone sidebar layout
+and information architecture are unchanged — this is a targeted scroll refinement,
+not a redesign.
+
+### Why this change was made
+
+Stress testing with 8–10+ saved conversations revealed that the thread list in the
+bottom zone could grow tall enough to crowd the sidebar, especially on shorter
+viewports. The thread list body now has a bounded max-height (260px) with
+overflow-y: auto, so it scrolls internally when needed. The "Recent conversations"
+header row stays visible outside the scroll container, and collapse/expand behavior
+is fully preserved.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `packages/ui/src/shell/Sidebar.tsx` | MODIFIED — Added THREAD_LIST_MAX_HEIGHT_PX constant (260px); added maxHeight + overflowY: auto inline style to thread list container; added data-testid="recent-conversations-scroll-body"; expanded teaching-level comments explaining scroll behavior |
+| `packages/ui/src/shell/Sidebar.test.tsx` | MODIFIED — Added 8 new tests: max height range guard, store capacity, scroll body testid contract, constant value check, empty-state scroll exclusion, header-outside-scroll contract, nav stability with scroll, new-conversation placement with scroll |
+| `packages/ui/src/index.ts` | MODIFIED — Added THREAD_LIST_MAX_HEIGHT_PX export |
+| `docs/change-briefs/pathadvisor-conversation-history.md` | MODIFIED — Added bounded scroll section to change brief |
+| `docs/merge-notes/current.md` | MODIFIED — This entry |
+
+### Behavior changes
+
+- The thread list body inside "Recent conversations" now scrolls internally when content exceeds 260px
+- The "Recent conversations" header row always stays visible above the scroll area
+- Collapse/expand behavior is unchanged
+- Active thread highlighting still works inside the scrollable list
+- When fewer than ~8 threads exist, the section looks identical to before (no scrollbar)
+- Core navigation is unaffected
+- "+ New conversation" button placement is unaffected
+- Thread creation, persistence, and switching logic are completely unchanged
+
+### Commands run
+
+```
+git status
+git branch --show-current
+git diff --name-status develop...HEAD
+git diff --stat develop...HEAD
+pnpm lint
+pnpm typecheck
+pnpm test
+```
+
+### Validation results
+
+- Lint: PASS (0 new errors in changed files; all errors/warnings are pre-existing in unrelated files)
+- Typecheck: PASS (0 new errors; pre-existing errors only in resume-builder test fixtures and desktop-preview)
+- Tests: PASS (27/27 sidebar tests including 8 new scroll tests, 29/29 thread store tests, 1795/1795 full suite across 71 files)
+
+### Patch artifacts
+
+| Artifact | Size |
+|----------|------|
+| `artifacts/pathadvisor-thread-history.patch` | ~65 KB (regenerated — cumulative: all uncommitted working-tree changes) |
+| `artifacts/pathadvisor-thread-history-this-run.patch` | ~51 KB (regenerated — incremental: scroll hardening only) |
+
+### Known follow-ups
+
+1. Full DOM-based thread rendering tests require @testing-library/react (Zustand v5 SSR limitation)
+2. Scroll-to-active: auto-scroll the list so the active thread is visible when switching threads
+3. Viewport-adaptive max height for mobile sheets or very short viewports
+4. Custom scrollbar styling if repo establishes a scrollbar utility pattern
+5. Human simulation gate: visual verification of scroll behavior with 10+ threads at 1440px and 768px
+
+### Human simulation gate
+
+Decision: RECOMMENDED but not blocking.
+Triggers: visual verification that thread list scrolls internally with 10+ threads, header stays visible, collapse/expand works, main nav is stable.
+Evidence needed: browser inspection at 1440px viewport with 10+ threads in localStorage.
+
+---
+
+## Run: PathAdvisor Thread History — Sidebar Information Architecture Refinement (2026-04-03)
+
+### Branch
+
+`feature/day-37-pathadvisor-thread-history-v1`
+
+### Summary
+
+Refined the sidebar information architecture so saved PathAdvisor conversation
+threads no longer displace core product navigation. The original implementation
+placed threads at the top of the sidebar, which pushed down navigation items like
+Career Readiness, Job Search, and Resume Builder. This refinement:
+
+- Keeps "+ New conversation" near the top of the sidebar (after Dashboard)
+- Moves saved threads to a collapsible "Recent conversations" section at the bottom
+- Core product routes remain visually stable and positionally anchored
+- Thread persistence and store logic are completely preserved
+
+### Why this change was made
+
+The original thread placement was correct for signaling that PathAdvisor is
+first-class, but in practice it pushed core product routes down the sidebar.
+Users with several saved conversations saw navigation items displaced by thread
+history. The product decision: threads are user-generated workspace artifacts,
+not primary navigation destinations. They belong at the bottom of the sidebar
+in a collapsible section, while starting a new conversation remains quick and
+easy near the top.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `packages/ui/src/shell/Sidebar.tsx` | MODIFIED — Split PathAdvisorThreadSection into NewConversationButton (top) + RecentConversationsSection (bottom collapsible); reorganized sidebar into three flex zones |
+| `packages/ui/src/shell/Sidebar.test.tsx` | NEW — 19 tests covering button placement, bottom-zone structure, store contracts, nav stability |
+| `docs/change-briefs/pathadvisor-conversation-history.md` | MODIFIED — Updated to reflect new sidebar IA with three-zone layout |
+| `docs/merge-notes/current.md` | MODIFIED — This entry |
+
+### Behavior changes
+
+- "+ New conversation" button now appears after the OVERVIEW section (Dashboard, Career Readiness), not inside a separate "PATHADVISOR" section header
+- Saved threads no longer appear at the top of the sidebar
+- Saved threads now appear in a "Recent conversations (N)" collapsible section at the bottom of the sidebar, above the user identity card
+- The section defaults to expanded when threads exist and can be collapsed by clicking the header
+- The section is hidden entirely when no threads exist
+- Active thread highlighting (accent bg + left bar) still works when on the dashboard
+- Max visible threads increased from 8 to 10 (bottom placement has more room)
+- All core navigation items (Career Readiness through Settings) are unaffected
+- Thread creation, persistence, and switching logic are completely unchanged
+
+### Sidebar layout architecture
+
+The sidebar now uses a three-zone flex column layout:
+
+1. **Header** (flex-shrink-0): Brand, subtitle, persona label
+2. **Main nav** (flex-1, overflow-y-auto): OVERVIEW + New conversation + all product nav sections. Scrolls independently if needed.
+3. **Bottom zone** (flex-shrink-0): Recent conversations (collapsible) + user identity card. Always anchored at the bottom.
+
+### Commands run
+
+```
+git status
+git branch --show-current
+pnpm lint
+pnpm typecheck
+pnpm test (sidebar + thread store tests)
+```
+
+### Validation results
+
+- Lint: PASS (0 new errors in changed files; 1 pre-existing warning fixed; all other warnings/errors are pre-existing in unrelated files)
+- Typecheck: PASS (0 new errors; pre-existing errors only in resume-builder test fixtures and desktop-preview)
+- Tests: PASS (19/19 new sidebar tests, 29/29 existing thread store tests, 1787/1787 full suite across 71 files)
+
+### Patch artifacts
+
+| Artifact | Size |
+|----------|------|
+| `artifacts/pathadvisor-thread-history.patch` | ~55 KB (cumulative: all uncommitted working-tree changes) |
+| `artifacts/pathadvisor-thread-history-this-run.patch` | ~41 KB (incremental: sidebar IA refinement only) |
+
+### Known follow-ups
+
+1. Full DOM-based thread rendering tests require @testing-library/react (Zustand v5 SSR limitation prevents renderToString from reflecting store state)
+2. Collapse/expand state is not persisted to localStorage (intentional — low-value transient preference)
+3. Thread deletion UI (swipe-to-delete or context menu)
+4. Thread search/filter within the section
+5. "Show all" link for users with more than 10 conversations
+6. Pinned threads that appear above the recent list
+7. Human simulation gate: visual verification of sidebar layout at 1440px and 768px viewports
+
+### Human simulation gate
+
+Decision: RECOMMENDED but not blocking.
+Triggers: visual verification that core nav is stable, threads appear at bottom, collapse/expand works, new conversation button is discoverable.
+Evidence needed: browser inspection at 1440px viewport, verify thread section is below Settings.
+
+---
+
+## Run: PathAdvisor Conversation Persistence & Thread Navigation (2026-04-03)
+
+### Branch
+
+`feature/day-37-pathadvisor-thread-history-v1`
+
+### Summary
+
+Introduced conversation persistence and thread navigation for the PathAdvisor
+dashboard. Users can now start new conversations, have them automatically saved
+on first message, switch between saved threads via the left sidebar, and continue
+previous conversations after page refresh. Dashboard remains the single PathAdvisor
+route — conversations are objects, not pages.
+
+### Why this change was made
+
+The prior dashboard lost all conversation state on page refresh or navigation.
+Users had no way to return to a previous PathAdvisor conversation. This feature
+adds structural conversation memory: a Zustand thread store with localStorage
+persistence, sidebar thread list, and thread switching — making PathAdvisor feel
+like a persistent workspace rather than a disposable chat widget.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `packages/ui/src/stores/pathAdvisorThreadStore.ts` | NEW — Zustand store for thread CRUD, localStorage persistence, title generation |
+| `packages/ui/src/stores/pathAdvisorThreadStore.test.ts` | NEW — 29 tests covering creation, navigation, persistence, title heuristic |
+| `packages/ui/src/screens/DashboardScreen.tsx` | MODIFIED — Replaced local useState with thread store; thread creation on first message |
+| `packages/ui/src/shell/Sidebar.tsx` | MODIFIED — Added PathAdvisor thread section with + New conversation and thread list |
+| `packages/ui/src/index.ts` | MODIFIED — Added thread store and type exports |
+| `lib/storage-keys.ts` | MODIFIED — Added PATHADVISOR_THREADS_STORAGE_KEY |
+| `docs/change-briefs/pathadvisor-conversation-history.md` | NEW — Non-technical change brief |
+
+### Behavior changes
+
+- New "PathAdvisor" section appears at the top of the left sidebar
+- "+ New conversation" button clears active thread, shows empty state
+- Sending first message creates a thread (title auto-generated from message)
+- Threads appear in sidebar, most recent first (max 8 visible)
+- Clicking a thread in sidebar loads its conversation in the dashboard
+- Active thread is highlighted with accent left bar + tinted background
+- Thread data persists to localStorage and survives page refresh
+- Dashboard still supports empty state (PathAdvisor hero) and active thread state
+- Existing summary chips, response composition, and action buttons are preserved
+- Governed data is session-ephemeral (not persisted to localStorage)
+
+### Commands run
+
+```
+git status
+git branch --show-current
+git diff --name-status develop...HEAD
+git diff --stat develop...HEAD
+git diff --stat
+pnpm lint — 0 errors in changed files (pre-existing only elsewhere)
+pnpm typecheck — 0 new errors (pre-existing only in resume-builder tests)
+pnpm test — 70 files, 1768 tests passed (29 new thread store tests)
+```
+
+### Validation results
+
+- Lint: PASS (0 errors in changed files)
+- Typecheck: PASS (0 new errors; pre-existing resume-builder test type errors unrelated)
+- Tests: PASS (29/29 new thread store tests, 12/12 existing dashboard tests, 1768/1768 full suite)
+
+### git status
+
+```
+On branch feature/day-37-pathadvisor-thread-history-v1
+Changes not staged for commit:
+  modified:   lib/storage-keys.ts
+  modified:   packages/ui/src/index.ts
+  modified:   packages/ui/src/screens/DashboardScreen.tsx
+  modified:   packages/ui/src/shell/Sidebar.tsx
+
+Untracked files:
+  packages/ui/src/stores/pathAdvisorThreadStore.test.ts
+  packages/ui/src/stores/pathAdvisorThreadStore.ts
+```
+
+### git branch --show-current
+
+```
+feature/day-37-pathadvisor-thread-history-v1
+```
+
+### git diff --stat
+
+```
+ lib/storage-keys.ts                         |  15 ++
+ packages/ui/src/index.ts                    |   6 +
+ packages/ui/src/screens/DashboardScreen.tsx | 236 ++++++++++++++-------
+ packages/ui/src/shell/Sidebar.tsx           | 316 +++++++++++++++++++++++++++-
+ 4 files changed, 498 insertions(+), 75 deletions(-)
+```
+
+### git diff --name-status develop...HEAD
+
+```
+(no output — changes are uncommitted in working tree)
+```
+
+### Patch artifacts
+
+| Artifact | Size |
+|----------|------|
+| `artifacts/pathadvisor-thread-history.patch` | ~35 KB (cumulative: develop → working tree) |
+| `artifacts/pathadvisor-thread-history-this-run.patch` | ~35 KB (incremental: this run only) |
+
+### Known follow-ups
+
+1. Thread deletion UI (swipe-to-delete or context menu)
+2. Thread title editing UI
+3. AI-powered thread title generation (async backfill after creation)
+4. Thread search/filtering for users with many conversations
+5. Governed data persistence (currently session-ephemeral; would need schema for localStorage)
+6. Thread sync with backend API when available
+7. "Continue last conversation" subtle prompt on dashboard return
+8. Mobile sidebar sheet behavior for thread section
+9. Human simulation gate: visual verification of sidebar thread list and thread switching
+
+### Human simulation gate
+
+Decision: RECOMMENDED but not blocking for this slice.
+Triggers: visual verification of sidebar thread list rendering, thread switching, empty state transitions.
+Evidence needed: browser inspection of sidebar at 1440px and 768px viewports, verify thread highlight states.
+
+---
+
 ## Run: PathAdvisor Dashboard Conversation Redesign (2026-04-03)
 
 ### Branch
