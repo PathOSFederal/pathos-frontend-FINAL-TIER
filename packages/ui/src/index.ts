@@ -31,6 +31,8 @@ export type {
   PathAdvisorFehbDraft,
   PathAdvisorGovernedDraft,
   PathAdvisorGovernedResultState,
+  PathAdvisorConversationResponse,
+  PathAdvisorConversationRequestState,
 } from './shell/pathadvisor-governed-types';
 export {
   usePathAdvisorBriefingStore,

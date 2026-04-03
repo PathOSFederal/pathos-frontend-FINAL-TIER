@@ -39,6 +39,7 @@ import {
 } from '../stores/pathAdvisorContextLogStore';
 import { useNav } from '@pathos/adapters';
 import type {
+  PathAdvisorConversationRequestState,
   PathAdvisorGovernedDraft,
   PathAdvisorGovernedResultState,
 } from './pathadvisor-governed-types';
@@ -101,6 +102,8 @@ export interface PathAdvisorCardProps {
   governedDraft?: PathAdvisorGovernedDraft;
   /** Optional: latest governed request state for the shared rail response surface. */
   governedResult?: PathAdvisorGovernedResultState;
+  /** Optional: latest conversation request state for the shared governed shell. */
+  governedConversationState?: PathAdvisorConversationRequestState;
   /** Optional: called when the bounded governed draft changes. */
   onGovernedDraftChange?: (draft: PathAdvisorGovernedDraft) => void;
   /** Optional: called when the user submits the bounded governed request. */
@@ -225,6 +228,7 @@ function ContextLogEntryBlock(props: {
  */
 function GovernedConversationSurface(props: {
   messages: PathAdvisorMessage[];
+  conversationState: PathAdvisorConversationRequestState | undefined;
   result: PathAdvisorGovernedResultState;
 }) {
   const recentMessages =
@@ -254,6 +258,39 @@ function GovernedConversationSurface(props: {
             No governed result is loaded yet. The conversation stays bounded and will point you back to the governed request surface when needed.
           </p>
         )}
+        {props.conversationState !== undefined && props.conversationState.status === 'loading' ? (
+          <div
+            className="rounded-[var(--p-radius)] px-3 py-2 mt-3"
+            style={{
+              background: 'color-mix(in srgb, var(--p-accent) 8%, var(--p-surface2))',
+              border: '1px solid color-mix(in srgb, var(--p-accent) 20%, var(--p-border))',
+            }}
+            data-testid="pathadvisor-conversation-loading"
+          >
+            <p className="text-[12px]" style={{ color: 'var(--p-text-muted)' }}>
+              PathAdvisor is asking the backend conversation layer to explain the current governed result.
+            </p>
+          </div>
+        ) : null}
+        {props.conversationState !== undefined && props.conversationState.status === 'error' ? (
+          <div
+            className="rounded-[var(--p-radius)] px-3 py-2 mt-3"
+            style={{
+              background: 'color-mix(in srgb, var(--p-danger, #ef4444) 8%, var(--p-surface2))',
+              border: '1px solid color-mix(in srgb, var(--p-danger, #ef4444) 20%, var(--p-border))',
+            }}
+            data-testid="pathadvisor-conversation-error"
+          >
+            <p className="text-[12px] font-semibold" style={{ color: 'var(--p-text)' }}>
+              Technical conversation request failure
+            </p>
+            <p className="text-[11px] mt-1" style={{ color: 'var(--p-text-muted)' }}>
+              {props.conversationState.errorMessage !== null && props.conversationState.errorMessage !== ''
+                ? props.conversationState.errorMessage
+                : 'PathAdvisor could not load the backend conversation reply.'}
+            </p>
+          </div>
+        ) : null}
         <div className="mt-3 space-y-2">
           {recentMessages.length === 0 ? (
             <div
@@ -1146,6 +1183,7 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
           <>
             <GovernedConversationSurface
               messages={messageList}
+              conversationState={props.governedConversationState}
               result={props.governedResult as PathAdvisorGovernedResultState}
             />
             <PathAdvisorGovernedPanel
@@ -1250,16 +1288,32 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
                   }}
                   className="flex-1 min-w-0 h-full bg-transparent outline-none border-0"
                   style={{ color: 'var(--p-text)' }}
+                  disabled={
+                    props.governedConversationState !== undefined &&
+                    props.governedConversationState.status === 'loading'
+                  }
                 />
               </div>
               <button
                 type="submit"
                 className="flex-shrink-0 h-11 w-11 grid place-items-center rounded-[var(--p-radius)] transition-colors"
                 style={{
-                  background: 'var(--p-accent)',
-                  color: 'var(--p-bg)',
+                  background:
+                    props.governedConversationState !== undefined &&
+                    props.governedConversationState.status === 'loading'
+                      ? 'var(--p-surface)'
+                      : 'var(--p-accent)',
+                  color:
+                    props.governedConversationState !== undefined &&
+                    props.governedConversationState.status === 'loading'
+                      ? 'var(--p-text-muted)'
+                      : 'var(--p-bg)',
                 }}
                 aria-label="Send"
+                disabled={
+                  props.governedConversationState !== undefined &&
+                  props.governedConversationState.status === 'loading'
+                }
               >
                 <Send className="w-3.5 h-3.5" />
               </button>

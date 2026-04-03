@@ -13,8 +13,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { demoJobSeekerProfile } from '@/lib/api/profile';
 import {
   buildInitialPathAdvisorDraft,
+  fetchPathAdvisorConversationResponse,
   fetchGovernedPathAdvisorResponse,
 } from './client';
+import { buildPathAdvisorConversationContext } from './conversation-context';
 
 const originalFetch = globalThis.fetch;
 
@@ -226,5 +228,112 @@ describe('governed PathAdvisor client', function () {
         demoJobSeekerProfile
       )
     ).rejects.toThrow('Backend configuration is missing.');
+  });
+
+  it('routes governed conversation requests through the same-origin conversation endpoint', async function () {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async function () {
+        return JSON.stringify({
+          reply: 'This is the backend conversation reply.',
+          response_state: 'grounded',
+          grounded: true,
+          refusal_reason: null,
+        });
+      },
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const conversationContext = buildPathAdvisorConversationContext({
+      currentView: 'dashboard',
+      draft: buildInitialPathAdvisorDraft(demoJobSeekerProfile),
+      result: {
+        status: 'success',
+        errorMessage: null,
+        response: {
+          domain: 'qualification',
+          responseState: 'grounded',
+          grounded: true,
+          summary: 'Governed summary',
+          explanation: 'Governed explanation',
+          keyFactors: [],
+          missingInputs: [],
+          nextSteps: [],
+          refusalReason: null,
+          packVersionId: 'pack-version-1',
+          freshnessState: 'fresh',
+          grounding: {
+            domain: 'qualification',
+            responseState: 'grounded',
+            grounded: true,
+            partial: false,
+            refusalReason: null,
+            missingInputs: [],
+            packId: 'pack-1',
+            packKey: 'qualification.pack',
+            versionId: 'pack-version-1',
+            version: 1,
+            freshnessState: 'fresh',
+            freshnessReason: 'Fresh.',
+            effectiveAt: null,
+            reviewedAt: null,
+            reviewBy: null,
+            expiresAt: null,
+            servingEligible: true,
+            sourceSummary: null,
+            conversationProvider: 'fake-provider',
+            providerUsed: true,
+            refusalDomain: null,
+            domains: [],
+          },
+          servedAt: '2026-04-03T12:00:00Z',
+        },
+      },
+    });
+
+    const response = await fetchPathAdvisorConversationResponse(
+      'What does this result mean?',
+      conversationContext
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/pathadvisor/conversation');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      cache: 'no-store',
+    });
+    expect(response.reply).toBe('This is the backend conversation reply.');
+    expect(response.responseState).toBe('grounded');
+  });
+
+  it('throws a technical error when the conversation proxy route fails', async function () {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async function () {
+        return JSON.stringify({
+          error: 'Conversation backend is unavailable.',
+        });
+      },
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const conversationContext = buildPathAdvisorConversationContext({
+      currentView: 'dashboard',
+      draft: buildInitialPathAdvisorDraft(demoJobSeekerProfile),
+      result: {
+        status: 'idle',
+        response: null,
+        errorMessage: null,
+      },
+    });
+
+    await expect(
+      fetchPathAdvisorConversationResponse(
+        'What can you explain?',
+        conversationContext
+      )
+    ).rejects.toThrow('Conversation backend is unavailable.');
   });
 });

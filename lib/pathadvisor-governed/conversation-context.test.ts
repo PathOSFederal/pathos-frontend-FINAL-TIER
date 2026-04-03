@@ -8,18 +8,14 @@
  * instead of rendered UI strings.
  *
  * WHY THESE TESTS MATTER:
- * This slice restores the user-facing composer, but the future conversation
- * handoff must still stay deterministic. These tests lock in that the context
- * builder copies authoritative fields only and that the temporary local reply
- * logic respects grounded, partial, refused, and technical-error distinctions.
+ * The conversation API wiring must still stay deterministic. These tests lock
+ * in that the context builder copies authoritative fields only and does not
+ * regress into reading rendered UI strings.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { PathAdvisorGovernedDraft, PathAdvisorGovernedResultState } from '@pathos/ui';
-import {
-  buildPathAdvisorConversationContext,
-  buildPathAdvisorLocalConversationReply,
-} from './conversation-context';
+import { buildPathAdvisorConversationContext } from './conversation-context';
 
 function buildDraft(): PathAdvisorGovernedDraft {
   return {
@@ -128,48 +124,45 @@ describe('governed PathAdvisor conversation context', function () {
     expect('Current governed state: grounded qualification' in context).toBe(false);
   });
 
-  it('builds partial conversational replies from missing inputs and next steps', function () {
+  it('keeps partial trust state and missing inputs in the structured context', function () {
     const context = buildPathAdvisorConversationContext({
       currentView: 'dashboard',
       draft: buildDraft(),
       result: buildSuccessResult('partial'),
     });
 
-    const reply = buildPathAdvisorLocalConversationReply(context, 'What is still missing?');
-
-    expect(reply).toContain('incomplete governed answer');
-    expect(reply).toContain('expected_utilization');
-    expect(reply).toContain('Review the duties before applying.');
-    expect(reply).toContain('What is still missing?');
+    expect(context.trustState).toBe('partial');
+    expect(context.governedResponse !== null).toBe(true);
+    if (context.governedResponse === null) {
+      throw new Error('Expected governed response.');
+    }
+    expect(context.governedResponse.missingInputs).toEqual(['expected_utilization']);
+    expect(context.governedResponse.nextSteps).toEqual(['Review the duties before applying.']);
   });
 
-  it('keeps refused replies distinct from technical failures', function () {
-    const refusedReply = buildPathAdvisorLocalConversationReply(
-      buildPathAdvisorConversationContext({
-        currentView: 'dashboard',
-        draft: buildDraft(),
-        result: buildSuccessResult('refused'),
-      }),
-      'Why can you not answer?'
-    );
+  it('keeps refused trust state distinct from technical error state', function () {
+    const refusedContext = buildPathAdvisorConversationContext({
+      currentView: 'dashboard',
+      draft: buildDraft(),
+      result: buildSuccessResult('refused'),
+    });
+    const technicalContext = buildPathAdvisorConversationContext({
+      currentView: 'dashboard',
+      draft: buildDraft(),
+      result: {
+        status: 'error',
+        response: null,
+        errorMessage: 'Proxy route failed.',
+      },
+    });
 
-    const technicalReply = buildPathAdvisorLocalConversationReply(
-      buildPathAdvisorConversationContext({
-        currentView: 'dashboard',
-        draft: buildDraft(),
-        result: {
-          status: 'error',
-          response: null,
-          errorMessage: 'Proxy route failed.',
-        },
-      }),
-      'Why can you not answer?'
-    );
-
-    expect(refusedReply).toContain('intentionally refused');
-    expect(refusedReply).toContain('cross_domain_fehb_unavailable');
-    expect(refusedReply).not.toContain('technical');
-    expect(technicalReply).toContain('technical');
-    expect(technicalReply).not.toContain('refused');
+    expect(refusedContext.trustState).toBe('refused');
+    expect(refusedContext.governedResponse !== null).toBe(true);
+    if (refusedContext.governedResponse === null) {
+      throw new Error('Expected governed response.');
+    }
+    expect(refusedContext.governedResponse.refusalReason).toBe('cross_domain_fehb_unavailable');
+    expect(technicalContext.trustState).toBe('error');
+    expect(technicalContext.governedResponse).toBe(null);
   });
 });

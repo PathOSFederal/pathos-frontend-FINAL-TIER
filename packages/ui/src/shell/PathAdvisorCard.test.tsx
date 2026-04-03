@@ -254,6 +254,10 @@ describe('PathAdvisorCard', function () {
             servedAt: '2026-04-01T12:00:00Z',
           },
         }}
+        governedConversationState={{
+          status: 'idle',
+          errorMessage: null,
+        }}
         onGovernedDraftChange={function () {
           /* noop */
         }}
@@ -272,5 +276,174 @@ describe('PathAdvisorCard', function () {
     expect(output).toContain('Ask about this governed result');
     expect(output).toContain('PathAdvisor explains the current governed result.');
     expect(output).not.toContain('Quick Prompts');
+  });
+
+  it('renders a distinct governed conversation loading state without hiding the governed panel', function () {
+    const output = renderCard(
+      <PathAdvisorCard
+        messages={[{ role: 'user', content: 'What does this mean?' }]}
+        suggestedPrompts={[]}
+        onSend={noop}
+        governedDraft={{
+          domain: 'qualification',
+          qualification: {
+            yearsExperience: '5',
+            targetRoles: 'Program Analyst',
+            skills: 'analysis',
+            authorizedToWork: true,
+          },
+          fehb: {
+            enrollmentType: '',
+            coverageType: 'family',
+            expectedUtilization: 'high',
+            householdSize: '',
+            planPreferences: '',
+            comparisonTargets: '',
+          },
+        }}
+        governedResult={{
+          status: 'success',
+          errorMessage: null,
+          response: {
+            domain: 'qualification',
+            responseState: 'partial',
+            grounded: true,
+            summary: 'Governed summary',
+            explanation: 'Governed explanation',
+            keyFactors: [],
+            missingInputs: ['expected_utilization'],
+            nextSteps: ['Provide utilization details.'],
+            refusalReason: null,
+            packVersionId: 'pack-version-1',
+            freshnessState: 'fresh',
+            grounding: {
+              domain: 'qualification',
+              responseState: 'partial',
+              grounded: true,
+              partial: true,
+              refusalReason: null,
+              missingInputs: ['expected_utilization'],
+              packId: 'pack-1',
+              packKey: 'qualification.pack',
+              versionId: 'pack-version-1',
+              version: 1,
+              freshnessState: 'fresh',
+              freshnessReason: 'Fresh.',
+              effectiveAt: null,
+              reviewedAt: null,
+              reviewBy: null,
+              expiresAt: null,
+              servingEligible: true,
+              sourceSummary: null,
+              conversationProvider: 'fake-provider',
+              providerUsed: true,
+              refusalDomain: null,
+              domains: [],
+            },
+            servedAt: '2026-04-01T12:00:00Z',
+          },
+        }}
+        governedConversationState={{
+          status: 'loading',
+          errorMessage: null,
+        }}
+        onGovernedDraftChange={function () {
+          /* noop */
+        }}
+        onGovernedSubmit={function () {
+          /* noop */
+        }}
+      />
+    );
+
+    expect(output).toContain('pathadvisor-conversation-loading');
+    expect(output).toContain('backend conversation layer');
+    expect(output).toContain('pathadvisor-governed-panel');
+    expect(output).toContain('Incomplete');
+  });
+
+  it('renders a distinct governed conversation technical error without blurring refused state', function () {
+    const output = renderCard(
+      <PathAdvisorCard
+        messages={[{ role: 'user', content: 'Why can you not answer?' }]}
+        suggestedPrompts={[]}
+        onSend={noop}
+        governedDraft={{
+          domain: 'cross_domain',
+          qualification: {
+            yearsExperience: '5',
+            targetRoles: 'Program Analyst',
+            skills: 'analysis',
+            authorizedToWork: true,
+          },
+          fehb: {
+            enrollmentType: '',
+            coverageType: 'family',
+            expectedUtilization: 'high',
+            householdSize: '',
+            planPreferences: '',
+            comparisonTargets: '',
+          },
+        }}
+        governedResult={{
+          status: 'success',
+          errorMessage: null,
+          response: {
+            domain: 'cross_domain',
+            responseState: 'refused',
+            grounded: false,
+            summary: 'Governed refusal summary',
+            explanation: 'Governed refusal explanation',
+            keyFactors: [],
+            missingInputs: [],
+            nextSteps: ['Wait for governed FEHB coverage.'],
+            refusalReason: 'cross_domain_fehb_unavailable',
+            packVersionId: null,
+            freshnessState: null,
+            grounding: {
+              domain: 'cross_domain',
+              responseState: 'refused',
+              grounded: false,
+              partial: false,
+              refusalReason: 'cross_domain_fehb_unavailable',
+              missingInputs: [],
+              packId: null,
+              packKey: null,
+              versionId: null,
+              version: null,
+              freshnessState: null,
+              freshnessReason: null,
+              effectiveAt: null,
+              reviewedAt: null,
+              reviewBy: null,
+              expiresAt: null,
+              servingEligible: false,
+              sourceSummary: null,
+              conversationProvider: 'fake-provider',
+              providerUsed: true,
+              refusalDomain: 'fehb',
+              domains: [],
+            },
+            servedAt: '2026-04-01T12:00:00Z',
+          },
+        }}
+        governedConversationState={{
+          status: 'error',
+          errorMessage: 'Conversation backend is unavailable.',
+        }}
+        onGovernedDraftChange={function () {
+          /* noop */
+        }}
+        onGovernedSubmit={function () {
+          /* noop */
+        }}
+      />
+    );
+
+    expect(output).toContain('pathadvisor-conversation-error');
+    expect(output).toContain('Technical conversation request failure');
+    expect(output).toContain('Conversation backend is unavailable.');
+    expect(output).toContain('Refused');
+    expect(output).not.toContain('Technical request failure');
   });
 });

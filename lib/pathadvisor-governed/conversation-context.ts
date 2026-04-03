@@ -22,6 +22,12 @@
  *
  * This keeps the future LLM handoff honest. The UI can stay conversational
  * without turning rendered prose into a shadow source of truth.
+ *
+ * IMPORTANT BOUNDARY:
+ * This file now assembles request context only. It no longer generates local
+ * conversational replies. Once the shared dashboard composer is wired to the
+ * backend conversation endpoint, the frontend should not act like a second
+ * reasoning engine.
  */
 
 import type {
@@ -173,71 +179,4 @@ export function buildPathAdvisorConversationContext(
     selectedEntity: selectedEntity,
     governedResponse: governedResponse,
   };
-}
-
-function joinList(items: string[]): string {
-  if (items.length === 0) {
-    return '';
-  }
-
-  return items.join(', ');
-}
-
-/**
- * Build the temporary local conversational reply used by the restored composer
- * before a dedicated PathAdvisor conversation endpoint exists.
- *
- * Why this exists:
- * The user still needs a conversational entry point today, but this slice does
- * not add backend LLM integration. This helper keeps the reply honest by
- * summarizing the current governed state instead of inventing new truth.
- */
-export function buildPathAdvisorLocalConversationReply(
-  context: PathAdvisorGovernedConversationContext,
-  userMessage: string
-): string {
-  if (context.trustState === 'loading') {
-    return 'PathAdvisor is refreshing the current governed result. Once that response returns, I can explain it within the same trust boundary.';
-  }
-
-  if (context.trustState === 'error') {
-    return 'The current PathAdvisor issue is technical, not governed. Try the request again once the governed API is reachable.';
-  }
-
-  if (context.trustState === 'empty' || context.trustState === 'idle' || context.governedResponse === null) {
-    return 'Ask for governed guidance in the panel first, then I can explain that result without stepping outside the approved truth boundary.';
-  }
-
-  if (context.governedResponse.responseState === 'refused') {
-    const nextSteps = joinList(context.governedResponse.nextSteps);
-    return 'The current governed result is intentionally refused for this request. Reason: ' +
-      (context.governedResponse.refusalReason !== null && context.governedResponse.refusalReason !== ''
-        ? context.governedResponse.refusalReason
-        : 'the backend did not provide a refusal reason.') +
-      (nextSteps !== '' ? ' Next steps: ' + nextSteps + '.' : '');
-  }
-
-  if (context.governedResponse.responseState === 'partial') {
-    const missingInputs = joinList(context.governedResponse.missingInputs);
-    const nextSteps = joinList(context.governedResponse.nextSteps);
-    return 'Here is the current incomplete governed answer for your ' +
-      context.governedResponse.domain +
-      ' request: ' +
-      context.governedResponse.summary +
-      (missingInputs !== '' ? ' Missing inputs: ' + missingInputs + '.' : '') +
-      (nextSteps !== '' ? ' Next steps: ' + nextSteps + '.' : '') +
-      ' I am staying inside the current governed result while answering "' + userMessage + '".';
-  }
-
-  return 'Here is the current governed answer for your ' +
-    context.governedResponse.domain +
-    ' request: ' +
-    context.governedResponse.summary +
-    ' Key factors: ' +
-    (context.governedResponse.keyFactors.length > 0
-      ? joinList(context.governedResponse.keyFactors.map(function (item) {
-          return item.label;
-        }))
-      : 'none returned.') +
-    ' I am answering from the current governed result rather than inventing new truth about "' + userMessage + '".';
 }
