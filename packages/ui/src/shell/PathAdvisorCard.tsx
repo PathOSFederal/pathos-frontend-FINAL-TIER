@@ -8,6 +8,15 @@
  * Suggested prompts render as chips above the message list inside the same card.
  * Composer (input + send) is pinned to the bottom of the card.
  *
+ * GOVERNED ARCHITECTURE NOTE:
+ * The shared dashboard rail has two responsibilities at once:
+ * 1. let the user speak to PathAdvisor conversationally
+ * 2. keep the governed evidence surface visible and structured
+ *
+ * This file owns the shell around those two layers. It should feel friendly,
+ * but it must never make the conversation itself look like a source of truth.
+ * The governed panel remains the evidence surface underneath the conversation.
+ *
  * BOUNDARY RULE: This file MUST NOT import from next/* or electron/*.
  */
 
@@ -200,6 +209,89 @@ function ContextLogEntryBlock(props: {
   );
 }
 
+/**
+ * Render a compact conversation surface above the governed evidence panel.
+ *
+ * Why this exists:
+ * The governed panel is valuable, but it should not feel like the entire
+ * product. This surface restores the user-facing PathAdvisor conversation entry
+ * while keeping the governed panel below as the explicit evidence layer.
+ *
+ * How it preserves the truth boundary:
+ * The messages shown here are conversational framing only. The governed panel
+ * still carries the structured truth state, missing inputs, next steps, and
+ * metadata. This block makes the rail feel conversational again without
+ * flattening the governed output into chat bubbles.
+ */
+function GovernedConversationSurface(props: {
+  messages: PathAdvisorMessage[];
+  result: PathAdvisorGovernedResultState;
+}) {
+  const recentMessages =
+    props.messages.length > 4 ? props.messages.slice(props.messages.length - 4) : props.messages;
+
+  return (
+    <div
+      className="px-3 pt-2 pb-1 flex-shrink-0"
+      data-testid="pathadvisor-governed-conversation-shell"
+    >
+      <div
+        className="rounded-[var(--p-radius)] border p-3"
+        style={{ background: 'var(--p-surface)', borderColor: 'var(--p-border)' }}
+      >
+        <p className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>
+          Conversation
+        </p>
+        <p className="text-[12px] mt-2" style={{ color: 'var(--p-text-muted)' }}>
+          Ask PathAdvisor about the current governed result. It will explain the result shown below without replacing the governed evidence.
+        </p>
+        {props.result.response !== null ? (
+          <p className="text-[11px] mt-2" style={{ color: 'var(--p-text-dim)' }}>
+            Current governed state: {props.result.response.responseState} {props.result.response.domain}
+          </p>
+        ) : (
+          <p className="text-[11px] mt-2" style={{ color: 'var(--p-text-dim)' }}>
+            No governed result is loaded yet. The conversation stays bounded and will point you back to the governed request surface when needed.
+          </p>
+        )}
+        <div className="mt-3 space-y-2">
+          {recentMessages.length === 0 ? (
+            <div
+              className="rounded-[var(--p-radius)] px-3 py-2"
+              style={{ background: 'var(--p-surface2)' }}
+            >
+              <p className="text-[12px]" style={{ color: 'var(--p-text-muted)' }}>
+                Start with a short question such as &quot;What does this result mean?&quot; or &quot;What is still missing?&quot;
+              </p>
+            </div>
+          ) : (
+            recentMessages.map(function (message, index) {
+              const isUser = message.role === 'user';
+              return (
+                <div
+                  key={String(index) + '-' + message.role}
+                  className="rounded-[var(--p-radius)] px-3 py-2"
+                  style={{
+                    background: isUser ? 'color-mix(in srgb, var(--p-accent) 10%, var(--p-surface2))' : 'var(--p-surface2)',
+                    border: isUser ? '1px solid color-mix(in srgb, var(--p-accent) 30%, var(--p-border))' : '1px solid var(--p-border)',
+                  }}
+                >
+                  <p className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>
+                    {isUser ? 'You' : 'PathAdvisor'}
+                  </p>
+                  <p className="text-[12px] mt-1" style={{ color: 'var(--p-text)' }}>
+                    {message.content}
+                  </p>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -207,6 +299,12 @@ function ContextLogEntryBlock(props: {
 /**
  * Renders the PathAdvisor conversation inside one ModuleCard: header, context
  * pills, scrollable conversation (suggested chips + messages), and pinned composer.
+ *
+ * Why this file matters:
+ * This is the shell that keeps PathAdvisor feeling conversational while still
+ * giving the governed response panel a clear, structured place in the same
+ * rail. The composer stays available in governed mode, but the governed panel
+ * remains visible so the user can always inspect the underlying truth state.
  */
 export function PathAdvisorCard(props: PathAdvisorCardProps) {
   const viewing =
@@ -522,6 +620,12 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
     props.governedResult !== undefined &&
     props.onGovernedDraftChange !== undefined &&
     props.onGovernedSubmit !== undefined;
+  const composerPlaceholder =
+    props.composerPlaceholder !== undefined && props.composerPlaceholder !== ''
+      ? props.composerPlaceholder
+      : isGovernedMode
+        ? 'Ask about this governed result...'
+        : 'Ask PathAdvisor...';
 
   return (
     <ModuleCard
@@ -1000,10 +1104,8 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
           </div>
         ) : null}
 
-        {/* Suggested prompts as chips. Guidance tab only; when governed mode is
-         * active, the structured governed panel replaces these older prompt
-         * chips because the governed endpoints use bounded inputs rather than
-         * freeform prompt text. */}
+        {/* Suggested prompts as chips. Guidance tab only; governed mode keeps the
+         * explicit composer instead of leaning on static prompt chips. */}
         {activeTab === 'guidance' && !hasContextLogEntries && !isGovernedMode && promptList.length > 0 ? (
           <div className="px-2 pb-2 flex-shrink-0">
             <p className="text-[10px] uppercase tracking-wide mb-1.5 px-1" style={{ color: 'var(--p-text-dim)' }}>
@@ -1033,15 +1135,26 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
           </div>
         ) : null}
 
-        {/* Governed PathAdvisor panel. This surface replaces the old local-only
-         * prompt loop when the app shell provides the bounded contract props. */}
+        {/* Governed conversation shell plus governed evidence panel.
+         *
+         * Why this order matters:
+         * The conversation should feel like the entry point again, but the
+         * governed panel must still sit in the same view as the evidence layer.
+         * The conversation sits above; the structured governed result stays
+         * below. */}
         {activeTab === 'guidance' && !hasContextLogEntries && isGovernedMode ? (
-          <PathAdvisorGovernedPanel
-            draft={props.governedDraft as PathAdvisorGovernedDraft}
-            result={props.governedResult as PathAdvisorGovernedResultState}
-            onDraftChange={props.onGovernedDraftChange as (draft: PathAdvisorGovernedDraft) => void}
-            onSubmit={props.onGovernedSubmit as () => void}
-          />
+          <>
+            <GovernedConversationSurface
+              messages={messageList}
+              result={props.governedResult as PathAdvisorGovernedResultState}
+            />
+            <PathAdvisorGovernedPanel
+              draft={props.governedDraft as PathAdvisorGovernedDraft}
+              result={props.governedResult as PathAdvisorGovernedResultState}
+              onDraftChange={props.onGovernedDraftChange as (draft: PathAdvisorGovernedDraft) => void}
+              onSubmit={props.onGovernedSubmit as () => void}
+            />
+          </>
         ) : null}
 
         {/* --- HISTORY TAB --- */}
@@ -1096,17 +1209,30 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
         ) : null}
       </div>
 
-        {/* Composer: the legacy freeform chat control remains available for
-         * non-governed surfaces such as local previews. Governed mode uses the
-         * bounded request form inside the scroll area instead. */}
-        {!isGovernedMode ? (
+        {/* Composer: restored for both governed and non-governed surfaces.
+         *
+         * Why this exists in governed mode:
+         * PathAdvisor is still a conversational explanation layer. The bounded
+         * governed request form remains in the scroll area as the evidence
+         * source, while this composer lets the user ask follow-up questions
+         * about the current governed state.
+         */}
+        <div
+          className="flex-shrink-0 pt-3"
+          style={{ borderTop: '1px solid var(--p-border)' }}
+        >
+          {isGovernedMode ? (
+            <p className="text-[11px] mb-2" style={{ color: 'var(--p-text-muted)' }}>
+              PathAdvisor explains the current governed result. It does not create truth outside the structured response shown above.
+            </p>
+          ) : null}
           <div
-            className="flex-shrink-0 pt-3"
-            style={{ borderTop: '1px solid var(--p-border)' }}
+            className="rounded-[var(--p-radius)] px-0 py-0"
           >
             <form
               onSubmit={handleSubmit}
               className="flex items-center gap-2"
+              data-testid={isGovernedMode ? 'pathadvisor-governed-composer' : 'pathadvisor-composer'}
             >
               <div
                 className="flex flex-1 min-w-0 h-11 px-3 rounded-[var(--p-radius)] focus-within:ring-2 focus-within:ring-offset-1 focus-within:ring-[var(--p-accent)]"
@@ -1117,7 +1243,7 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
               >
                 <input
                   type="text"
-                  placeholder={props.composerPlaceholder !== undefined && props.composerPlaceholder !== '' ? props.composerPlaceholder : 'Ask PathAdvisor...'}
+                  placeholder={composerPlaceholder}
                   value={inputValue}
                   onChange={function (e) {
                     setInputValue(e.target.value);
@@ -1139,7 +1265,7 @@ export function PathAdvisorCard(props: PathAdvisorCardProps) {
               </button>
             </form>
           </div>
-        ) : null}
+        </div>
       </div>
     </ModuleCard>
   );

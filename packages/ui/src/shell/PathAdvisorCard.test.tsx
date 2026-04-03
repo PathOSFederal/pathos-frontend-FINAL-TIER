@@ -8,6 +8,12 @@
  * (4) Day 62: when context log entries exist for currentScreen, Quick questions
  * is shown (prompts collapsed behind it), (5) Privacy pill is not rendered,
  * (6) only one header trash control remains in the canonical rail header.
+ *
+ * WHY THESE TESTS MATTER:
+ * The governed PathAdvisor rail should remain conversational without weakening
+ * the structured evidence layer. These SSR tests verify that the composer stays
+ * visible when governed mode is active and that the governed surface still
+ * renders in the same shell.
  */
 
 import React from 'react';
@@ -258,9 +264,13 @@ describe('PathAdvisorCard', function () {
     );
 
     expect(output).toContain('pathadvisor-governed-panel');
+    expect(output).toContain('pathadvisor-governed-conversation-shell');
+    expect(output).toContain('pathadvisor-governed-composer');
     expect(output).toContain('Governed request');
     expect(output).toContain('Governed summary');
     expect(output).toContain('Grounding and status');
+    expect(output).toContain('Ask about this governed result');
+    expect(output).toContain('PathAdvisor explains the current governed result.');
     expect(output).not.toContain('Quick Prompts');
   });
 });

@@ -6,6 +6,15 @@
  * PURPOSE:
  * Prove the shared rail renders the governed PathAdvisor contract honestly.
  * These tests stay structural and deterministic so they run quickly.
+ *
+ * WHY THESE TESTS MATTER:
+ * The governed PathAdvisor UX should never rely on "vibes" from freeform text.
+ * These assertions lock in the visible trust cues that come from explicit
+ * backend fields:
+ * - incomplete is visibly incomplete
+ * - refused is intentional, not broken
+ * - technical failure is still separate
+ * - refresh states stay stable instead of flashing empty
  */
 
 import React from 'react';
@@ -14,6 +23,7 @@ import { renderToString } from 'react-dom/server';
 import { PathAdvisorGovernedPanel } from './PathAdvisorGovernedPanel';
 import type {
   PathAdvisorGovernedDraft,
+  PathAdvisorShapedResponse,
   PathAdvisorGovernedResultState,
 } from './pathadvisor-governed-types';
 
@@ -50,6 +60,70 @@ function renderPanel(state: PathAdvisorGovernedResultState): string {
       }}
     />
   );
+}
+
+function buildGroundedResponse(): PathAdvisorShapedResponse {
+  return {
+    domain: 'qualification',
+    responseState: 'grounded',
+    grounded: true,
+    summary: 'You have enough qualification signal for a governed answer.',
+    explanation: 'The governed qualification pack aligns with your supplied experience and skills.',
+    keyFactors: [
+      {
+        factorType: 'finding',
+        label: 'Experience aligns',
+        detail: 'Five years of experience supports the request.',
+        code: 'experience_alignment',
+        severity: 'low',
+      },
+    ],
+    missingInputs: [],
+    nextSteps: ['Review the target role duties before applying.'],
+    refusalReason: null,
+    packVersionId: 'pack-version-1',
+    freshnessState: 'fresh',
+    grounding: {
+      domain: 'qualification',
+      responseState: 'grounded',
+      grounded: true,
+      partial: false,
+      refusalReason: null,
+      missingInputs: [],
+      packId: 'pack-1',
+      packKey: 'qualification.pack',
+      versionId: 'pack-version-1',
+      version: 1,
+      freshnessState: 'fresh',
+      freshnessReason: 'Fresh.',
+      effectiveAt: null,
+      reviewedAt: null,
+      reviewBy: null,
+      expiresAt: null,
+      servingEligible: true,
+      sourceSummary: null,
+      conversationProvider: 'fake-provider',
+      providerUsed: true,
+      refusalDomain: null,
+      domains: [
+        {
+          domain: 'qualification',
+          responseState: 'grounded',
+          grounded: true,
+          partial: false,
+          refusalReason: null,
+          missingInputs: [],
+          packId: 'pack-1',
+          packKey: 'qualification.pack',
+          versionId: 'pack-version-1',
+          version: 1,
+          freshnessState: 'fresh',
+          freshnessReason: 'Fresh.',
+        },
+      ],
+    },
+    servedAt: '2026-04-01T12:00:00Z',
+  };
 }
 
 describe('PathAdvisorGovernedPanel', function () {
@@ -92,67 +166,7 @@ describe('PathAdvisorGovernedPanel', function () {
     const output = renderPanel({
       status: 'success',
       errorMessage: null,
-      response: {
-        domain: 'qualification',
-        responseState: 'grounded',
-        grounded: true,
-        summary: 'You have enough qualification signal for a governed answer.',
-        explanation: 'The governed qualification pack aligns with your supplied experience and skills.',
-        keyFactors: [
-          {
-            factorType: 'finding',
-            label: 'Experience aligns',
-            detail: 'Five years of experience supports the request.',
-            code: 'experience_alignment',
-            severity: 'low',
-          },
-        ],
-        missingInputs: [],
-        nextSteps: ['Review the target role duties before applying.'],
-        refusalReason: null,
-        packVersionId: 'pack-version-1',
-        freshnessState: 'fresh',
-        grounding: {
-          domain: 'qualification',
-          responseState: 'grounded',
-          grounded: true,
-          partial: false,
-          refusalReason: null,
-          missingInputs: [],
-          packId: 'pack-1',
-          packKey: 'qualification.pack',
-          versionId: 'pack-version-1',
-          version: 1,
-          freshnessState: 'fresh',
-          freshnessReason: 'Fresh.',
-          effectiveAt: null,
-          reviewedAt: null,
-          reviewBy: null,
-          expiresAt: null,
-          servingEligible: true,
-          sourceSummary: null,
-          conversationProvider: 'fake-provider',
-          providerUsed: true,
-          refusalDomain: null,
-          domains: [
-            {
-              domain: 'qualification',
-              responseState: 'grounded',
-              grounded: true,
-              partial: false,
-              refusalReason: null,
-              missingInputs: [],
-              packId: 'pack-1',
-              packKey: 'qualification.pack',
-              versionId: 'pack-version-1',
-              version: 1,
-              freshnessState: 'fresh',
-              freshnessReason: 'Fresh.',
-            },
-          ],
-        },
-        servedAt: '2026-04-01T12:00:00Z',
-      },
+      response: buildGroundedResponse(),
     });
 
     expect(output).toContain('pathadvisor-governed-success');
@@ -160,11 +174,11 @@ describe('PathAdvisorGovernedPanel', function () {
     expect(output).toContain('Explanation');
     expect(output).toContain('Key factors');
     expect(output).toContain('Grounding and status');
-    expect(output).toContain('Pack version:');
+    expect(output).toContain('Pack:');
     expect(output).toContain('pack-version-1');
   });
 
-  it('renders missing inputs for a partial response', function () {
+  it('renders partial responses as incomplete and points to missing inputs', function () {
     const output = renderPanel({
       status: 'success',
       errorMessage: null,
@@ -223,13 +237,16 @@ describe('PathAdvisorGovernedPanel', function () {
       },
     });
 
-    expect(output).toContain('Partial');
-    expect(output).toContain('Missing inputs');
-    expect(output).toContain('expected_utilization');
-    expect(output).toContain('Next steps');
+    expect(output).toContain('Incomplete');
+    expect(output).toContain('pathadvisor-partial-signal');
+    expect(output).toContain('This answer is incomplete because governed inputs are still missing.');
+    expect(output).toContain('These backend-provided inputs are the reason this governed answer is not complete yet.');
+    expect(output).toContain('Expected utilization');
+    expect(output).toContain('Review FEHB inputs');
+    expect(output).toContain('Path to completion');
   });
 
-  it('renders refusal separately from technical failure', function () {
+  it('renders refused responses as intentional trust boundaries', function () {
     const output = renderPanel({
       status: 'success',
       errorMessage: null,
@@ -303,8 +320,25 @@ describe('PathAdvisorGovernedPanel', function () {
     });
 
     expect(output).toContain('Refused');
+    expect(output).toContain('pathadvisor-refused-signal');
     expect(output).toContain('Refusal boundary');
+    expect(output).toContain('PathAdvisor is intentionally not answering this request yet.');
     expect(output).toContain('cross_domain_fehb_unavailable');
+    expect(output).toContain('This is an intentional trust boundary, not a technical failure.');
+    expect(output).toContain('Path to completion');
     expect(output).not.toContain('Technical request failure');
+  });
+
+  it('keeps the last governed answer visible while a refresh is loading', function () {
+    const output = renderPanel({
+      status: 'loading',
+      errorMessage: null,
+      response: buildGroundedResponse(),
+    });
+
+    expect(output).toContain('pathadvisor-governed-loading');
+    expect(output).toContain('Refreshing governed response');
+    expect(output).toContain('The last response stays visible until the updated request returns.');
+    expect(output).toContain('You have enough qualification signal for a governed answer.');
   });
 });
