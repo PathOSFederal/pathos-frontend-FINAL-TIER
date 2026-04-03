@@ -16,6 +16,12 @@ interface BackendErrorPayload {
   detail?: string | { code?: string; message?: string } | null;
 }
 
+type PayloadValidator = (payload: unknown) => boolean;
+
+function isPlainObject(payload: unknown): payload is Record<string, unknown> {
+  return payload !== null && !Array.isArray(payload) && typeof payload === 'object';
+}
+
 export async function readBackendPayload(response: Response): Promise<unknown> {
   const text = await response.text();
   if (text.trim() === '') {
@@ -73,7 +79,8 @@ export async function proxyGovernedPathAdvisorRequest(
   request: NextRequest,
   backendPath: string,
   invalidPayloadMessage: string,
-  backendFailureMessage: string
+  backendFailureMessage: string,
+  validatePayload?: PayloadValidator
 ): Promise<NextResponse> {
   const backend = resolveLiveAdvisorBackendConfig();
   if (backend.config === null) {
@@ -86,11 +93,9 @@ export async function proxyGovernedPathAdvisorRequest(
   }
 
   const requestPayload = (await request.json()) as unknown;
-  if (
-    requestPayload === null ||
-    Array.isArray(requestPayload) ||
-    typeof requestPayload !== 'object'
-  ) {
+  const validator = validatePayload !== undefined ? validatePayload : isPlainObject;
+
+  if (!validator(requestPayload)) {
     return NextResponse.json(
       {
         error: invalidPayloadMessage,

@@ -9,6 +9,7 @@ import { useNextNavAdapter, NextNavLink } from '@/lib/adapters/next-nav-adapter'
 import {
   SharedAppShell,
   PathAdvisorRail,
+  type PathAdvisorConversationRequestState,
   type PathAdvisorGovernedDraft,
   type PathAdvisorGovernedResultState,
   type PathAdvisorMessage,
@@ -16,12 +17,10 @@ import {
 import { useProfileStore } from '@/store/profileStore';
 import {
   buildInitialPathAdvisorDraft,
+  fetchPathAdvisorConversationResponse,
   fetchGovernedPathAdvisorResponse,
 } from '@/lib/pathadvisor-governed/client';
-import {
-  buildPathAdvisorConversationContext,
-  buildPathAdvisorLocalConversationReply,
-} from '@/lib/pathadvisor-governed/conversation-context';
+import { buildPathAdvisorConversationContext } from '@/lib/pathadvisor-governed/conversation-context';
 
 /**
  * Shared dashboard shell wrapper for routes that use the canonical PathAdvisor
@@ -34,7 +33,7 @@ import {
  * - bounded draft changes stay explicit
  * - loading, empty, error, and success remain distinct
  * - stale governed results are not left looking current after a domain switch
- * - the conversational shell only speaks from structured governed context
+ * - the conversational shell sends structured governed context to the backend
  */
 export function SharedDashboardRouteShell(props: {
   children: React.ReactNode;
@@ -65,6 +64,10 @@ export function SharedDashboardRouteShell(props: {
   const [governedResult, setGovernedResult] = useState<PathAdvisorGovernedResultState>({
     status: 'idle',
     response: null,
+    errorMessage: null,
+  });
+  const [conversationState, setConversationState] = useState<PathAdvisorConversationRequestState>({
+    status: 'idle',
     errorMessage: null,
   });
 
@@ -98,6 +101,10 @@ export function SharedDashboardRouteShell(props: {
       response: null,
       errorMessage: null,
     });
+    setConversationState({
+      status: 'idle',
+      errorMessage: null,
+    });
   }, []);
 
   /**
@@ -107,17 +114,16 @@ export function SharedDashboardRouteShell(props: {
    * 1. Record the user's message in the lightweight local conversation log.
    * 2. Build a bounded structured context object from the current governed
    *    draft and result state.
-   * 3. Generate a temporary local PathAdvisor reply from that structured
-   *    context only.
-   * 4. Append the assistant reply to the same lightweight log.
-   *
+   * 3. Send that context plus the user message to the same-origin conversation
+   *    route.
+   * 4. Append the backend reply to the same lightweight log.
+ *
    * Why this matters:
-   * This restores the conversational shell without letting chat text become a
-   * second source of truth. The reply is intentionally bounded to the current
-   * governed state, and the helper reads authoritative fields directly instead
-   * of scraping text back out of the rendered panel.
+   * This keeps the conversational shell from acting like a second reasoning
+   * engine. The frontend now assembles bounded request context only, while the
+   * backend conversation layer produces the actual reply.
    */
-  const handleAdvisorConversationSend = useCallback(function (text: string) {
+  const handleAdvisorConversationSend = useCallback(async function (text: string) {
     const userMessage: PathAdvisorMessage = { role: 'user', content: text };
 
     setAdvisorMessages(function (prev) {
@@ -128,25 +134,42 @@ export function SharedDashboardRouteShell(props: {
       next.push(userMessage);
       return next;
     });
+    setConversationState({
+      status: 'loading',
+      errorMessage: null,
+    });
 
     const context = buildPathAdvisorConversationContext({
       currentView: 'shared-dashboard',
       draft: governedDraft,
       result: governedResult,
     });
-
-    const assistantReply = buildPathAdvisorLocalConversationReply(context, text);
-    setAdvisorMessages(function (prev) {
-      const next: PathAdvisorMessage[] = [];
-      for (let i = 0; i < prev.length; i++) {
-        next.push(prev[i]);
-      }
-      next.push({
-        role: 'assistant',
-        content: assistantReply,
+    try {
+      const response = await fetchPathAdvisorConversationResponse(text, context);
+      setConversationState({
+        status: 'idle',
+        errorMessage: null,
       });
-      return next;
-    });
+      setAdvisorMessages(function (prev) {
+        const next: PathAdvisorMessage[] = [];
+        for (let i = 0; i < prev.length; i++) {
+          next.push(prev[i]);
+        }
+        next.push({
+          role: 'assistant',
+          content: response.reply,
+        });
+        return next;
+      });
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : 'The PathAdvisor conversation request failed.';
+      setConversationState({
+        status: 'error',
+        errorMessage: message,
+      });
+    }
   }, [governedDraft, governedResult]);
 
   /**
@@ -170,6 +193,10 @@ export function SharedDashboardRouteShell(props: {
       setGovernedResult({
         status: 'idle',
         response: null,
+        errorMessage: null,
+      });
+      setConversationState({
+        status: 'idle',
         errorMessage: null,
       });
     }
@@ -216,6 +243,10 @@ export function SharedDashboardRouteShell(props: {
         response: prev.status === 'success' ? prev.response : null,
         errorMessage: null,
       };
+    });
+    setConversationState({
+      status: 'idle',
+      errorMessage: null,
     });
 
     try {
@@ -294,6 +325,7 @@ export function SharedDashboardRouteShell(props: {
                 onClearMessages={handleClearMessages}
                 governedDraft={governedDraft}
                 governedResult={governedResult}
+                governedConversationState={conversationState}
                 onGovernedDraftChange={handleGovernedDraftChange}
                 onGovernedSubmit={handleGovernedSubmit}
               />

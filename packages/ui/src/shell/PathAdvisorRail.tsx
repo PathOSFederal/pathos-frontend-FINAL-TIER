@@ -19,6 +19,7 @@ import {
   type PathAdvisorMessage,
 } from './PathAdvisorCard';
 import type {
+  PathAdvisorConversationRequestState,
   PathAdvisorGovernedDraft,
   PathAdvisorGovernedResultState,
 } from './pathadvisor-governed-types';
@@ -57,6 +58,8 @@ export interface PathAdvisorRailProps {
   governedDraft?: PathAdvisorGovernedDraft;
   /** Optional governed response state for the shared PathAdvisor rail. */
   governedResult?: PathAdvisorGovernedResultState;
+  /** Optional conversation request state for the governed conversational shell. */
+  governedConversationState?: PathAdvisorConversationRequestState;
   /** Optional callback when the governed request draft changes. */
   onGovernedDraftChange?: (draft: PathAdvisorGovernedDraft) => void;
   /** Optional callback when the governed request is submitted. */
@@ -173,6 +176,7 @@ export function PathAdvisorRail(props: PathAdvisorRailProps) {
         composerPlaceholder={composerPlaceholder}
         governedDraft={props.governedDraft}
         governedResult={props.governedResult}
+        governedConversationState={props.governedConversationState}
         onGovernedDraftChange={props.onGovernedDraftChange}
         onGovernedSubmit={props.onGovernedSubmit}
       />

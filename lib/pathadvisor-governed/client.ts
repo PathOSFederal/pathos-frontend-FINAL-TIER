@@ -10,14 +10,17 @@
  * - bounded request shaping
  * - same-origin API calls
  * - backend response normalization
+ * - the conversation API boundary layered on top of governed truth
  */
 
 import type { Profile } from '@/lib/api/profile';
 import type {
+  PathAdvisorConversationResponse,
   PathAdvisorGovernedDraft,
   PathAdvisorGovernedDomain,
   PathAdvisorShapedResponse,
 } from '@pathos/ui';
+import type { PathAdvisorGovernedConversationContext } from './conversation-context';
 
 interface PathAdvisorErrorPayload {
   error?: string;
@@ -124,6 +127,64 @@ interface BackendCrossDomainRequest {
   user_inputs: BackendFehbRequest['user_inputs'];
   use_persisted_profile: boolean;
   request_id: string;
+}
+
+interface BackendPathAdvisorConversationRequest {
+  user_message: string;
+  request_id: string;
+  context: {
+    current_view: string;
+    request_domain: PathAdvisorGovernedDomain;
+    trust_state: 'grounded' | 'partial' | 'refused' | 'loading' | 'idle' | 'error' | 'empty';
+    bounded_request: {
+      qualification: {
+        years_experience: string;
+        target_roles: string;
+        skills: string;
+        authorized_to_work: boolean;
+      };
+      fehb: {
+        enrollment_type: string;
+        coverage_type: string;
+        expected_utilization: string;
+        household_size: string;
+        plan_preferences: string;
+        comparison_targets: string;
+      };
+    };
+    selected_entity: {
+      entity_type: 'job' | 'dashboard' | 'unknown';
+      entity_id: string | null;
+      entity_label: string | null;
+    };
+    governed_response: {
+      domain: PathAdvisorGovernedDomain;
+      response_state: 'grounded' | 'partial' | 'refused';
+      grounded: boolean;
+      summary: string;
+      explanation: string;
+      key_factors: Array<{
+        factor_type: string;
+        label: string;
+        detail: string;
+        code: string | null;
+        severity: string | null;
+      }>;
+      missing_inputs: string[];
+      next_steps: string[];
+      refusal_reason: string | null;
+      pack_version_id: string | null;
+      freshness_state: string | null;
+    } | null;
+  };
+}
+
+interface BackendPathAdvisorConversationResponse {
+  reply?: string | null;
+  message?: string | null;
+  response_state?: 'grounded' | 'partial' | 'refused';
+  grounded?: boolean;
+  refusal_reason?: string | null;
 }
 
 function splitCommaSeparated(value: string): string[] {
@@ -306,8 +367,51 @@ function adaptResponse(payload: BackendPathAdvisorShapedResponse): PathAdvisorSh
   };
 }
 
+/**
+ * Adapt the backend conversation payload into the explicit frontend
+ * conversation contract.
+ *
+ * Why this exists:
+ * The UI should not fetch an untyped opaque object and hope the fields are
+ * present. This adapter makes the conversation route fail honestly if the
+ * backend response is malformed.
+ */
+function adaptConversationResponse(
+  payload: BackendPathAdvisorConversationResponse
+): PathAdvisorConversationResponse {
+  const reply =
+    typeof payload.reply === 'string' && payload.reply.trim() !== ''
+      ? payload.reply
+      : typeof payload.message === 'string' && payload.message.trim() !== ''
+        ? payload.message
+        : null;
+
+  if (
+    reply === null ||
+    (payload.response_state !== 'grounded' &&
+      payload.response_state !== 'partial' &&
+      payload.response_state !== 'refused')
+  ) {
+    throw new Error('The frontend could not parse the PathAdvisor conversation response.');
+  }
+
+  return {
+    reply: reply,
+    responseState: payload.response_state,
+    grounded:
+      payload.grounded !== undefined
+        ? payload.grounded
+        : payload.response_state !== 'refused',
+    refusalReason: payload.refusal_reason !== undefined ? payload.refusal_reason : null,
+  };
+}
+
 function createRequestId(domain: PathAdvisorGovernedDomain): string {
   return domain + '-' + String(Date.now());
+}
+
+function createConversationRequestId(): string {
+  return 'pathadvisor-conversation-' + String(Date.now());
 }
 
 function buildQualificationUserFacts(
@@ -391,6 +495,80 @@ export function buildInitialPathAdvisorDraft(profile: Profile): PathAdvisorGover
   };
 }
 
+/**
+ * Convert the local bounded conversation context into the backend request
+ * payload.
+ *
+ * Why this exists:
+ * The context builder keeps the frontend state deterministic. This mapper then
+ * performs the transport-specific key conversion expected by the backend
+ * conversation route. Keeping the mapper here prevents UI components from
+ * dealing with snake_case transport details.
+ */
+function buildConversationRequestPayload(
+  userMessage: string,
+  context: PathAdvisorGovernedConversationContext
+): BackendPathAdvisorConversationRequest {
+  return {
+    user_message: userMessage,
+    request_id: createConversationRequestId(),
+    context: {
+      current_view: context.currentView,
+      request_domain: context.requestDomain,
+      trust_state: context.trustState,
+      bounded_request: {
+        qualification: {
+          years_experience: context.boundedRequest.qualification.yearsExperience,
+          target_roles: context.boundedRequest.qualification.targetRoles,
+          skills: context.boundedRequest.qualification.skills,
+          authorized_to_work: context.boundedRequest.qualification.authorizedToWork,
+        },
+        fehb: {
+          enrollment_type: context.boundedRequest.fehb.enrollmentType,
+          coverage_type: context.boundedRequest.fehb.coverageType,
+          expected_utilization: context.boundedRequest.fehb.expectedUtilization,
+          household_size: context.boundedRequest.fehb.householdSize,
+          plan_preferences: context.boundedRequest.fehb.planPreferences,
+          comparison_targets: context.boundedRequest.fehb.comparisonTargets,
+        },
+      },
+      selected_entity: {
+        entity_type: context.selectedEntity.entityType,
+        entity_id: context.selectedEntity.entityId,
+        entity_label: context.selectedEntity.entityLabel,
+      },
+      governed_response:
+        context.governedResponse !== null
+          ? {
+              domain: context.governedResponse.domain,
+              response_state: context.governedResponse.responseState,
+              grounded: context.governedResponse.grounded,
+              summary: context.governedResponse.summary,
+              explanation: context.governedResponse.explanation,
+              key_factors: context.governedResponse.keyFactors.map(function (item) {
+                return {
+                  factor_type: item.factorType,
+                  label: item.label,
+                  detail: item.detail,
+                  code: item.code,
+                  severity: item.severity,
+                };
+              }),
+              missing_inputs: context.governedResponse.missingInputs.map(function (item) {
+                return item;
+              }),
+              next_steps: context.governedResponse.nextSteps.map(function (item) {
+                return item;
+              }),
+              refusal_reason: context.governedResponse.refusalReason,
+              pack_version_id: context.governedResponse.packVersionId,
+              freshness_state: context.governedResponse.freshnessState,
+            }
+          : null,
+    },
+  };
+}
+
 export async function fetchGovernedPathAdvisorResponse(
   draft: PathAdvisorGovernedDraft,
   profile: Profile
@@ -447,4 +625,49 @@ export async function fetchGovernedPathAdvisorResponse(
   }
 
   return adaptResponse(payload as BackendPathAdvisorShapedResponse);
+}
+
+/**
+ * Fetch a conversational PathAdvisor explanation from the backend conversation
+ * layer.
+ *
+ * Step by step:
+ * 1. Convert the bounded local context into the backend request payload.
+ * 2. Send the request through the same-origin conversation proxy route.
+ * 3. Parse backend errors honestly.
+ * 4. Adapt the response into the explicit frontend conversation contract.
+ *
+ * Why this preserves trust:
+ * The request carries only structured governed fields and the user's message.
+ * The frontend does not generate its own explanation anymore. It simply passes
+ * the bounded context to the backend conversation layer and renders the reply.
+ */
+export async function fetchPathAdvisorConversationResponse(
+  userMessage: string,
+  context: PathAdvisorGovernedConversationContext
+): Promise<PathAdvisorConversationResponse> {
+  const response = await fetch('/api/pathadvisor/conversation', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    cache: 'no-store',
+    body: JSON.stringify(buildConversationRequestPayload(userMessage, context)),
+  });
+  const payload = await readJsonPayload(response);
+
+  if (!response.ok) {
+    throw new Error(
+      extractErrorMessage(
+        payload,
+        'The frontend could not load the PathAdvisor conversation response.'
+      )
+    );
+  }
+
+  if (payload === null || Array.isArray(payload) || typeof payload !== 'object') {
+    throw new Error('The frontend could not parse the PathAdvisor conversation response.');
+  }
+
+  return adaptConversationResponse(payload as BackendPathAdvisorConversationResponse);
 }

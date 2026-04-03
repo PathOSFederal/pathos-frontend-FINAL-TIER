@@ -11,6 +11,13 @@
  * The shared PathAdvisor rail is rendered from the UI package. The app shell
  * should own transport, but the UI package needs to understand the explicit
  * response contract it is rendering.
+ *
+ * WHY CONVERSATION TYPES ALSO LIVE HERE:
+ * The shared rail now has both a governed evidence panel and a conversation
+ * shell layered on top of it. The conversation shell still needs explicit
+ * state, but it must stay bounded to governed truth. Keeping the shared
+ * conversation request and response types here lets the UI package render that
+ * state without owning transport logic or inventing hidden semantics.
  */
 
 export type PathAdvisorGovernedDomain =
@@ -123,5 +130,17 @@ export interface PathAdvisorGovernedDraft {
 export interface PathAdvisorGovernedResultState {
   status: 'idle' | 'loading' | 'success' | 'error' | 'empty';
   response: PathAdvisorShapedResponse | null;
+  errorMessage: string | null;
+}
+
+export interface PathAdvisorConversationResponse {
+  reply: string;
+  responseState: PathAdvisorGovernedResponseState;
+  grounded: boolean;
+  refusalReason: string | null;
+}
+
+export interface PathAdvisorConversationRequestState {
+  status: 'idle' | 'loading' | 'error';
   errorMessage: string | null;
 }

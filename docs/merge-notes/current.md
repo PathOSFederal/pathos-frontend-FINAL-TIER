@@ -2,6 +2,140 @@
 
 ---
 
+## Run: PathAdvisor Conversation API Wiring v1 (2026-04-03)
+
+### Branch
+
+`feature/pathadvisor-conversation-api-wiring-v1`
+
+### Summary
+
+Replaced the temporary local PathAdvisor conversation reply bridge with a real
+frontend-to-backend conversation path. The shared dashboard rail now sends the
+composer message plus bounded structured governed context through a same-origin
+conversation proxy route, receives a backend reply, and keeps the governed
+panel visible as the evidence surface.
+
+### Why this change was made
+
+The local conversation bridge was acceptable as a placeholder, but it still let
+the frontend act like a second reasoning engine. This slice restores the proper
+architecture: the frontend assembles bounded request context only, while the
+backend conversation layer produces the conversational explanation.
+
+### Files changed
+
+- `app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx`
+- `app/api/pathadvisor/_shared.ts`
+- `app/api/pathadvisor/conversation/route.ts`
+- `lib/pathadvisor-governed/client.ts`
+- `lib/pathadvisor-governed/client.test.ts`
+- `lib/pathadvisor-governed/conversation-context.ts`
+- `lib/pathadvisor-governed/conversation-context.test.ts`
+- `packages/ui/src/index.ts`
+- `packages/ui/src/shell/PathAdvisorCard.tsx`
+- `packages/ui/src/shell/PathAdvisorCard.test.tsx`
+- `packages/ui/src/shell/PathAdvisorRail.tsx`
+- `packages/ui/src/shell/pathadvisor-governed-types.ts`
+- `docs/change-briefs/pathadvisor-conversation-api-wiring-v1.md`
+
+### Behavior changes
+
+- Governed-mode composer now sends through `/api/pathadvisor/conversation`
+  instead of using a local reply generator.
+- Added a thin frontend proxy route for PathAdvisor conversation that validates
+  a bounded structured payload before forwarding to the backend.
+- `conversation-context.ts` now remains request assembly only and no longer
+  generates frontend replies.
+- The conversation shell now shows a distinct loading state while the backend
+  conversation request is in flight.
+- A conversation technical failure now shows as a separate conversation-layer
+  error without blurring governed refusal or governed panel error states.
+- The governed panel remains visible and unchanged as the structured evidence
+  surface.
+
+### Validation performed
+
+- `pnpm test -- packages/ui/src/shell/PathAdvisorCard.test.tsx packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx lib/pathadvisor-governed/client.test.ts lib/pathadvisor-governed/conversation-context.test.ts`
+  - 25 tests passed
+- `pnpm eslint 'app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx' 'app/api/pathadvisor/_shared.ts' 'app/api/pathadvisor/conversation/route.ts' 'packages/ui/src/shell/PathAdvisorCard.tsx' 'packages/ui/src/shell/PathAdvisorCard.test.tsx' 'packages/ui/src/shell/PathAdvisorRail.tsx' 'packages/ui/src/shell/PathAdvisorGovernedPanel.tsx' 'packages/ui/src/shell/PathAdvisorGovernedPanel.test.tsx' 'packages/ui/src/shell/pathadvisor-governed-types.ts' 'packages/ui/src/index.ts' 'lib/pathadvisor-governed/client.ts' 'lib/pathadvisor-governed/client.test.ts' 'lib/pathadvisor-governed/conversation-context.ts' 'lib/pathadvisor-governed/conversation-context.test.ts'`
+  - no errors, no warnings in touched files
+- `pnpm typecheck`
+  - failed due to pre-existing resume-builder test/type errors unrelated to this slice
+  - after fixing the one new proxy-helper type issue, no remaining typecheck errors came from the touched PathAdvisor files
+- `pnpm lint`
+  - failed due to pre-existing repo-wide lint issues in resume-builder, desktop, and other legacy areas unrelated to this slice
+
+### Known risks / follow-ups
+
+- The backend conversation contract was not documented in this frontend repo, so
+  the response adapter is intentionally strict and will fail honestly if the
+  backend returns an unexpected shape.
+- This slice still does not add memory, thread persistence, or a broader chat
+  system.
+- Mobile sanity was reviewed at the code/layout level only. The composer and
+  governed panel still use the existing shared rail layout and no new fixed-width
+  assumptions were added.
+
+### git status
+
+```text
+On branch feature/pathadvisor-conversation-api-wiring-v1
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+  modified:   app/(shared)/dashboard/_components/SharedDashboardRouteShell.tsx
+  modified:   app/api/pathadvisor/_shared.ts
+  modified:   docs/merge-notes/current.md
+  modified:   lib/pathadvisor-governed/client.test.ts
+  modified:   lib/pathadvisor-governed/client.ts
+  modified:   lib/pathadvisor-governed/conversation-context.test.ts
+  modified:   lib/pathadvisor-governed/conversation-context.ts
+  modified:   packages/ui/src/index.ts
+  modified:   packages/ui/src/shell/PathAdvisorCard.test.tsx
+  modified:   packages/ui/src/shell/PathAdvisorCard.tsx
+  modified:   packages/ui/src/shell/PathAdvisorRail.tsx
+  modified:   packages/ui/src/shell/pathadvisor-governed-types.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+  app/api/pathadvisor/conversation/
+  docs/change-briefs/pathadvisor-conversation-api-wiring-v1.md
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+### git branch --show-current
+
+```text
+feature/pathadvisor-conversation-api-wiring-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+Note: `git diff develop...HEAD` is empty because this slice remains uncommitted
+in the working tree. The incremental artifact contains the actual working-tree
+diff for this run.
+
+```text
+-rwxrwxrwx 1 joriel joriel 0 Apr  3 10:42 artifacts/pathadvisor-conversation-api-wiring-v1.patch
+-rwxrwxrwx 1 joriel joriel 51K Apr  3 10:42 artifacts/pathadvisor-conversation-api-wiring-v1-this-run.patch
+```
+
+---
+
 ## Run: PathAdvisor Conversational Shell Restoration (2026-04-03)
 
 ### Branch
