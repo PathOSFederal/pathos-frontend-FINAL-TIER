@@ -50,6 +50,9 @@ export {
   DashboardScreen,
   type DashboardScreenProps,
   type DashboardData,
+  type ThreadMessage,
+  type GovernedResponseData,
+  type CompactSummary,
 } from './screens/DashboardScreen';
 export { CareerReadinessScreen } from './screens/CareerReadinessScreen';
 export { CareerScreen, type CareerScreenProps } from './screens/CareerScreen';
