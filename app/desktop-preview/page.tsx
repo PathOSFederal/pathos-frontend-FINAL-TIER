@@ -28,6 +28,7 @@ import {
   JobSearchScreen,
   SavedJobsScreen,
   ResumeBuilderScreen,
+  ResumeWorkspaceScreen,
   PathAdvisorRail,
   type PathAdvisorMessage,
 } from '@pathos/ui';
@@ -39,7 +40,7 @@ const SCREEN_MAP: Record<string, string> = {
   'guided-apply': '/guided-apply',
   'job-search': '/dashboard/job-search',
   'saved-jobs': '/dashboard/saved-jobs',
-  'resume': '/dashboard/resume-builder',
+  'resume': '/dashboard/resume',
 };
 
 // ---------------------------------------------------------------------------
@@ -63,6 +64,9 @@ function PreviewScreenRouter() {
   }
   if (pathname === '/dashboard/saved-jobs') {
     return <SavedJobsScreen />;
+  }
+  if (pathname === '/dashboard/resume') {
+    return <ResumeWorkspaceScreen view="home" />;
   }
   if (pathname === '/dashboard/resume-builder') {
     return <ResumeBuilderScreen />;
@@ -141,8 +145,10 @@ function PreviewShell() {
 
 export default function DesktopPreviewPage() {
   const searchParams = useSearchParams();
-  const screenParam = searchParams.get('screen') ?? '';
-  const initialPath = SCREEN_MAP[screenParam] ?? '/dashboard';
+  const screenParamValue = searchParams.get('screen');
+  const screenParam = screenParamValue === null ? '' : screenParamValue;
+  const mappedPath = SCREEN_MAP[screenParam];
+  const initialPath = typeof mappedPath === 'string' ? mappedPath : '/dashboard';
 
   return (
     <PreviewNavigationProvider initialPath={initialPath}>

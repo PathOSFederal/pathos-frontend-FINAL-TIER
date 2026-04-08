@@ -79,6 +79,7 @@ export {
   type SavedJobsLiveAdvisorIntegration,
 } from './screens/SavedJobsScreen';
 export { ResumeBuilderScreen, type ResumeBuilderScreenProps } from './screens/ResumeBuilderScreen';
+export { ResumeWorkspaceScreen, type ResumeWorkspaceScreenProps } from './screens/ResumeWorkspaceScreen';
 export { PlaceholderScreen, type PlaceholderScreenProps } from './screens/PlaceholderScreen';
 export {
   SavedJobsLiveAdvisorPanel,

@@ -62,7 +62,7 @@ import { buildPathAdvisorConversationContext } from '@/lib/pathadvisor-governed/
  * is a transport concern — the shared UI package doesn't know about Next.js
  * route paths (it uses its own route constants via useNav).
  */
-const RESUME_BUILDER_ROUTE = '/dashboard/resume-builder';
+const RESUME_BUILDER_ROUTE = '/dashboard/resume';
 const CAREER_READINESS_ROUTE = '/dashboard/career-readiness';
 
 /**

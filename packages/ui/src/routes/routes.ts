@@ -34,6 +34,9 @@ export const RESUME_READINESS = '/dashboard/resume-readiness';
 /** Alias for Resume Readiness. Redirect to RESUME_READINESS; kept for backward compatibility. */
 export const CAREER = '/dashboard/career';
 
+/** Resume Workspace Home (Day 75 canonical guided flow). */
+export const RESUME_WORKSPACE = '/dashboard/resume';
+
 /** Resume Builder. */
 export const RESUME_BUILDER = '/dashboard/resume-builder';
 
@@ -84,6 +87,7 @@ export const SIDEBAR_ROUTES: readonly string[] = [
   COMPENSATION,
   BENEFITS,
   RETIREMENT,
+  RESUME_WORKSPACE,
   RESUME_READINESS,
   RESUME_BUILDER,
   JOB_SEARCH,
