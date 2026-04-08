@@ -77,6 +77,7 @@ import {
   COMPENSATION,
   BENEFITS,
   RETIREMENT,
+  RESUME_WORKSPACE,
   RESUME_READINESS,
   CAREER,
   RESUME_BUILDER,
@@ -161,7 +162,7 @@ const navSections: NavSection[] = [
     items: [
       { label: 'Job Search', href: JOB_SEARCH, icon: <Search className="w-4 h-4" /> },
       { label: 'Saved Jobs', href: SAVED_JOBS, icon: <Bookmark className="w-4 h-4" /> },
-      { label: 'Resume Builder', href: RESUME_BUILDER, icon: <FileText className="w-4 h-4" /> },
+      { label: 'Resume Builder', href: RESUME_WORKSPACE, icon: <FileText className="w-4 h-4" /> },
       { label: 'Resume Readiness', href: RESUME_READINESS, icon: <Briefcase className="w-4 h-4" /> },
       { label: 'Application Confidence Center', href: APPLICATION_CONFIDENCE_CENTER, icon: <Target className="w-4 h-4" /> },
       { label: 'Guided Apply', href: GUIDED_APPLY_CANON, icon: <ClipboardList className="w-4 h-4" /> },
@@ -902,7 +903,7 @@ export function Sidebar(props: SidebarProps) {
   const tourMap: Record<string, string> = {
     [CAREER_READINESS]: 'nav-career-readiness',
     [RESUME_READINESS]: 'nav-resume-readiness',
-    [RESUME_BUILDER]: 'nav-resume-builder',
+    [RESUME_WORKSPACE]: 'nav-resume-builder',
     [JOB_SEARCH]: 'nav-job-search',
     [EXPLORE_BENEFITS]: 'nav-benefits',
     [ALERTS]: 'nav-alerts',

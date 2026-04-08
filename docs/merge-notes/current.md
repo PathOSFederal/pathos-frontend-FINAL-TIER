@@ -2,6 +2,478 @@
 
 ---
 
+## Run: Day 54 — Harden PathAdvisor bounded conversation against noisy and out-of-context input (2026-04-03)
+
+### Branch
+
+`feature/day-54-pathadvisor-conversation-robustness-v1`
+
+### Summary
+
+Day 54 hardened backend PathAdvisor bounded conversation against messy
+real-world user messages without changing the UI. The centered dashboard
+PathAdvisor surface remained visually unchanged.
+
+This run added a bounded backend-only message normalization and interpretation
+layer, tightened prompt guidance for noisy and vague asks, and added a safe
+short-circuit for clearly unsupported asks so the system stays calm and honest
+without widening the contract.
+
+### Investigation results
+
+Current message-handling path before this run:
+
+1. frontend proxy accepted a strict bounded request
+2. backend route accepted the request and delegated to the conversation service
+3. conversation service passed raw `user_message` straight into prompt build
+4. prompt builder serialized the bounded payload and relied on the provider to
+   make sense of noisy phrasing
+
+Main brittleness points found:
+
+- typo-heavy questions were still understandable to the provider, but only by
+  chance rather than by any backend normalization layer
+- vague follow-ups had no conservative interpretation hints
+- partially out-of-context asks relied entirely on prompt obedience
+- clearly unsupported asks could still drift into generic provider language if
+  not carefully constrained
+
+Safest narrow interpretation layer:
+
+- backend-only helper between raw `user_message` and prompt build
+- no request-contract changes
+- no mutations to governed truth
+- conservative hints only, with a local unsupported short-circuit when the ask
+  is clearly outside the governed context
+
+### Files changed
+
+Frontend repo:
+
+- `docs/change-briefs/day-54.md`
+- `docs/merge-notes/current.md`
+
+Backend repo:
+
+- `C:\dev\PathOS-Repos\pathos-backend\app\pathadvisor\services\conversation_message.py`
+- `C:\dev\PathOS-Repos\pathos-backend\app\pathadvisor\services\conversation_service.py`
+- `C:\dev\PathOS-Repos\pathos-backend\app\pathadvisor\services\prompt_builder.py`
+- `C:\dev\PathOS-Repos\pathos-backend\tests\services\test_pathadvisor_conversation_service.py`
+- `C:\dev\PathOS-Repos\pathos-backend\tests\services\test_pathadvisor_prompt_builder.py`
+
+### Robustness improvements made
+
+Message normalization:
+
+- trims whitespace
+- collapses repeated punctuation
+- normalizes a small bounded glossary of obvious typo variants:
+  - `wat` -> `what`
+  - `missng` -> `missing`
+  - `qualfy` -> `qualify`
+  - `parital` -> `partial`
+- handles a few bounded shorthand phrases such as:
+  - `now what` -> `what should i do now`
+  - `thing above` -> `current governed result`
+
+Safe intent narrowing:
+
+- maps common noisy or vague asks into conservative explanation goals:
+  - explain result
+  - explain current state
+  - explain missing inputs
+  - explain next steps
+  - explain partial state
+  - explain refusal
+- leaves low-confidence cases cautious rather than aggressive
+
+Out-of-context handling:
+
+- qualification conversation now detects bounded unsupported topics like:
+  - relocation
+  - compensation
+  - benefits
+- mixed asks answer only the supported portion and explicitly say the
+  unsupported topic is not covered
+- unsupported-only asks short-circuit locally with a calm bounded decline
+  instead of invoking the provider
+
+Explanation-boundary safety:
+
+- prompt builder now includes conservative interpretation hints for noisy
+  language
+- hints are explicitly advisory and do not override governed payload
+- provider is instructed to answer only the supported portion when unsupported
+  topics are present
+
+### Tests added or updated
+
+Backend:
+
+- normalization of typo-heavy in-context messages
+- missing-input intent detection
+- mixed supported and unsupported intent narrowing
+- unsupported-only ask short-circuit without provider invocation
+- mixed out-of-context ask still calling provider with bounded hints
+- prompt-builder coverage for conservative interpretation hints
+- prompt-builder coverage for unsupported-topic instructions
+
+### Validation performed
+
+Backend focused validation:
+
+- `poetry run pytest --no-cov tests/services/test_pathadvisor_conversation_service.py tests/services/test_pathadvisor_prompt_builder.py tests/api/test_pathadvisor_conversation_route.py tests/integrations/test_pathadvisor_openai_responses.py tests/pathadvisor/test_qualification_context_service.py tests/test_log_event_registry_and_schema.py`
+  - passed
+  - `48` tests passed
+
+Frontend validation:
+
+- `pnpm test`
+  - passed
+  - `73` files, `1810` tests passed
+- `pnpm build`
+  - passed
+
+Pre-existing unrelated repo status:
+
+- `pnpm lint`
+  - not rerun in this slice
+- `pnpm typecheck`
+  - not rerun in this slice
+
+### Live runtime outcome
+
+Live typo-heavy in-context ask through frontend proxy:
+
+- grounded qualification explain returned `200`
+- bounded conversation with `wat does this mean` returned `200`
+- `technical_failure: false`
+- provider-backed explanation returned and stayed within qualification context
+
+Live vague in-context ask through frontend proxy:
+
+- grounded qualification explain returned `200`
+- bounded conversation with `help with that thing above` returned `200`
+- `technical_failure: false`
+- provider-backed explanation returned and stayed inside the current governed
+  state
+
+Live mixed out-of-context ask through frontend proxy:
+
+- partial qualification explain returned `200`
+- bounded conversation with
+  `what should i do now and should i move for this job` returned `200`
+- `technical_failure: false`
+- response answered the supported next-step portion and explicitly said
+  relocation is not covered by the current governed context
+
+Live unsupported-only ask through frontend proxy:
+
+- bounded conversation with `should i move for this job` returned `200`
+- `technical_failure: false`
+- reply declined relocation from the current governed qualification context and
+  offered supported topics only
+
+Refusal proof:
+
+- direct backend `POST /api/v1/pathadvisor/conversation` with refused governed
+  context returned `200`
+- `response_state: refused`
+- `technical_failure: false`
+- `refusal_reason: governed_qualification_pack_unavailable`
+
+### No UI changes
+
+Confirmed:
+
+- no layout changes
+- no spacing changes
+- no color changes
+- no typography changes
+- no label or microcopy changes
+- no dashboard PathAdvisor redesign
+
+### Remaining risks / follow-ups
+
+1. The robustness layer uses a deliberately small glossary and bounded topic
+   detector. That is safer, but it will not catch every typo or unsupported
+   topic variant.
+2. The grounded live reply still used one slightly strong phrase,
+   `latest available information`, which is acceptable but worth watching if
+   future prompt tuning continues.
+3. Unsupported-topic detection is currently qualification-specific. FEHB and
+   cross-domain conversation may need their own bounded unsupported-topic maps
+   in a separate run.
+
+### git status
+
+```text
+A  docs/change-briefs/day-53.md
+MM docs/merge-notes/current.md
+?? docs/change-briefs/day-54.md
+```
+
+### git branch --show-current
+
+```text
+feature/day-54-pathadvisor-conversation-robustness-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode  LastWriteTime       Length Name
+----  -------------       ------ ----
+-a--- 4/3/2026 7:19:15 PM      0 day-54.patch
+-a--- 4/3/2026 7:19:15 PM   8137 day-54-this-run.patch
+```
+
+---
+
+## Run: Day 53 — Live provider-backed bounded PathAdvisor conversation proof (2026-04-03)
+
+### Branch
+
+`feature/day-53-live-provider-backed-conversation-proof-v1`
+
+### Summary
+
+Day 53 hardened the backend bounded conversation runtime and proved the live
+provider-backed PathAdvisor conversation path without making any UI changes.
+The centered dashboard PathAdvisor surface remained visually unchanged.
+
+This run focused on three things:
+
+- proving the real provider-backed bounded conversation flow through the
+  frontend proxy used by the dashboard
+- tightening backend observability so request acceptance, refusal skip,
+  provider invocation, provider success, provider failure, and final response
+  return are explicit in logs
+- tightening the backend conversation guardrail so unusable empty provider text
+  fails closed instead of surfacing as an internal error
+
+### Investigation results
+
+Current end-to-end successful path:
+
+1. frontend dashboard uses governed explain route to obtain backend-shaped
+   governed truth
+2. frontend bounded request builder strips that response to the strict
+   conversation request shape only
+3. frontend proxy validates the exact bounded payload and forwards it to
+   `POST /api/v1/pathadvisor/conversation`
+4. backend route logs request acceptance
+5. backend conversation service short-circuits refusal or invokes provider
+   after governed checks pass
+6. provider reply text is returned while backend-owned truth fields are
+   re-imposed from governed context
+
+Logging and observability gaps before this run:
+
+- provider start was logged, but successful provider completion was not
+- final bounded response return was not logged explicitly
+- technical-failure logs did not always make provider invocation state explicit
+- whitespace-only provider output could fall through into a validation error
+  instead of a bounded technical failure
+
+Explanation-boundary risk found:
+
+- provider replies could still sound more certain than the governed context
+  warranted, especially for grounded and partial qualification explanations
+
+### Files changed
+
+Frontend repo:
+
+- `docs/change-briefs/day-53.md`
+- `docs/merge-notes/current.md`
+
+Backend repo:
+
+- `C:\dev\PathOS-Repos\pathos-backend\app\core\event_ids.py`
+- `C:\dev\PathOS-Repos\pathos-backend\app\pathadvisor\services\conversation_service.py`
+- `C:\dev\PathOS-Repos\pathos-backend\app\pathadvisor\services\prompt_builder.py`
+- `C:\dev\PathOS-Repos\pathos-backend\tests\services\test_pathadvisor_conversation_service.py`
+- `C:\dev\PathOS-Repos\pathos-backend\tests\services\test_pathadvisor_prompt_builder.py`
+- `C:\dev\PathOS-Repos\pathos-backend\tests\test_log_event_registry_and_schema.py`
+
+### Observability and guardrail fixes
+
+Backend conversation service changes:
+
+- added `pathadvisor_conversation_provider_succeeded`
+- added `pathadvisor_conversation_response_returned`
+- made refusal and technical-failure logs include explicit
+  `provider_invoked` state
+- preserved secret-safe structured logging with bounded fields only
+- added reply normalization so whitespace-only provider output now becomes
+  `openai_protocol_error` instead of an internal failure
+
+Prompt-boundary changes:
+
+- tightened the system prompt so the provider is told not to overstate
+  certainty
+- required clearer acknowledgment of partial state
+- explicitly forbade words like `guaranteed`, `certain`, `definitely`, and
+  `clearly` unless those words already exist in the payload
+
+### Live runtime proof
+
+Grounded governed qualification explain through frontend proxy:
+
+- `POST /api/pathadvisor/qualification/explain`
+- status `200`
+- `response_state: grounded`
+- `grounding.provider_used: true`
+- `grounding.conversation_provider: openai_conversation_provider`
+
+Grounded bounded conversation through frontend proxy:
+
+- `POST /api/pathadvisor/conversation`
+- used governed context filtered down to the exact bounded shape the dashboard
+  builder sends
+- status `200`
+- `response_state: grounded`
+- `technical_failure: false`
+- provider-backed reply text returned
+
+Partial governed qualification explain through frontend proxy:
+
+- `POST /api/pathadvisor/qualification/explain`
+- status `200`
+- `response_state: partial`
+- `missing_inputs: ["skills", "target_roles"]`
+- `grounding.provider_used: true`
+
+Partial bounded conversation through frontend proxy:
+
+- `POST /api/pathadvisor/conversation`
+- status `200`
+- `response_state: partial`
+- `technical_failure: false`
+- provider-backed reply text returned
+
+Refusal proof:
+
+- direct backend `POST /api/v1/pathadvisor/conversation`
+- status `200`
+- `response_state: refused`
+- `technical_failure: false`
+- `refusal_reason: governed_qualification_pack_unavailable`
+
+Technical-failure proof:
+
+- not exercised live in this run because the current environment is healthy and
+  forcing a live provider outage would require intentionally breaking backend
+  configuration
+- covered by focused backend service tests and log-harness coverage
+
+### Tests added or updated
+
+Backend:
+
+- conversation service success logs provider success and final response return
+- refusal logs short-circuit semantics and final response return
+- whitespace provider output fails closed as protocol-driven technical failure
+- prompt builder system prompt includes certainty and partial-state guardrails
+- logging registry harness now requires the new conversation success and
+  response-return events
+
+### Validation performed
+
+Backend focused validation:
+
+- `poetry run pytest --no-cov tests/services/test_pathadvisor_conversation_service.py tests/services/test_pathadvisor_prompt_builder.py tests/api/test_pathadvisor_conversation_route.py tests/integrations/test_pathadvisor_openai_responses.py tests/pathadvisor/test_qualification_context_service.py tests/test_log_event_registry_and_schema.py`
+  - passed
+  - `41` tests passed
+
+Frontend validation:
+
+- `pnpm test`
+  - passed
+  - `73` files, `1810` tests passed
+- `pnpm build`
+  - passed
+
+Pre-existing unrelated repo status:
+
+- `pnpm lint`
+  - not rerun in this slice
+- `pnpm typecheck`
+  - not rerun in this slice
+
+### No UI changes
+
+Confirmed:
+
+- no layout changes
+- no spacing changes
+- no colors changed
+- no typography changed
+- no labels or microcopy changed
+- no dashboard PathAdvisor redesign
+
+### Remaining risks / follow-ups
+
+1. The grounded live provider reply still used some assertive phrasing such as
+   "aligns with a qualified candidate" before this run; the new prompt
+   guardrails should reduce that, but final wording quality still depends on
+   provider behavior and may merit future prompt iteration.
+2. I did not force a live technical-failure case in the healthy environment;
+   that distinction remains proven by focused backend tests rather than live
+   outage simulation.
+3. The frontend proxy correctly rejected my raw handcrafted governed response
+   object when I tried to post it directly; only the filtered bounded shape the
+   dashboard builder sends is accepted, which is the intended trust boundary.
+
+### git status
+
+```text
+M docs/merge-notes/current.md
+?? docs/change-briefs/day-53.md
+```
+
+### git branch --show-current
+
+```text
+feature/day-53-live-provider-backed-conversation-proof-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode  LastWriteTime       Length Name
+----  -------------       ------ ----
+-a--- 4/3/2026 6:31:38 PM      0 day-53.patch
+-a--- 4/3/2026 6:31:38 PM   7932 day-53-this-run.patch
+```
+
+---
+
 ## Run: Day 52 — Enable and prove PathAdvisor conversation-provider execution (2026-04-03)
 
 ### Branch
@@ -2874,4 +3346,488 @@ Mode  LastWriteTime       Length Name
 ----  -------------       ------ ----
 -a--- 4/3/2026 4:06:54 PM      2 day-50.patch
 -a--- 4/3/2026 4:06:54 PM  67459 day-50-this-run.patch
+```
+
+## 2026-04-08 13:16 - Day 75 Resume Workspace Guided Flow v1
+
+### Summary
+
+Implemented the Day 75 frontend-first Resume Workspace foundation under the new
+canonical `/dashboard/resume` route family. The slice adds a workspace home, a
+guided new-resume flow, a document-centered builder shell, a dedicated review
+shell, and a typed shared local store that models master vs tailored resumes,
+target context, right-rail tabs, placeholder diagnostics, and save/export
+entry points.
+
+The legacy `/dashboard/resume-builder` and `/dashboard/resume-readiness`
+surfaces were left in place for compatibility, but the shared sidebar and
+dashboard entry now point primary resume navigation to `/dashboard/resume`.
+
+### Readiness check result
+
+No frontend blocker was found. The repo was ready for a frontend-only Day 75
+implementation because:
+
+- existing resume data already lives locally in `@pathos/core`
+- shared dashboard shell/layout wrappers already exist
+- dynamic shared routes are supported
+- the requested slice can stay honest and deterministic without backend calls
+
+### Route mapping
+
+- New canonical routes added:
+  - `/dashboard/resume`
+  - `/dashboard/resume/new`
+  - `/dashboard/resume/[resumeId]`
+  - `/dashboard/resume/[resumeId]/review`
+- Existing legacy routes preserved:
+  - `/dashboard/resume-builder`
+  - `/dashboard/resume-readiness`
+
+### Files changed
+
+- `app/(shared)/dashboard/resume/...`
+  - new route wrappers for home, creation, builder, and review
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+  - new Day 75 resume workspace UI
+- `packages/ui/src/stores/resumeWorkspaceStore.ts`
+  - new typed client state model for the full resume workspace flow
+- `packages/ui/src/shell/Sidebar.tsx`
+  - primary shared nav now points Resume Builder to `/dashboard/resume`
+- `packages/ui/src/routes/routes.ts`
+  - added `RESUME_WORKSPACE`
+- `packages/ui/src/index.ts`
+  - exported the new Resume Workspace screen
+- `app/(shared)/dashboard/page.tsx`
+  - dashboard “open resume builder” action now routes to `/dashboard/resume`
+- `app/desktop-preview/page.tsx`
+  - desktop preview now supports `/dashboard/resume`
+- `packages/ui/src/stores/resumeWorkspaceStore.test.ts`
+  - store/helper regression coverage
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+  - route-surface render coverage
+- `docs/change-briefs/day-75.md`
+  - Day 75 change brief
+
+### Validation performed
+
+- Focused tests:
+  - `pnpm exec vitest run packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+  - passed
+  - 2 files passed, 8 tests passed
+- Focused package typecheck:
+  - `pnpm exec tsc --noEmit --pretty false --project packages/ui/tsconfig.json`
+  - failed only because of pre-existing `packages/ui/src/resume-builder/__tests__/...` errors unrelated to Day 75
+  - no new Day 75 type errors remained after fixing the new files
+
+### Hardening / human simulation
+
+- Hardening lane not run in this pass
+- Human simulation not run
+- Reason: this was a bounded fast-iteration architecture/UI foundation slice
+  and the requested scope did not require merge-ready browser validation
+
+### Risks / follow-ups
+
+- Current workspace branch does not match the requested Day 75 branch. The
+  requested branch was not present locally, so implementation landed on the
+  existing checked-out branch.
+- The cumulative artifact requested via `git diff develop...HEAD` is empty in
+  this worktree because the current branch has no committed divergence from
+  `develop`.
+- Legacy resume-builder links still exist in other repo areas, so the repo now
+  contains both old and new resume entry paths during the transition.
+- Live diagnostics, scoring, export hardening, and backend resume intelligence
+  remain intentionally out of scope.
+
+### git status
+
+```text
+On branch feature/day-54-pathadvisor-conversation-robustness-v1
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	new file:   docs/change-briefs/day-53.md
+	modified:   docs/merge-notes/current.md
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app/(shared)/dashboard/page.tsx
+	new file:   app/(shared)/dashboard/resume/[resumeId]/page.tsx
+	new file:   app/(shared)/dashboard/resume/[resumeId]/review/page.tsx
+	new file:   app/(shared)/dashboard/resume/new/page.tsx
+	new file:   app/(shared)/dashboard/resume/page.tsx
+	modified:   app/desktop-preview/page.tsx
+	new file:   docs/change-briefs/day-75.md
+	modified:   docs/merge-notes/current.md
+	modified:   packages/ui/src/index.ts
+	modified:   packages/ui/src/routes/routes.ts
+	new file:   packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+	new file:   packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+	modified:   packages/ui/src/shell/Sidebar.tsx
+	new file:   packages/ui/src/stores/resumeWorkspaceStore.test.ts
+	new file:   packages/ui/src/stores/resumeWorkspaceStore.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	docs/change-briefs/day-54.md
+```
+
+### git branch --show-current
+
+```text
+feature/day-54-pathadvisor-conversation-robustness-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode  LastWriteTime      Length Name
+----  -------------      ------ ----
+-a--- 4/8/2026 1:17:52 PM      0 day-75.patch
+-a--- 4/8/2026 1:17:43 PM 125058 day-75-this-run.patch
+```
+
+## 2026-04-08 13:30 - Day 75 hardening/review pass
+
+### Summary
+
+Ran a bounded hardening pass on the Day 75 Resume Workspace Guided Flow slice
+without changing scope or attempting any branch history surgery. The focus was
+merge-trackability inside the existing implementation: route behavior, legacy
+route coexistence, interaction-state polish, and validation evidence.
+
+### What was reviewed
+
+- canonical Day 75 route wrappers under `/dashboard/resume`
+- the shared sidebar and dashboard navigation entry into the resume flow
+- `ResumeWorkspaceScreen` route handling, builder shell, review shell, and
+  right-rail behavior
+- `resumeWorkspaceStore` flow continuity and direct-route behavior
+- coexistence with legacy `/dashboard/resume-builder` and
+  `/dashboard/resume-readiness` routes
+- focused Day 75 tests and targeted package typecheck output
+
+### Hardening changes made
+
+- direct builder and review route rendering now respects the route `resumeId`
+  immediately, so invalid ids render the explicit "Resume not found" state
+  instead of inheriting the previously active resume
+- added clearer hover, active, and focus-visible states across the Day 75
+  guided-flow buttons, builder actions, review actions, and dialog controls
+- added lightweight compatibility notices on the legacy
+  `/dashboard/resume-builder` and `/dashboard/resume-readiness` pages so users
+  are pointed toward `/dashboard/resume` without a broad redirect rewrite
+- kept the Day 75 home empty-state UI in place for local-state edge cases
+- tightened the touched desktop preview file so it supports the Day 75 route
+  without introducing more nullish-coalescing patterns
+
+### What was intentionally not changed
+
+- no redirects or removals for the legacy resume-builder or resume-readiness
+  routes
+- no backend scoring, diagnostics, export hardening, or resume intelligence
+  claims
+- no attempt to fix the unrelated repo-wide type errors in
+  `packages/ui/src/resume-builder/__tests__/...`
+- no branch rewriting, cherry-picking, rebasing, committing, or pushing
+
+### Validation performed
+
+- focused Day 75 tests:
+  - `pnpm exec vitest run packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+  - passed
+  - 2 files passed, 9 tests passed
+- focused package typecheck:
+  - `pnpm exec tsc --noEmit --pretty false --project packages/ui/tsconfig.json`
+  - failed only because of pre-existing `packages/ui/src/resume-builder/__tests__/...`
+    errors unrelated to Day 75
+- route wrapper sanity check:
+  - confirmed wrappers exist for `/dashboard/resume`, `/dashboard/resume/new`,
+    `/dashboard/resume/[resumeId]`, and `/dashboard/resume/[resumeId]/review`
+
+### Merge-readiness assessment
+
+- Day 75 is structurally coherent enough for human review on the frontend side
+- branch correction is still required before this work should be treated as the
+  Day 75 review branch
+- repo-wide merge readiness is still blocked from a "clean validation" claim by
+  unrelated existing typecheck debt outside the Day 75 slice
+
+### Branch correction recommendation
+
+Safest next human step:
+
+1. stay on the current working tree exactly as-is
+2. create `feature/day-75-resume-workspace-guided-flow-v1` from the current
+   state
+3. continue any final Day 75 review comments there
+4. commit on that new branch when ready
+
+This avoids rewriting anything and preserves the current uncommitted Day 75
+work intact.
+
+### git status
+
+```text
+On branch feature/day-54-pathadvisor-conversation-robustness-v1
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	new file:   docs/change-briefs/day-53.md
+	modified:   docs/merge-notes/current.md
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app/(shared)/dashboard/page.tsx
+	modified:   app/(shared)/dashboard/resume-builder/page.tsx
+	modified:   app/(shared)/dashboard/resume-readiness/page.tsx
+	new file:   app/(shared)/dashboard/resume/[resumeId]/page.tsx
+	new file:   app/(shared)/dashboard/resume/[resumeId]/review/page.tsx
+	new file:   app/(shared)/dashboard/resume/new/page.tsx
+	new file:   app/(shared)/dashboard/resume/page.tsx
+	modified:   app/desktop-preview/page.tsx
+	new file:   docs/change-briefs/day-75.md
+	modified:   docs/merge-notes/current.md
+	modified:   packages/ui/src/index.ts
+	modified:   packages/ui/src/routes/routes.ts
+	new file:   packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+	new file:   packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+	modified:   packages/ui/src/shell/Sidebar.tsx
+	new file:   packages/ui/src/stores/resumeWorkspaceStore.test.ts
+	new file:   packages/ui/src/stores/resumeWorkspaceStore.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	docs/change-briefs/day-54.md
+```
+
+### git branch --show-current
+
+```text
+feature/day-54-pathadvisor-conversation-robustness-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode          : -a---
+LastWriteTime : 4/8/2026 1:31:35 PM
+Length        : 0
+Name          : day-75.patch
+
+Mode          : -a---
+LastWriteTime : 4/8/2026 1:30:10 PM
+Length        : 146920
+Name          : day-75-this-run.patch
+```
+
+## 2026-04-08 15:00 - Day 76b Resume Diagnostics Contract Wiring v1
+
+### Branch
+
+Working tree branch during implementation:
+
+- `feature/day-54-pathadvisor-conversation-robustness-v1`
+
+Requested branch:
+
+- `feature/day-76b-resume-diagnostics-contract-wiring-v1`
+
+### Summary
+
+Wired the frontend Resume Workspace to the canonical backend diagnostics
+contract at `POST /api/v1/resume/diagnostics/evaluate`.
+
+This run adds:
+
+- a same-origin diagnostics proxy route
+- typed request and response helpers for the diagnostics contract
+- request assembly from the active resume workspace draft
+- backend-driven diagnostics state in the Resume Workspace store
+- backend-driven rendering in the review page and builder right rail
+- section-level focus and highlighting from backend `target_refs`
+
+The frontend no longer needs to invent review findings, recommendation text,
+score values, or readiness-band logic for the Day 76b review flow.
+
+### Files changed
+
+- `app/api/resume/diagnostics/evaluate/route.ts`
+- `app/api/resume/diagnostics/evaluate/route.test.ts`
+- `packages/ui/src/resume-workspace/resumeDiagnostics.ts`
+- `packages/ui/src/resume-workspace/resumeDiagnosticsClient.ts`
+- `packages/ui/src/resume-workspace/resumeDiagnostics.test.ts`
+- `packages/ui/src/stores/resumeWorkspaceStore.ts`
+- `packages/ui/src/stores/resumeWorkspaceStore.test.ts`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+- `docs/change-briefs/day-76b.md`
+- `docs/merge-notes/current.md`
+
+### Integration points used
+
+- API client:
+  - `packages/ui/src/resume-workspace/resumeDiagnosticsClient.ts`
+- request assembly:
+  - `packages/ui/src/resume-workspace/resumeDiagnostics.ts`
+- review page rendering:
+  - `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- right rail diagnostics rendering:
+  - `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- state and transport ownership:
+  - `packages/ui/src/stores/resumeWorkspaceStore.ts`
+- backend proxy:
+  - `app/api/resume/diagnostics/evaluate/route.ts`
+
+### Behavior changes
+
+- review mode now requests backend diagnostics instead of relying on placeholder
+  review content
+- builder diagnostics tab now renders backend diagnostics state instead of
+  local placeholder issue cards
+- request assembly now normalizes active resume content into the backend
+  `resume.sections` contract
+- target context is mapped from existing workspace state using `canonical_job`,
+  `role`, or `none`
+- backend `target_refs` now drive section-level focus and highlighting in the
+  builder shell
+- unsupported, insufficient, unavailable, and error states are rendered
+  explicitly and calmly
+
+### Deliberate limits in this pass
+
+- no backend changes were made
+- no frontend-generated scoring or issue logic remains in the Day 76b review
+  path
+- no bullet-level canvas highlighting was added; current target behavior is
+  section-level only
+- no broad builder refactor or persistence overhaul was attempted
+
+### Validation performed
+
+- focused diagnostics contract tests:
+  - `pnpm exec vitest run packages/ui/src/resume-workspace/resumeDiagnostics.test.ts packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx app/api/resume/diagnostics/evaluate/route.test.ts`
+  - passed
+  - 4 files passed, 17 tests passed
+- focused package typecheck:
+  - `pnpm exec tsc --noEmit --pretty false --project packages/ui/tsconfig.json`
+  - still fails only because of pre-existing `packages/ui/src/resume-builder/__tests__/...`
+    errors unrelated to Day 76b
+
+### Testing note
+
+The repo still does not include a DOM-based React test harness such as
+`@testing-library/react`. Because of that, Day 76b rendering confidence is
+split between:
+
+- screen shell snapshot tests
+- store action tests that verify backend response-state handling
+- request-assembly tests
+- proxy route tests
+
+That is sufficient for this bounded contract-wiring pass, but a future hardening
+pass could add DOM-based render coverage if the repo adopts that harness.
+
+### Merge-readiness assessment
+
+- Day 76b is structurally ready for human review as a frontend contract-wiring
+  slice
+- branch correction is still required because the requested Day 76b branch is
+  not the current working branch
+- repo-wide typecheck still cannot be called clean because of pre-existing
+  resume-builder test debt outside the Day 76b files
+
+### git status
+
+```text
+On branch feature/day-54-pathadvisor-conversation-robustness-v1
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	new file:   docs/change-briefs/day-53.md
+	modified:   docs/merge-notes/current.md
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app/(shared)/dashboard/page.tsx
+	modified:   app/(shared)/dashboard/resume-builder/page.tsx
+	modified:   app/(shared)/dashboard/resume-readiness/page.tsx
+	new file:   app/(shared)/dashboard/resume/[resumeId]/page.tsx
+	new file:   app/(shared)/dashboard/resume/[resumeId]/review/page.tsx
+	new file:   app/(shared)/dashboard/resume/new/page.tsx
+	new file:   app/(shared)/dashboard/resume/page.tsx
+	modified:   app/desktop-preview/page.tsx
+	new file:   docs/change-briefs/day-75.md
+	modified:   docs/merge-notes/current.md
+	modified:   packages/ui/src/index.ts
+	modified:   packages/ui/src/routes/routes.ts
+	new file:   packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+	new file:   packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+	modified:   packages/ui/src/shell/Sidebar.tsx
+	new file:   packages/ui/src/stores/resumeWorkspaceStore.test.ts
+	new file:   packages/ui/src/stores/resumeWorkspaceStore.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	app/api/resume/
+	docs/change-briefs/day-54.md
+	docs/change-briefs/day-76b.md
+	packages/ui/src/resume-workspace/
+```
+
+### git branch --show-current
+
+```text
+feature/day-54-pathadvisor-conversation-robustness-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Mode          : -a---
+LastWriteTime : 4/8/2026 2:58:34 PM
+Length        : 0
+Name          : day-76b.patch
+
+Mode          : -a---
+LastWriteTime : 4/8/2026 2:59:21 PM
+Length        : 176630
+Name          : day-76b-this-run.patch
 ```

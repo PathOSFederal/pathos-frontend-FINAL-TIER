@@ -12,7 +12,19 @@ import { SharedDashboardRouteShell } from '../_components/SharedDashboardRouteSh
 export default function ResumeBuilderPage() {
   return (
     <SharedDashboardRouteShell hideAdvisor>
-      <ResumeBuilderScreen />
+      <div className="space-y-4">
+        <div
+          className="rounded-xl border px-4 py-3 text-sm"
+          style={{
+            borderColor: 'var(--p-border)',
+            background: 'color-mix(in srgb, var(--p-warning) 10%, var(--p-surface))',
+            color: 'var(--p-text)',
+          }}
+        >
+          The Day 75 guided resume workspace now lives at <a href="/dashboard/resume" className="font-semibold underline underline-offset-2">/dashboard/resume</a>. This legacy builder route remains available for compatibility while review and migration finish.
+        </div>
+        <ResumeBuilderScreen />
+      </div>
     </SharedDashboardRouteShell>
   );
 }
