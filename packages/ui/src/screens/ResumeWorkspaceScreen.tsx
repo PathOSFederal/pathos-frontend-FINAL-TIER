@@ -32,17 +32,20 @@ import { useEffect } from 'react';
 import { useNav } from '@pathos/adapters';
 import {
   Sparkles,
-  Target,
   ArrowRight,
   FolderPlus,
   Download,
   CheckCircle2,
-  AlertCircle,
   LayoutPanelLeft,
 } from 'lucide-react';
 import type { ResumeDraft } from '@pathos/core';
 import {
+  getDiagnosticsSnapshotById,
+  getDiagnosticsSnapshotsForVariant,
+  getRevisionContentSnapshotById,
+  getRevisionContentSnapshotsForVariant,
   useResumeWorkspaceStore,
+  getLatestDiagnosticsSnapshotForVariant,
   type ResumeBuilderSection,
   type ResumeCreationStep,
   type ResumeDraftSummary,
@@ -51,9 +54,44 @@ import {
 } from '../stores/resumeWorkspaceStore';
 import {
   formatReadinessBandLabel,
-  mapDiagnosticsSectionIdToBuilderSection,
-  type ResumeTargetRef,
 } from '../resume-workspace/resumeDiagnostics';
+import {
+  getResumeExportReadiness,
+} from '../resume-workspace/resumeExportReadiness';
+import {
+  ResumeExportReadinessCard,
+} from '../resume-workspace/ResumeExportReadinessCard';
+import {
+  buildResumeRewriteRequest,
+  getResumeRewriteEligibility,
+  listResumeSectionRewriteActions,
+  type ResumeSectionRewriteAction,
+} from '../resume-workspace/resumeRewrite';
+import {
+  ResumeRewritePanel,
+} from '../resume-workspace/ResumeRewritePanel';
+import {
+  buildResumeSnapshotCompareSummary,
+} from '../resume-workspace/resumeSnapshotCompare';
+import {
+  buildResumeRevisionDiffSummary,
+} from '../resume-workspace/resumeRevisionDiff';
+import {
+  ResumeRevisionDiffPanel,
+} from '../resume-workspace/ResumeRevisionDiffPanel';
+import {
+  findSectionExplanation,
+  hasResumeExplanations,
+  KeyTakeawaysPanel,
+  PathAdvisorSummary,
+  RecommendationList,
+  SectionGuidance,
+  WarningExplanationList,
+} from '../resume-workspace/PathAdvisorResumeGuidance';
+import {
+  ResumeSnapshotComparePanel,
+  ResumeSnapshotHistoryPanel,
+} from '../resume-workspace/ResumeSnapshotPanels';
 
 export interface ResumeWorkspaceScreenProps {
   view: ResumeWorkspaceRouteView;
@@ -126,7 +164,7 @@ function diagnosticsStatusMessage(status: string): string {
   if (status === 'unsupported_context') return 'The backend declined this context. Review the attached warnings and try a supported role or canonical job target.';
   if (status === 'error') return 'The diagnostics request failed. Try again after checking the current draft and network state.';
   if (status === 'unavailable') return 'The diagnostics service is not available right now. The workspace is still editable, but review findings cannot be refreshed.';
-  if (status === 'evaluated') return 'These findings, recommendations, and readiness signals come directly from the backend diagnostics response.';
+  if (status === 'evaluated') return 'These explanations and recommendations come directly from the backend diagnostics response.';
   return 'Run diagnostics to replace the Day 75 placeholder shell with backend-owned findings.';
 }
 
@@ -136,6 +174,17 @@ function formatUpdatedAt(iso: string): string {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+  });
+}
+
+function formatEvaluatedAt(iso: string): string {
+  const date = new Date(iso);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   });
 }
 
@@ -183,15 +232,179 @@ function targetContextFieldValue(
   return draftSummaryValue.plainLanguageGoal;
 }
 
-function formatSectionRefLabel(targetRef: ResumeTargetRef): string {
-  const builderSection = mapDiagnosticsSectionIdToBuilderSection(targetRef.section_id);
-  if (
-    typeof targetRef.bullet_id === 'string' &&
-    targetRef.bullet_id.trim().length > 0
-  ) {
-    return builderSectionLabel(builderSection) + ' detail';
+function sectionActionHint(section: ResumeBuilderSection): string {
+  if (section === 'summary') {
+    return 'Tighten the opening narrative and target alignment.';
   }
-  return builderSectionLabel(builderSection);
+  if (section === 'experience') {
+    return 'Make the strongest bullets outcome-first and evidence-rich.';
+  }
+  if (section === 'education') {
+    return 'Keep the record complete and easy to scan.';
+  }
+  if (section === 'skills') {
+    return 'Keep skills relevant, specific, and ATS-safe.';
+  }
+  if (section === 'contact') {
+    return 'Keep contact details current and export-ready.';
+  }
+  return 'Review saved diagnostics and next actions before export.';
+}
+
+function BuilderSectionAnchorOverlay(props: {
+  showGuidanceAnchor: boolean;
+  showRewriteAnchor: boolean;
+}) {
+  if (!props.showGuidanceAnchor && !props.showRewriteAnchor) {
+    return null;
+  }
+
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-0 overflow-visible"
+      style={{ zIndex: 0 }}
+    >
+      <svg
+        className="h-full w-full overflow-visible"
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+      >
+        {props.showRewriteAnchor ? (
+          <g opacity="0.7">
+            <circle cx="6" cy="20" r="1.8" fill="var(--p-accent)" />
+            <path
+              d="M 7.5 20 C 16 20, 16 34, 12 42 S 10 56, 16 63"
+              fill="none"
+              stroke="var(--p-accent)"
+              strokeWidth="1.25"
+              strokeLinecap="round"
+              strokeDasharray="1.5 2.25"
+            />
+            <circle
+              cx="16"
+              cy="63"
+              r="1.8"
+              fill="color-mix(in srgb, var(--p-accent) 65%, white)"
+            />
+          </g>
+        ) : null}
+        {props.showGuidanceAnchor ? (
+          <g opacity="0.55">
+            <circle
+              cx="6"
+              cy={props.showRewriteAnchor ? '62' : '24'}
+              r="1.8"
+              fill="var(--p-accent)"
+            />
+            <path
+              d={
+                props.showRewriteAnchor
+                  ? 'M 7.5 62 C 18 62, 18 72, 14 80 S 12 90, 18 95'
+                  : 'M 7.5 24 C 18 24, 18 46, 13 62 S 12 78, 18 92'
+              }
+              fill="none"
+              stroke="var(--p-accent)"
+              strokeWidth="1.1"
+              strokeLinecap="round"
+              strokeDasharray="1.25 2.5"
+            />
+            <circle
+              cx="18"
+              cy="95"
+              r="1.8"
+              fill="color-mix(in srgb, var(--p-accent) 60%, white)"
+            />
+          </g>
+        ) : null}
+      </svg>
+    </div>
+  );
+}
+
+function BuilderRewriteActionList(props: {
+  actions: ResumeSectionRewriteAction[];
+  canRewrite: boolean;
+  rewriteDisabledReason: string | null;
+  onRequestRewrite: (action: ResumeSectionRewriteAction) => void;
+}) {
+  if (props.actions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      className="relative z-10 mt-3 rounded-xl border p-4"
+      style={{
+        borderColor: 'color-mix(in srgb, var(--p-accent) 25%, var(--p-border))',
+        background: 'color-mix(in srgb, var(--p-accent) 4%, var(--p-surface2))',
+      }}
+    >
+      <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>
+        Rewrite assistance
+      </div>
+      <p className="mt-1 text-sm" style={{ color: 'var(--p-text-muted)' }}>
+        Rewrite suggestions open here in the builder so the original text, pending state, and approved changes stay attached to the current draft.
+      </p>
+      <div className="mt-3 space-y-3">
+        {props.actions.map(function (action, index) {
+          const title =
+            action.explanation !== null &&
+            action.explanation.title !== null &&
+            action.explanation.title !== undefined &&
+            action.explanation.title.trim().length > 0
+              ? action.explanation.title
+              : action.recommendation.title;
+          const detail =
+            action.explanation !== null &&
+            action.explanation.short_explanation !== null &&
+            action.explanation.short_explanation !== undefined &&
+            action.explanation.short_explanation.trim().length > 0
+              ? action.explanation.short_explanation
+              : action.recommendation.detail;
+          return (
+            <div
+              key={action.recommendation.code + '-' + action.targetLabel + '-' + index.toString()}
+              className="rounded-lg border p-3"
+              style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface)' }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>
+                    {title}
+                  </div>
+                  <div className="mt-1 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>
+                    {action.targetLabel}
+                  </div>
+                  <p className="mt-2 text-sm" style={{ color: 'var(--p-text-muted)' }}>
+                    {detail}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={!props.canRewrite}
+                  onClick={function () {
+                    if (props.canRewrite) {
+                      props.onRequestRewrite(action);
+                    }
+                  }}
+                  className="rounded-md border px-3 py-2 text-xs font-medium transition-opacity hover:opacity-90 active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                  style={{ borderColor: 'var(--p-border)', color: 'var(--p-accent)' }}
+                >
+                  Rewrite with AI
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {!props.canRewrite && props.rewriteDisabledReason !== null ? (
+        <p className="mt-3 text-xs" style={{ color: 'var(--p-text-dim)' }}>
+          {props.rewriteDisabledReason}
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function RailTabButton(props: {
@@ -329,35 +542,6 @@ function isActivationKey(event: React.KeyboardEvent<HTMLDivElement>): boolean {
   return event.key === 'Enter' || event.key === ' ';
 }
 
-function DiagnosticsTargetRefList(props: {
-  targetRefs: ResumeTargetRef[];
-  onFocus: (targetRefs: ResumeTargetRef[]) => void;
-}) {
-  if (props.targetRefs.length === 0) {
-    return null;
-  }
-  return (
-    <div className="mt-3 flex flex-wrap gap-2">
-      {props.targetRefs.map(function (targetRef, index) {
-        const label = formatSectionRefLabel(targetRef);
-        return (
-          <button
-            key={targetRef.section_id + '-' + String(targetRef.bullet_id) + '-' + index.toString()}
-            type="button"
-            onClick={function () {
-              props.onFocus([targetRef]);
-            }}
-            className="rounded-full border px-2 py-1 text-xs font-medium transition-opacity hover:opacity-90 active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)]"
-            style={{ borderColor: 'var(--p-border)', color: 'var(--p-accent)' }}
-          >
-            Open {label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
   const nav = useNav();
   const hydrate = useResumeWorkspaceStore(function (state) {
@@ -377,6 +561,18 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
   });
   const resumeDrafts = useResumeWorkspaceStore(function (state) {
     return state.resumeDrafts;
+  });
+  const diagnosticsSnapshots = useResumeWorkspaceStore(function (state) {
+    return state.diagnosticsSnapshots;
+  });
+  const diagnosticsSnapshotIdsByVariant = useResumeWorkspaceStore(function (state) {
+    return state.diagnosticsSnapshotIdsByVariant;
+  });
+  const revisionContentSnapshots = useResumeWorkspaceStore(function (state) {
+    return state.revisionContentSnapshots;
+  });
+  const revisionContentIdsByVariant = useResumeWorkspaceStore(function (state) {
+    return state.revisionContentIdsByVariant;
   });
   const creationFlow = useResumeWorkspaceStore(function (state) {
     return state.creationFlow;
@@ -447,6 +643,27 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
   const clearDiagnosticsHighlights = useResumeWorkspaceStore(function (state) {
     return state.clearDiagnosticsHighlights;
   });
+  const rewrite = useResumeWorkspaceStore(function (state) {
+    return state.rewrite;
+  });
+  const requestResumeRewrite = useResumeWorkspaceStore(function (state) {
+    return state.requestResumeRewrite;
+  });
+  const dismissResumeRewrite = useResumeWorkspaceStore(function (state) {
+    return state.dismissResumeRewrite;
+  });
+  const applyResumeRewriteCandidate = useResumeWorkspaceStore(function (state) {
+    return state.applyResumeRewriteCandidate;
+  });
+  const selectReviewSnapshot = useResumeWorkspaceStore(function (state) {
+    return state.selectReviewSnapshot;
+  });
+  const setCompareSnapshotId = useResumeWorkspaceStore(function (state) {
+    return state.setCompareSnapshotId;
+  });
+  const setCompareMode = useResumeWorkspaceStore(function (state) {
+    return state.setCompareMode;
+  });
   const openDialog = useResumeWorkspaceStore(function (state) {
     return state.openDialog;
   });
@@ -475,6 +692,57 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
   const resolvedResumeId = routeResumeId !== null ? routeResumeId : activeResumeId;
   const activeSummary = resolvedResumeId ? resumes.find(function (summary) { return summary.id === resolvedResumeId; }) || null : null;
   const activeDraft = resolvedResumeId ? resumeDrafts[resolvedResumeId] : null;
+  const latestSnapshot = getLatestDiagnosticsSnapshotForVariant(
+    diagnosticsSnapshots,
+    activeSummary
+  );
+  const variantSnapshots = getDiagnosticsSnapshotsForVariant(
+    diagnosticsSnapshots,
+    diagnosticsSnapshotIdsByVariant,
+    activeSummary !== null ? activeSummary.variantId : null
+  );
+  const selectedSnapshot =
+    review.selectedSnapshotId !== null
+      ? getDiagnosticsSnapshotById(diagnosticsSnapshots, review.selectedSnapshotId)
+      : latestSnapshot;
+  const compareSnapshot =
+    review.compareSnapshotId !== null
+      ? getDiagnosticsSnapshotById(diagnosticsSnapshots, review.compareSnapshotId)
+      : null;
+  const variantRevisionSnapshots = getRevisionContentSnapshotsForVariant(
+    revisionContentSnapshots,
+    revisionContentIdsByVariant,
+    activeSummary !== null ? activeSummary.variantId : null
+  );
+  const selectedRevisionSnapshot =
+    selectedSnapshot !== null && selectedSnapshot.revisionId !== null
+      ? getRevisionContentSnapshotById(revisionContentSnapshots, selectedSnapshot.revisionId)
+      : (
+          activeSummary !== null
+            ? getRevisionContentSnapshotById(
+                revisionContentSnapshots,
+                activeSummary.currentRevisionId
+              )
+            : null
+        );
+  const compareRevisionSnapshot =
+    compareSnapshot !== null && compareSnapshot.revisionId !== null
+      ? getRevisionContentSnapshotById(revisionContentSnapshots, compareSnapshot.revisionId)
+      : null;
+  const effectiveDiagnosticsResponse =
+    selectedSnapshot !== null ? selectedSnapshot.response : (
+      review.response !== null ? review.response : (
+        latestSnapshot !== null ? latestSnapshot.response : null
+      )
+    );
+  const compareSummary =
+    selectedSnapshot !== null && compareSnapshot !== null
+      ? buildResumeSnapshotCompareSummary(compareSnapshot, selectedSnapshot)
+      : null;
+  const revisionDiffSummary =
+    selectedRevisionSnapshot !== null && compareRevisionSnapshot !== null
+      ? buildResumeRevisionDiffSummary(compareRevisionSnapshot, selectedRevisionSnapshot)
+      : null;
 
   useEffect(function () {
     if (activeSummary === null || activeDraft === null) {
@@ -897,16 +1165,41 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
       );
     }
 
+    const diagnosticsResponse = effectiveDiagnosticsResponse;
+    const explanations =
+      diagnosticsResponse !== null ? diagnosticsResponse.explanations : null;
+    const hasExplanations = hasResumeExplanations(explanations);
+    const rewriteEligibility = getResumeRewriteEligibility(
+      activeSummary,
+      latestSnapshot,
+      latestSnapshot,
+      diagnosticsResponse
+    );
+    const evaluationStatusLine =
+      latestSnapshot !== null
+        ? 'Last evaluated ' + formatEvaluatedAt(latestSnapshot.evaluatedAt)
+        : 'No saved diagnostics snapshot yet';
+    const activeSectionExplanation =
+      builder.activeSection !== 'contact' && builder.activeSection !== 'review'
+        ? findSectionExplanation(explanations, builder.activeSection)
+        : null;
+
     return (
       <div className="space-y-6">
         <div className="grid gap-3 rounded-xl border p-4 xl:grid-cols-7" style={{ background: 'var(--p-surface)', borderColor: 'var(--p-border)' }}>
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>Resume name</div>
             <div className="mt-1 text-sm font-semibold" style={{ color: 'var(--p-text)' }}>{activeSummary.name}</div>
+            <div className="mt-1 text-xs" style={{ color: 'var(--p-text-dim)' }}>
+              Variant {activeSummary.variantId}
+            </div>
           </div>
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>Mode</div>
             <div className="mt-1 text-sm" style={{ color: 'var(--p-text)' }}>{activeSummary.mode === 'master' ? 'Master' : 'Tailored'}</div>
+            <div className="mt-1 text-xs" style={{ color: 'var(--p-text-dim)' }}>
+              {activeSummary.sourceVariantId !== null ? 'Derived from ' + activeSummary.sourceVariantId : 'Source variant'}
+            </div>
           </div>
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>Target job</div>
@@ -921,7 +1214,10 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>Readiness</div>
             <div className="mt-1 text-sm" style={{ color: 'var(--p-text)' }}>
-              {review.response !== null ? formatReadinessBandLabel(review.response.overall.readiness_band) : diagnosticsStatusHeading(review.status)}
+              {diagnosticsResponse !== null ? formatReadinessBandLabel(diagnosticsResponse.overall.readiness_band) : diagnosticsStatusHeading(review.status)}
+            </div>
+            <div className="mt-1 text-xs" style={{ color: 'var(--p-text-dim)' }}>
+              {evaluationStatusLine}
             </div>
           </div>
           <div>
@@ -961,14 +1257,21 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
                     onClick={function () {
                       setActiveSection(section);
                     }}
-                    className="flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition-colors hover:opacity-95 active:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)]"
+                    className="flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition-colors duration-150 hover:opacity-95 active:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)]"
                     style={{
-                      background: isActive ? 'color-mix(in srgb, var(--p-accent) 8%, var(--p-surface))' : 'var(--p-surface2)',
+                      background: isActive ? 'color-mix(in srgb, var(--p-accent) 12%, var(--p-surface))' : 'var(--p-surface2)',
                       borderColor: isActive || isHighlighted ? 'var(--p-accent)' : 'var(--p-border)',
+                      boxShadow: isActive ? 'inset 3px 0 0 var(--p-accent)' : 'none',
                     }}
+                    aria-current={isActive ? 'true' : undefined}
                   >
-                    <span className="text-sm font-medium" style={{ color: 'var(--p-text)' }}>
-                      {builderSectionLabel(section)}
+                    <span>
+                      <span className="text-sm font-medium" style={{ color: 'var(--p-text)' }}>
+                        {builderSectionLabel(section)}
+                      </span>
+                      <span className="mt-1 block text-xs" style={{ color: 'var(--p-text-dim)' }}>
+                        {sectionActionHint(section)}
+                      </span>
                     </span>
                     <span className="text-xs font-semibold" style={{ color: isComplete ? 'var(--p-success)' : 'var(--p-text-dim)' }}>
                       {isHighlighted ? 'Needs attention' : isComplete ? 'Complete' : 'In progress'}
@@ -981,7 +1284,15 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
 
           <SurfaceCard title="Resume canvas" subtitle="The resume remains the main object, not a giant form with a tiny preview.">
             <div className="space-y-4">
-              <div className="rounded-xl border p-4" style={{ borderColor: 'var(--p-border)', background: 'white', color: '#111827' }}>
+              <div
+                className="rounded-xl border p-4"
+                style={{
+                  borderColor: 'color-mix(in srgb, var(--p-border) 88%, white)',
+                  background: 'color-mix(in srgb, white 94%, var(--p-surface))',
+                  color: '#111827',
+                  boxShadow: '0 10px 30px rgba(15, 23, 42, 0.14)',
+                }}
+              >
                 <div className="border-b pb-4" style={{ borderColor: '#d1d5db' }}>
                   <input
                     type="text"
@@ -989,7 +1300,7 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
                     onChange={function (event) {
                       updateContactField('fullName', event.target.value);
                     }}
-                    className="w-full border-0 p-0 text-2xl font-semibold focus:outline-none"
+                    className="w-full rounded-md border border-transparent p-0 text-2xl font-semibold transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-sky-600"
                     style={{ background: 'transparent', color: '#111827' }}
                     aria-label="Resume full name"
                   />
@@ -1009,7 +1320,7 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
                             onChange={function (event) {
                               updateContactField(item[0] as 'email' | 'phone' | 'city' | 'state', event.target.value);
                             }}
-                            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-600"
+                            className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 transition-colors duration-150 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-600"
                           />
                         </label>
                       );
@@ -1021,22 +1332,116 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
                   const isFocused = builder.activeSection === section;
                   const isHighlighted = review.highlightedSections.indexOf(section) >= 0;
                   const value = sectionTextValue(section, activeDraft);
+                  const sectionExplanation = findSectionExplanation(explanations, section);
+                  const rewriteActions =
+                    section === 'summary' ||
+                    section === 'experience' ||
+                    section === 'skills'
+                      ? listResumeSectionRewriteActions({
+                          summary: activeSummary,
+                          draft: activeDraft,
+                          latestSnapshot: latestSnapshot,
+                          selectedSnapshot: latestSnapshot,
+                          diagnosticsResponse: diagnosticsResponse,
+                          recommendation: null,
+                          explanation: null,
+                        }, section)
+                      : [];
+                  const sectionRewriteIsActive =
+                    rewrite.status !== 'idle' &&
+                    rewrite.status !== 'dismissed' &&
+                    rewrite.request !== null &&
+                    rewrite.request.target.section_id === section;
+                  const showGuidanceAnchor = isFocused && sectionExplanation !== null;
+                  const showRewriteAnchor = isFocused && sectionRewriteIsActive;
                   return (
                     <section
                       key={section}
-                      className="border-b py-4 last:border-b-0"
+                      id={'resume-builder-section-' + section}
+                      className="relative rounded-xl border px-4 py-4 transition-colors duration-150"
                       style={{
-                        borderColor: isHighlighted ? 'var(--p-accent)' : '#e5e7eb',
-                        background: isHighlighted ? 'color-mix(in srgb, var(--p-accent) 5%, white)' : 'transparent',
+                        borderColor: isFocused || isHighlighted
+                          ? 'color-mix(in srgb, var(--p-accent) 60%, #d1d5db)'
+                          : '#e5e7eb',
+                        background: isFocused
+                          ? 'color-mix(in srgb, var(--p-accent) 8%, white)'
+                          : isHighlighted
+                            ? 'color-mix(in srgb, var(--p-accent) 5%, white)'
+                            : 'rgba(255,255,255,0.78)',
+                        boxShadow: isFocused ? 'inset 4px 0 0 var(--p-accent)' : 'none',
                       }}
                     >
-                      <div className="mb-2 flex items-center justify-between">
-                        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{builderSectionLabel(section)}</h3>
-                        {isFocused ? <span className="text-xs font-semibold text-sky-700">Active section</span> : null}
-                        {!isFocused && isHighlighted ? <span className="text-xs font-semibold text-sky-700">Diagnostics target</span> : null}
+                      <BuilderSectionAnchorOverlay
+                        showGuidanceAnchor={showGuidanceAnchor}
+                        showRewriteAnchor={showRewriteAnchor}
+                      />
+                      <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="relative z-10">
+                          <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{builderSectionLabel(section)}</h3>
+                          <p className="mt-1 text-sm text-slate-600">
+                            {sectionActionHint(section)}
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            {sectionExplanation !== null ? (
+                              <span
+                                className="inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-semibold"
+                                style={{ borderColor: '#c4b5fd', background: '#f5f3ff', color: '#6d28d9' }}
+                              >
+                                <span
+                                  className="inline-flex h-2 w-2 rounded-full"
+                                  style={{ background: '#7c3aed' }}
+                                />
+                                Guidance for this section
+                              </span>
+                            ) : null}
+                            {sectionRewriteIsActive ? (
+                              <span
+                                className="inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-semibold"
+                                style={{ borderColor: '#7dd3fc', background: '#eff6ff', color: '#075985' }}
+                              >
+                                <span
+                                  className="inline-flex h-2 w-2 animate-pulse rounded-full"
+                                  style={{ background: '#0ea5e9' }}
+                                />
+                                Rewrite is active here
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="relative z-10 flex flex-wrap items-center gap-2">
+                          {isFocused ? (
+                            <span className="rounded-full border px-2.5 py-1 text-xs font-semibold text-sky-700" style={{ borderColor: '#7dd3fc', background: '#eff6ff' }}>
+                              Active section
+                            </span>
+                          ) : null}
+                          {!isFocused && isHighlighted ? (
+                            <span className="rounded-full border px-2.5 py-1 text-xs font-semibold text-sky-700" style={{ borderColor: '#7dd3fc', background: '#eff6ff' }}>
+                              Diagnostics target
+                            </span>
+                          ) : null}
+                          {sectionExplanation !== null ? (
+                            <span className="rounded-full border px-2.5 py-1 text-xs font-semibold" style={{ borderColor: '#c4b5fd', background: '#f5f3ff', color: '#6d28d9' }}>
+                              Guidance attached
+                            </span>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={function () {
+                              setActiveSection(section);
+                              setRightRailTab('guidance');
+                            }}
+                            className="rounded-md border px-3 py-2 text-xs font-medium transition-colors duration-150 hover:opacity-90 active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)]"
+                            style={{ borderColor: '#d1d5db', color: '#1d4ed8', background: 'rgba(255,255,255,0.88)' }}
+                          >
+                            Focus guidance
+                          </button>
+                        </div>
                       </div>
                       <textarea
                         value={value}
+                        onFocus={function () {
+                          setActiveSection(section);
+                        }}
                         onChange={function (event) {
                           if (section === 'summary') {
                             updateSummary(event.target.value);
@@ -1048,7 +1453,39 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
                             updateSkillsText(event.target.value);
                           }
                         }}
-                        className="min-h-24 w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-600"
+                        className="relative z-10 min-h-24 w-full rounded-md border px-3 py-3 text-sm text-slate-900 transition-colors duration-150 hover:border-slate-300 hover:bg-white focus:outline-none focus:ring-2 focus:ring-sky-600"
+                        style={{
+                          borderColor: isFocused ? '#38bdf8' : 'rgba(226,232,240,0.95)',
+                          background: isFocused ? 'rgba(255,255,255,0.99)' : 'rgba(255,255,255,0.72)',
+                          boxShadow: isFocused ? '0 0 0 1px rgba(14,165,233,0.1)' : 'none',
+                          resize: 'vertical',
+                        }}
+                      />
+                      <div className="relative z-10 mt-2 text-xs" style={{ color: '#64748b' }}>
+                        Click into the section to edit directly. Guidance and rewrite suggestions stay anchored here.
+                      </div>
+                      <BuilderRewriteActionList
+                        actions={rewriteActions}
+                        canRewrite={rewriteEligibility.canRewrite}
+                        rewriteDisabledReason={rewriteEligibility.reason}
+                        onRequestRewrite={function (action) {
+                          void requestResumeRewrite(action.request);
+                        }}
+                      />
+                      {sectionRewriteIsActive ? (
+                        <div className="mt-3">
+                          <ResumeRewritePanel
+                            rewrite={rewrite}
+                            onApplyCandidate={applyResumeRewriteCandidate}
+                            onDismiss={dismissResumeRewrite}
+                          />
+                        </div>
+                      ) : null}
+                      <SectionGuidance
+                        explanation={sectionExplanation}
+                        onFocusTargetRefs={focusDiagnosticsTargetRefs}
+                        variant="builder"
+                        attachmentLabel={'Attached to ' + builderSectionLabel(section)}
                       />
                     </section>
                   );
@@ -1079,34 +1516,67 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
             <div className="mt-4 space-y-3">
               {ui.rightRailTab === 'guidance' ? (
                 <div className="space-y-3">
-                  <div className="rounded-xl border p-3" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
-                    <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>
-                      {diagnosticsStatusHeading(review.status)}
+                  <div
+                    className="rounded-xl border p-4"
+                    style={{
+                      borderColor: activeSectionExplanation !== null ? 'var(--p-accent)' : 'var(--p-border)',
+                      background: activeSectionExplanation !== null
+                        ? 'color-mix(in srgb, var(--p-accent) 8%, var(--p-surface))'
+                        : 'var(--p-surface2)',
+                    }}
+                  >
+                    <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>
+                      Attached to active section
+                    </div>
+                    <div className="mt-1 text-sm font-semibold" style={{ color: 'var(--p-text)' }}>
+                      PathAdvisor is attached to {builderSectionLabel(builder.activeSection)}
                     </div>
                     <p className="mt-1 text-sm" style={{ color: 'var(--p-text-muted)' }}>
-                      {review.response !== null ? review.response.overall.summary : diagnosticsStatusMessage(review.status)}
+                      {activeSectionExplanation !== null
+                        ? 'The builder, guidance, and rewrite actions are currently aligned to this section.'
+                        : 'Select a section to keep guidance, rewrite actions, and editing focused in one place.'}
                     </p>
-                    <button
-                      type="button"
-                      onClick={function () {
-                        void evaluateActiveResumeDiagnostics();
-                      }}
-                      className="mt-3 rounded-md border px-3 py-2 text-xs font-medium transition-opacity hover:opacity-90 active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)]"
-                      style={{ borderColor: 'var(--p-border)', color: 'var(--p-accent)' }}
-                    >
-                      {review.status === 'loading' ? 'Refreshing...' : 'Run diagnostics'}
-                    </button>
                   </div>
-
-                  {review.response !== null ? review.response.issues.slice(0, 2).map(function (issue) {
-                    return (
-                      <div key={issue.issue_id} className="rounded-xl border p-3" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
-                        <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>{issue.title}</div>
-                        <p className="mt-1 text-sm" style={{ color: 'var(--p-text-muted)' }}>{issue.why_it_matters}</p>
-                        <DiagnosticsTargetRefList targetRefs={issue.target_refs} onFocus={focusDiagnosticsTargetRefs} />
+                  <PathAdvisorSummary
+                    explanations={explanations}
+                    fallbackHeadline={diagnosticsStatusHeading(review.status)}
+                    fallbackDetail={diagnosticsResponse !== null ? diagnosticsResponse.overall.summary : diagnosticsStatusMessage(review.status)}
+                    statusLabel={review.status === 'evaluated' ? 'PathAdvisor guidance' : 'Diagnostics state'}
+                  />
+                  <WarningExplanationList explanations={explanations} />
+                  <div className="rounded-xl border p-4" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
+                    <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>
+                      Key takeaways
+                    </div>
+                    <div className="mt-3">
+                      <KeyTakeawaysPanel
+                        explanations={explanations}
+                        onFocusTargetRefs={focusDiagnosticsTargetRefs}
+                      />
+                    </div>
+                  </div>
+                  <div className="rounded-xl border p-4" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>
+                          Guidance refresh
+                        </div>
+                        <p className="mt-1 text-sm" style={{ color: 'var(--p-text-muted)' }}>
+                          {hasExplanations ? 'PathAdvisor is rendering backend explanation objects for this draft.' : diagnosticsStatusMessage(review.status)}
+                        </p>
                       </div>
-                    );
-                  }) : null}
+                      <button
+                        type="button"
+                        onClick={function () {
+                          void evaluateActiveResumeDiagnostics();
+                        }}
+                        className="rounded-md border px-3 py-2 text-xs font-medium transition-opacity hover:opacity-90 active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--p-accent)]"
+                        style={{ borderColor: 'var(--p-border)', color: 'var(--p-accent)' }}
+                      >
+                        {review.status === 'loading' ? 'Refreshing...' : 'Run diagnostics'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ) : null}
 
@@ -1134,27 +1604,49 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
                       </button>
                     </div>
                   </div>
-
-                  {review.response !== null ? review.response.issues.map(function (issue) {
-                    return (
-                      <div key={issue.issue_id} className="rounded-xl border p-3" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
-                        <div className="flex items-start gap-2">
-                          {issue.severity === 'high' ? <AlertCircle className="mt-0.5 h-4 w-4" style={{ color: 'var(--p-danger)' }} aria-hidden /> : issue.severity === 'medium' ? <AlertCircle className="mt-0.5 h-4 w-4" style={{ color: 'var(--p-warning)' }} aria-hidden /> : <CheckCircle2 className="mt-0.5 h-4 w-4" style={{ color: 'var(--p-success)' }} aria-hidden />}
-                          <div>
-                            <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>{issue.title}</div>
-                            <p className="mt-1 text-sm" style={{ color: 'var(--p-text-muted)' }}>{issue.detail}</p>
-                          </div>
-                        </div>
-                        <DiagnosticsTargetRefList targetRefs={issue.target_refs} onFocus={focusDiagnosticsTargetRefs} />
+                  {diagnosticsResponse !== null ? (
+                    <div className="rounded-xl border p-3" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
+                      <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>
+                        Backend snapshot
                       </div>
-                    );
-                  }) : null}
-
-                  {review.response !== null && review.response.issues.length === 0 ? (
-                    <div className="rounded-xl border p-3 text-sm" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)', color: 'var(--p-text-muted)' }}>
-                      No backend issues are attached to the current diagnostics response.
+                      <div className="mt-2 grid gap-2">
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <span style={{ color: 'var(--p-text-muted)' }}>Readiness</span>
+                          <span style={{ color: 'var(--p-text)' }}>
+                            {formatReadinessBandLabel(diagnosticsResponse.overall.readiness_band)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <span style={{ color: 'var(--p-text-muted)' }}>Issues</span>
+                          <span style={{ color: 'var(--p-text)' }}>
+                            {diagnosticsResponse.issues.length.toString()}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <span style={{ color: 'var(--p-text-muted)' }}>Recommendations</span>
+                          <span style={{ color: 'var(--p-text)' }}>
+                            {diagnosticsResponse.recommendations.length.toString()}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <span style={{ color: 'var(--p-text-muted)' }}>Evaluated sections</span>
+                          <span style={{ color: 'var(--p-text)' }}>
+                            {diagnosticsResponse.scope.evaluated_section_ids.length.toString()}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <span style={{ color: 'var(--p-text-muted)' }}>Snapshot</span>
+                          <span style={{ color: 'var(--p-text)' }}>
+                            {latestSnapshot !== null ? latestSnapshot.snapshotId : 'Not saved yet'}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="rounded-xl border p-3 text-sm" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)', color: 'var(--p-text-muted)' }}>
+                      {diagnosticsStatusMessage(review.status)}
+                    </div>
+                  )}
                 </div>
               ) : null}
 
@@ -1176,14 +1668,17 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
                       Series, grade, agency, and announcement text remain explicit fields so federal-aware review logic can connect later without changing the user flow.
                     </div>
                   </div>
-                  {review.response !== null ? (
+                  {diagnosticsResponse !== null ? (
                     <div className="rounded-xl border p-3" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
                       <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>Diagnostics engine</div>
                       <div className="mt-1 text-sm" style={{ color: 'var(--p-text)' }}>
-                        {review.response.meta.engine_version}
+                        {diagnosticsResponse.meta.engine_version}
                       </div>
                       <div className="mt-1 text-xs" style={{ color: 'var(--p-text-muted)' }}>
-                        Ruleset {review.response.meta.ruleset_version} · Explainability {review.response.meta.explainability_version}
+                        Ruleset {diagnosticsResponse.meta.ruleset_version} · Explainability {diagnosticsResponse.meta.explainability_version}
+                      </div>
+                      <div className="mt-1 text-xs" style={{ color: 'var(--p-text-dim)' }}>
+                        Revision {activeSummary.currentRevisionId}
                       </div>
                     </div>
                   ) : null}
@@ -1200,11 +1695,31 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
     if (activeSummary === null || activeDraft === null) {
       return renderBuilder();
     }
-    const diagnosticsResponse = review.response;
+    const exportReadiness = getResumeExportReadiness(
+      activeSummary,
+      latestSnapshot
+    );
+    const diagnosticsResponse = effectiveDiagnosticsResponse;
+    const explanations =
+      diagnosticsResponse !== null ? diagnosticsResponse.explanations : null;
+    const rewriteEligibility = getResumeRewriteEligibility(
+      activeSummary,
+      latestSnapshot,
+      selectedSnapshot,
+      diagnosticsResponse
+    );
     const readinessLabel =
       diagnosticsResponse !== null
         ? formatReadinessBandLabel(diagnosticsResponse.overall.readiness_band)
         : null;
+    const evaluationStateMessage =
+      review.status === 'loading' && latestSnapshot !== null
+        ? 'Refreshing diagnostics. Showing the last saved evaluation from ' + formatEvaluatedAt(latestSnapshot.evaluatedAt) + '.'
+        : selectedSnapshot !== null
+          ? 'Viewing saved snapshot from ' + formatEvaluatedAt(selectedSnapshot.evaluatedAt) + '.'
+          : latestSnapshot !== null
+            ? 'Last saved evaluation: ' + formatEvaluatedAt(latestSnapshot.evaluatedAt) + '.'
+          : diagnosticsStatusMessage(review.status);
     return (
       <div className="space-y-6">
         <div className="flex flex-col gap-3 rounded-xl border p-6 md:flex-row md:items-end md:justify-between" style={{ background: 'var(--p-surface)', borderColor: 'var(--p-border)' }}>
@@ -1214,7 +1729,10 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
               Review shell for {activeSummary.name}
             </h1>
             <p className="mt-2 text-sm" style={{ color: 'var(--p-text-muted)' }}>
-              This review surface renders backend diagnostics directly. PathOS shows transport state clearly and does not invent scores, issues, or recommendations on the client.
+              This review surface renders backend PathAdvisor explanations anchored to the resume. PathOS shows transport state clearly and does not invent findings or rewrite logic on the client.
+            </p>
+            <p className="mt-2 text-xs" style={{ color: 'var(--p-text-dim)' }}>
+              Variant {activeSummary.variantId} · Revision {activeSummary.currentRevisionId}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -1241,127 +1759,108 @@ export function ResumeWorkspaceScreen(props: ResumeWorkspaceScreenProps) {
           </div>
         </div>
 
+        <ResumeSnapshotHistoryPanel
+          snapshots={variantSnapshots}
+          selectedSnapshotId={selectedSnapshot !== null ? selectedSnapshot.snapshotId : null}
+          compareSnapshotId={review.compareSnapshotId}
+          isCompareMode={review.isCompareMode}
+          onSelectSnapshot={selectReviewSnapshot}
+          onCompareSnapshot={setCompareSnapshotId}
+          onToggleCompareMode={setCompareMode}
+        />
+
+        <ResumeExportReadinessCard readinessSummary={exportReadiness} />
+
+        {review.isCompareMode ? (
+          <ResumeSnapshotComparePanel
+            currentSnapshot={selectedSnapshot}
+            compareSnapshot={compareSnapshot}
+            compareSummary={compareSummary}
+          />
+        ) : null}
+
+        {review.isCompareMode || variantRevisionSnapshots.length > 0 ? (
+          <ResumeRevisionDiffPanel
+            currentRevisionSnapshot={selectedRevisionSnapshot}
+            compareRevisionSnapshot={compareRevisionSnapshot}
+            diffSummary={revisionDiffSummary}
+          />
+        ) : null}
+
         <div className="grid gap-6 lg:grid-cols-2">
-          <SurfaceCard title="Overall readiness band" subtitle="The backend owns readiness, summary text, and all review findings.">
-            <div className="rounded-xl border p-4" style={{ borderColor: 'var(--p-border)', background: 'color-mix(in srgb, var(--p-accent) 8%, var(--p-surface))' }}>
-              <div className="flex items-start gap-3">
-                <Target className="mt-0.5 h-5 w-5" style={{ color: 'var(--p-accent)' }} aria-hidden />
-                <div>
-                  <div className="text-lg font-semibold" style={{ color: 'var(--p-text)' }}>
-                    {readinessLabel !== null ? readinessLabel : diagnosticsStatusHeading(review.status)}
-                  </div>
-                  <p className="mt-1 text-sm" style={{ color: 'var(--p-text-muted)' }}>
-                    {diagnosticsResponse !== null ? diagnosticsResponse.overall.summary : diagnosticsStatusMessage(review.status)}
-                  </p>
-                  {diagnosticsResponse !== null && diagnosticsResponse.overall.score !== null ? (
-                    <p className="mt-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--p-text-dim)' }}>
-                      Score {diagnosticsResponse.overall.score} / 100
-                    </p>
-                  ) : null}
-                </div>
-              </div>
-            </div>
+          <SurfaceCard title="PathAdvisor summary" subtitle="The backend owns summary text, priority framing, and all review explanations.">
+              <PathAdvisorSummary
+                explanations={explanations}
+                fallbackHeadline={readinessLabel !== null ? readinessLabel : diagnosticsStatusHeading(review.status)}
+                fallbackDetail={diagnosticsResponse !== null ? diagnosticsResponse.overall.summary : evaluationStateMessage}
+                statusLabel={review.status === 'evaluated' ? 'Resume explanation' : 'Diagnostics state'}
+              />
             {review.errorMessage !== null ? (
               <p className="mt-4 text-sm" style={{ color: 'var(--p-text-muted)' }}>{review.errorMessage}</p>
             ) : null}
-            {diagnosticsResponse !== null && diagnosticsResponse.warnings.length > 0 ? (
-              <div className="mt-4 space-y-2">
-                {diagnosticsResponse.warnings.map(function (warning) {
-                  return (
-                    <div key={warning.code} className="rounded-xl border p-3 text-sm" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)', color: 'var(--p-text-muted)' }}>
-                      {warning.text}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
+            <p className="mt-4 text-xs" style={{ color: 'var(--p-text-dim)' }}>
+              {evaluationStateMessage}
+            </p>
+            <div className="mt-4">
+              <WarningExplanationList explanations={explanations} />
+            </div>
           </SurfaceCard>
 
-          <SurfaceCard title="Category breakdown" subtitle="Category rows are rendered from backend scores and stay empty when the backend does not provide them.">
-            <div className="space-y-3">
-              {diagnosticsResponse !== null ? diagnosticsResponse.category_scores.map(function (category) {
-                return (
-                  <div key={category.code} className="rounded-xl border p-4" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>{category.label}</div>
-                      <span className="rounded-full border px-2 py-1 text-xs font-medium" style={{ borderColor: 'var(--p-border)', color: 'var(--p-text-muted)' }}>
-                        {category.score !== null ? category.score.toString() + ' / ' + category.max_score.toString() : 'No score'}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm" style={{ color: 'var(--p-text-muted)' }}>{category.code}</p>
-                  </div>
-                );
-              }) : (
-                <div className="rounded-xl border p-4 text-sm" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)', color: 'var(--p-text-muted)' }}>
-                  {diagnosticsStatusMessage(review.status)}
-                </div>
-              )}
-            </div>
+          <SurfaceCard title="Key takeaways" subtitle="Short backend-owned actions stay ordered and anchored to the resume when target refs are present.">
+            <KeyTakeawaysPanel
+              explanations={explanations}
+              onFocusTargetRefs={focusDiagnosticsTargetRefs}
+            />
           </SurfaceCard>
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <SurfaceCard title="Top issues" subtitle="Issues, missing evidence, and target refs come directly from the backend response.">
+          <SurfaceCard title="Section guidance" subtitle="PathAdvisor explanations stay tied to resume sections instead of floating as global prose.">
             <div className="space-y-3">
-              {diagnosticsResponse !== null ? diagnosticsResponse.issues.map(function (issue) {
+              {diagnosticsResponse !== null && explanations !== null && explanations !== undefined && Array.isArray(explanations.section_explanations) ? explanations.section_explanations.map(function (sectionExplanation, index) {
                 return (
-                  <div key={issue.issue_id} className="rounded-xl border p-4" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
-                    <div className="flex items-start gap-3">
-                      {issue.severity === 'high' ? <AlertCircle className="mt-0.5 h-5 w-5" style={{ color: 'var(--p-danger)' }} aria-hidden /> : issue.severity === 'medium' ? <AlertCircle className="mt-0.5 h-5 w-5" style={{ color: 'var(--p-warning)' }} aria-hidden /> : <CheckCircle2 className="mt-0.5 h-5 w-5" style={{ color: 'var(--p-success)' }} aria-hidden />}
-                      <div>
-                        <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>{issue.title}</div>
-                        <p className="mt-1 text-sm" style={{ color: 'var(--p-text-muted)' }}>{issue.detail}</p>
-                        <p className="mt-2 text-xs" style={{ color: 'var(--p-text-dim)' }}>{issue.why_it_matters}</p>
-                        <DiagnosticsTargetRefList targetRefs={issue.target_refs} onFocus={focusDiagnosticsTargetRefs} />
-                      </div>
-                    </div>
-                  </div>
+                  <SectionGuidance
+                    key={sectionExplanation.section_id + '-' + index.toString()}
+                    explanation={sectionExplanation}
+                    onFocusTargetRefs={focusDiagnosticsTargetRefs}
+                  />
                 );
               }) : (
                 <div className="rounded-xl border p-4 text-sm" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)', color: 'var(--p-text-muted)' }}>
                   {diagnosticsStatusMessage(review.status)}
                 </div>
               )}
-
-              {diagnosticsResponse !== null && diagnosticsResponse.missing_evidence.length > 0 ? (
-                <div className="rounded-xl border p-4" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
-                  <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>Missing evidence</div>
-                  <div className="mt-3 space-y-3">
-                    {diagnosticsResponse.missing_evidence.map(function (item) {
-                      return (
-                        <div key={item.code}>
-                          <p className="text-sm" style={{ color: 'var(--p-text-muted)' }}>{item.text}</p>
-                          <DiagnosticsTargetRefList targetRefs={item.target_refs ? item.target_refs : []} onFocus={focusDiagnosticsTargetRefs} />
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
             </div>
           </SurfaceCard>
 
-          <SurfaceCard title="Recommendations" subtitle="Recommendation ordering and wording are backend-owned.">
-            <div className="space-y-3">
-              {diagnosticsResponse !== null ? diagnosticsResponse.recommendations.map(function (item) {
-                return (
-                  <div key={item.code + '-' + item.priority.toString()} className="rounded-xl border p-4" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)' }}>
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-semibold" style={{ color: 'var(--p-text)' }}>{item.title}</div>
-                      <span className="rounded-full border px-2 py-1 text-xs font-medium" style={{ borderColor: 'var(--p-border)', color: 'var(--p-accent)' }}>
-                        Priority {item.priority}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm" style={{ color: 'var(--p-text-muted)' }}>{item.detail}</p>
-                    <DiagnosticsTargetRefList targetRefs={item.target_refs} onFocus={focusDiagnosticsTargetRefs} />
-                  </div>
-                );
-              }) : (
-                <div className="rounded-xl border p-4 text-sm" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)', color: 'var(--p-text-muted)' }}>
-                  {diagnosticsStatusMessage(review.status)}
-                </div>
-              )}
+          <SurfaceCard title="Guidance strip" subtitle="Compact recommendation cards keep the right rail intentional instead of duplicating the full review.">
+            <div className="rounded-xl border p-3 text-sm" style={{ borderColor: 'var(--p-border)', background: 'var(--p-surface2)', color: 'var(--p-text-muted)' }}>
+              Rewrite suggestions open in the builder so the editable text, pending state, and approved changes stay attached to the live draft.
             </div>
+            <RecommendationList
+              explanations={explanations}
+              diagnosticsRecommendations={diagnosticsResponse !== null ? diagnosticsResponse.recommendations : null}
+              canRequestRewrite={rewriteEligibility.canRewrite}
+              rewriteDisabledReason={rewriteEligibility.reason}
+              rewriteButtonLabel="Rewrite in Builder"
+              onRequestRewrite={function (recommendation, explanation) {
+                const request = buildResumeRewriteRequest({
+                  summary: activeSummary,
+                  draft: activeDraft,
+                  latestSnapshot: latestSnapshot,
+                  selectedSnapshot: selectedSnapshot,
+                  diagnosticsResponse: diagnosticsResponse,
+                  recommendation: recommendation,
+                  explanation: explanation,
+                });
+                if (request !== null) {
+                  void requestResumeRewrite(request);
+                  navigateToBuilder(activeSummary.id);
+                }
+              }}
+              onFocusTargetRefs={focusDiagnosticsTargetRefs}
+              emptyMessage="PathAdvisor recommendation cards will appear here when the backend provides them."
+            />
             {review.highlightedSections.length > 0 ? (
               <button
                 type="button"

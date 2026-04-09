@@ -231,6 +231,446 @@ feature/day-54-pathadvisor-conversation-robustness-v1
 (no output)
 ```
 
+---
+
+## Day 85 – Resume AI Rewrite Assistance v1
+
+Added the first bounded rewrite-assistance layer to the Resume Workspace review
+shell. The new flow stays grounded in saved backend diagnostics and current
+revision state instead of inventing any frontend rewrite logic.
+
+Users can now:
+
+- launch rewrite help from grounded recommendation cards
+- request bounded candidates for a specific summary, skills target, or
+  experience bullet
+- review original text beside candidate rewrites
+- explicitly apply one candidate or dismiss the request
+
+This slice also adds the smallest honest same-origin integration surface for
+rewrite assistance:
+
+- `POST /api/resume/rewrite-assist`
+
+That proxy validates a bounded diagnostics-grounded payload and forwards it to
+the future backend rewrite path:
+
+- `/api/v1/resume/rewrite-assist/generate`
+
+If the backend route is unavailable, the frontend now surfaces an explicit
+unavailable state instead of fabricating local rewrite text.
+
+### Files changed
+
+- `app/api/resume/rewrite-assist/route.ts`
+- `app/api/resume/rewrite-assist/route.test.ts`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx`
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.tsx`
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+- `packages/ui/src/resume-workspace/resumeRewrite.ts`
+- `packages/ui/src/resume-workspace/resumeRewrite.test.ts`
+- `packages/ui/src/resume-workspace/resumeRewriteClient.ts`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+- `packages/ui/src/stores/resumeWorkspaceStore.ts`
+- `packages/ui/src/stores/resumeWorkspaceStore.test.ts`
+- `docs/change-briefs/day-85.md`
+- `docs/merge-notes/current.md`
+
+### Behavior notes
+
+- rewrite launching is allowed only when:
+  - the user is viewing the latest saved snapshot
+  - that snapshot still matches the current revision
+  - the backend diagnostics response is in `evaluated` state
+- rewrite requests are grounded in:
+  - recommendation code
+  - matched issue code when one exists
+  - target ref
+  - original visible text
+  - current target role when present
+- no candidate is auto-applied
+- applying a candidate updates the draft, bumps the revision id, and preserves
+  the new revision-content snapshot
+- stale diagnostics block rewrite launching and tell the user to re-run
+  diagnostics first
+
+### Validation performed
+
+Targeted:
+
+- `pnpm vitest run packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/resume-workspace/resumeRewrite.test.ts packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx app/api/resume/rewrite-assist/route.test.ts`
+  - passed
+- `pnpm exec eslint packages/ui/src/stores/resumeWorkspaceStore.ts packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx packages/ui/src/resume-workspace/resumeRewrite.ts packages/ui/src/resume-workspace/resumeRewrite.test.ts packages/ui/src/resume-workspace/resumeRewriteClient.ts packages/ui/src/resume-workspace/ResumeRewritePanel.tsx packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx app/api/resume/rewrite-assist/route.ts app/api/resume/rewrite-assist/route.test.ts`
+  - passed
+
+Build:
+
+- `pnpm build`
+  - passed
+
+Typecheck:
+
+- `pnpm exec tsc --noEmit`
+  - still failing due pre-existing errors outside Day 85 changes
+  - remaining failures are in older `packages/ui/src/resume-builder/__tests__/*`
+    files and earlier `packages/ui/src/resume-workspace/*` files
+
+Human simulation gate:
+
+- not run
+- rationale: this slice adds bounded request/apply UI plus deterministic local
+  state transitions; the targeted route, helper, store, panel, and screen tests
+  cover the added behavior directly
+
+### Notes on carried worktree state
+
+This branch still carries uncommitted Day 80–84 workspace history. The Day 85
+patch artifacts therefore reflect the current cumulative working tree rather
+than an isolated commit range.
+
+### git status
+
+```text
+ A docs/change-briefs/day-80.md
+ A docs/change-briefs/day-81.md
+ A docs/change-briefs/day-82.md
+ A docs/change-briefs/day-83.md
+ A docs/change-briefs/day-84.md
+ M docs/merge-notes/current.md
+ A packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx
+ A packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx
+ A packages/ui/src/resume-workspace/ResumeExportReadinessCard.test.tsx
+ A packages/ui/src/resume-workspace/ResumeExportReadinessCard.tsx
+ A packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.test.tsx
+ A packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.tsx
+ A packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx
+ A packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx
+ M packages/ui/src/resume-workspace/resumeDiagnostics.test.ts
+ M packages/ui/src/resume-workspace/resumeDiagnostics.ts
+ A packages/ui/src/resume-workspace/resumeExportReadiness.test.ts
+ A packages/ui/src/resume-workspace/resumeExportReadiness.ts
+ A packages/ui/src/resume-workspace/resumeRevisionDiff.test.ts
+ A packages/ui/src/resume-workspace/resumeRevisionDiff.ts
+ A packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts
+ A packages/ui/src/resume-workspace/resumeSnapshotCompare.ts
+ M packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+ M packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+ M packages/ui/src/stores/resumeWorkspaceStore.test.ts
+ M packages/ui/src/stores/resumeWorkspaceStore.ts
+?? app/api/resume/rewrite-assist/
+?? packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx
+?? packages/ui/src/resume-workspace/ResumeRewritePanel.tsx
+?? packages/ui/src/resume-workspace/resumeRewrite.test.ts
+?? packages/ui/src/resume-workspace/resumeRewrite.ts
+?? packages/ui/src/resume-workspace/resumeRewriteClient.ts
+```
+
+### git branch --show-current
+
+```text
+feature/day-85-resume-ai-rewrite-assistance-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Name          : day-85.patch
+Length        : 303734
+LastWriteTime : 4/8/2026 5:55:43 PM
+
+Name          : day-85-this-run.patch
+Length        : 303734
+LastWriteTime : 4/8/2026 5:55:44 PM
+```
+
+### Patch artifacts
+
+```text
+Name              : day-84.patch
+Length            : 280211
+LastWriteTime     : 4/8/2026 5:34:09 PM
+
+Name              : day-84-this-run.patch
+Length            : 280211
+LastWriteTime     : 4/8/2026 5:34:10 PM
+```
+
+### Patch artifacts
+
+```text
+Name                 Length LastWriteTime
+----                 ------ -------------
+day-83.patch         209797 4/8/2026 5:23:14 PM
+day-83-this-run.patch 209797 4/8/2026 5:23:14 PM
+```
+
+---
+
+## Day 84 – Export Readiness Gate v1
+
+Day 84 adds a bounded export-readiness gate to the Resume Workspace review
+shell. The gate uses saved backend diagnostics plus revision freshness to
+answer whether the active variant appears ready to export right now, whether
+the latest evaluation is stale, and what is blocking versus caution-level.
+
+### Files changed
+
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+- `packages/ui/src/resume-workspace/resumeExportReadiness.ts`
+- `packages/ui/src/resume-workspace/resumeExportReadiness.test.ts`
+- `packages/ui/src/resume-workspace/ResumeExportReadinessCard.tsx`
+- `packages/ui/src/resume-workspace/ResumeExportReadinessCard.test.tsx`
+- `docs/change-briefs/day-84.md`
+- `docs/merge-notes/current.md`
+
+### Behavior notes
+
+- new frontend display-only readiness states:
+  - `not_evaluated`
+  - `stale_evaluation`
+  - `not_ready`
+  - `caution`
+  - `ready`
+- readiness is derived from:
+  - latest saved diagnostics snapshot
+  - current revision id
+  - latest snapshot revision id
+  - backend readiness band
+  - backend response state
+  - backend issue severity
+  - backend missing evidence
+  - backend warnings
+- stale diagnostics are now called out explicitly instead of being treated as
+  current export confidence
+- the export-readiness card sits near the top of review mode, ahead of history
+  and compare details
+
+### Validation performed
+
+Targeted:
+
+- `pnpm vitest run packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/resumeExportReadiness.test.ts packages/ui/src/resume-workspace/ResumeExportReadinessCard.test.tsx packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx packages/ui/src/resume-workspace/resumeRevisionDiff.test.ts packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.test.tsx`
+  - passed
+- `pnpm exec eslint packages/ui/src/screens/ResumeWorkspaceScreen.tsx packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/resumeExportReadiness.ts packages/ui/src/resume-workspace/resumeExportReadiness.test.ts packages/ui/src/resume-workspace/ResumeExportReadinessCard.tsx packages/ui/src/resume-workspace/ResumeExportReadinessCard.test.tsx`
+  - passed
+
+Typecheck:
+
+- `pnpm exec tsc --noEmit`
+  - failed due pre-existing generated `.next/dev/types/routes.d.ts` and
+    `.next/dev/types/validator.ts` syntax errors outside Day 84 changes
+
+Build:
+
+- `pnpm build`
+  - passed
+
+Human simulation gate:
+
+- not run
+- rationale: this slice adds deterministic display logic over saved backend
+  snapshots and existing revision state, and the focused helper, component, and
+  review-shell tests cover the new behavior directly
+
+### Notes on carried worktree state
+
+This branch still carries prior Day 80–83 worktree state. Day 84 builds on top
+of that branch state and does not rewrite or discard it.
+
+### git status
+
+```text
+ A docs/change-briefs/day-80.md
+ A docs/change-briefs/day-81.md
+ A docs/change-briefs/day-82.md
+ A docs/change-briefs/day-83.md
+ A docs/change-briefs/day-84.md
+ M docs/merge-notes/current.md
+ A packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx
+ A packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx
+ A packages/ui/src/resume-workspace/ResumeExportReadinessCard.test.tsx
+ A packages/ui/src/resume-workspace/ResumeExportReadinessCard.tsx
+ A packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.test.tsx
+ A packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.tsx
+ A packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx
+ A packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx
+ M packages/ui/src/resume-workspace/resumeDiagnostics.test.ts
+ M packages/ui/src/resume-workspace/resumeDiagnostics.ts
+ A packages/ui/src/resume-workspace/resumeExportReadiness.test.ts
+ A packages/ui/src/resume-workspace/resumeExportReadiness.ts
+ A packages/ui/src/resume-workspace/resumeRevisionDiff.test.ts
+ A packages/ui/src/resume-workspace/resumeRevisionDiff.ts
+ A packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts
+ A packages/ui/src/resume-workspace/resumeSnapshotCompare.ts
+ M packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+ M packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+ M packages/ui/src/stores/resumeWorkspaceStore.test.ts
+ M packages/ui/src/stores/resumeWorkspaceStore.ts
+```
+
+### git branch --show-current
+
+```text
+feature/day-84-export-readiness-gate-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Name                 Length LastWriteTime
+----                 ------ -------------
+day-82.patch          189175 4/8/2026 5:07:42 PM
+day-82-this-run.patch 189175 4/8/2026 5:07:43 PM
+```
+
+---
+
+## Day 83 – Resume Revision Diff UX v1
+
+Day 83 started with a real readiness gap: the Resume Workspace tracked
+`currentRevisionId`, but it did not preserve old resume-body content per
+revision. Because of that, a truthful revision diff could not be built from the
+existing store alone.
+
+This slice adds the smallest safe prerequisite model and then wires the first
+bounded revision diff UX on top of those real saved revision-content snapshots.
+
+### Files changed
+
+- `packages/ui/src/stores/resumeWorkspaceStore.ts`
+- `packages/ui/src/stores/resumeWorkspaceStore.test.ts`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/resume-workspace/resumeRevisionDiff.ts`
+- `packages/ui/src/resume-workspace/resumeRevisionDiff.test.ts`
+- `packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.tsx`
+- `packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.test.tsx`
+- `docs/change-briefs/day-83.md`
+- `docs/merge-notes/current.md`
+
+### Behavior notes
+
+- new persisted revision-content state:
+  - `revisionContentSnapshots`
+  - `revisionContentIdsByVariant`
+- current revisions are seeded into revision-content history so existing store
+  state can hydrate honestly
+- every draft edit that bumps `currentRevisionId` now preserves a real
+  revision-content snapshot for later diffing
+- the review shell now shows a bounded `Revision diff` panel tied to selected
+  and compared snapshot revisions when those revision-content snapshots exist
+- diffing remains section-based and calm, not raw line-by-line editor diffing
+
+### Validation performed
+
+Targeted:
+
+- `pnpm vitest run packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx packages/ui/src/resume-workspace/resumeRevisionDiff.test.ts packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.test.tsx`
+  - passed
+- `pnpm exec eslint packages/ui/src/stores/resumeWorkspaceStore.ts packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.tsx packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/resumeSnapshotCompare.ts packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx packages/ui/src/resume-workspace/resumeRevisionDiff.ts packages/ui/src/resume-workspace/resumeRevisionDiff.test.ts packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.tsx packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.test.tsx`
+  - passed
+
+Typecheck:
+
+- `pnpm exec tsc --noEmit`
+  - failed due pre-existing generated `.next/dev/types/routes.d.ts` and
+    `.next/dev/types/validator.ts` syntax errors outside Day 83 changes
+
+Build:
+
+- `pnpm build`
+  - passed
+
+Human simulation gate:
+
+- not run
+- rationale: this slice adds deterministic local diff logic over saved revision
+  content snapshots, and the targeted helper, store, and component tests cover
+  the new behavior directly
+
+### Notes on carried worktree state
+
+This branch still carries prior Day 80–82 worktree state. Day 83 builds on top
+of that branch state and does not rewrite or discard it.
+
+### git status
+
+```text
+ A docs/change-briefs/day-80.md
+ A docs/change-briefs/day-81.md
+ A docs/change-briefs/day-82.md
+ A docs/change-briefs/day-83.md
+ M docs/merge-notes/current.md
+ A packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx
+ A packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx
+ A packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.test.tsx
+ A packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.tsx
+ A packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx
+ A packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx
+ M packages/ui/src/resume-workspace/resumeDiagnostics.test.ts
+ M packages/ui/src/resume-workspace/resumeDiagnostics.ts
+ A packages/ui/src/resume-workspace/resumeRevisionDiff.test.ts
+ A packages/ui/src/resume-workspace/resumeRevisionDiff.ts
+ A packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts
+ A packages/ui/src/resume-workspace/resumeSnapshotCompare.ts
+ M packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+ M packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+ M packages/ui/src/stores/resumeWorkspaceStore.test.ts
+ M packages/ui/src/stores/resumeWorkspaceStore.ts
+```
+
+### git branch --show-current
+
+```text
+feature/day-83-resume-revision-diff-ux-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Name                 Length LastWriteTime
+----                 ------ -------------
+day-82.patch          189175 4/8/2026 5:07:42 PM
+day-82-this-run.patch 189175 4/8/2026 5:07:43 PM
+```
+
 ### Patch artifacts
 
 ```text
@@ -3831,3 +4271,707 @@ LastWriteTime : 4/8/2026 2:59:21 PM
 Length        : 176630
 Name          : day-76b-this-run.patch
 ```
+
+## 2026-04-08 — Day 80 PathAdvisor Resume Integration v1
+
+### Branch
+
+`feature/day-80-pathadvisor-resume-integration-v1`
+
+### Summary
+
+- added typed support for backend `explanations` on the resume diagnostics
+  response
+- replaced the primary Resume Workspace raw diagnostics rendering with
+  PathAdvisor-style explanation rendering
+- added section-level guidance blocks inside the resume canvas and compact
+  recommendation cards in the right rail
+- kept the existing diagnostics fetch/store flow and existing target-ref section
+  focus behavior
+
+### Files changed
+
+- `packages/ui/src/resume-workspace/resumeDiagnostics.ts`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+- `packages/ui/src/stores/resumeWorkspaceStore.test.ts`
+- `docs/change-briefs/day-80.md`
+
+### Behavior changes
+
+- top summary now prefers `explanations.overall_summary`
+- key takeaways now render from `explanations.key_takeaways`
+- section-level guidance now renders from `explanations.section_explanations`
+  inside the builder canvas
+- right-rail recommendation cards now render from
+  `explanations.recommendation_explanations`
+- warning copy now prefers `explanations.warning_explanations`
+- builder diagnostics tab now stays compact and transport-oriented instead of
+  duplicating raw issue lists
+
+### Validation performed
+
+- focused Resume Workspace tests:
+  - `pnpm test packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/resume-workspace/resumeDiagnostics.test.ts packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx`
+  - passed
+- targeted lint on modified Day 80 files:
+  - `pnpm exec eslint packages/ui/src/screens/ResumeWorkspaceScreen.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/resume-workspace/resumeDiagnostics.ts packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/stores/resumeWorkspaceStore.test.ts`
+  - passed
+- full test suite:
+  - `pnpm test`
+  - passed
+  - 78 files passed, 1830 tests passed
+- production build:
+  - `pnpm build`
+  - passed
+- repo-wide lint:
+  - `pnpm lint`
+  - still fails because of pre-existing unrelated errors in other resume-builder,
+    dashboard, and route files
+- repo-wide typecheck:
+  - `pnpm typecheck`
+  - still fails because generated `.next/dev/types/routes.d.ts` and
+    `.next/dev/types/validator.ts` are malformed in the current environment
+
+### Risks and follow-ups
+
+- the current test harness for Resume Workspace screens is still server-render
+  based, so detailed explanation rendering confidence comes from pure component
+  tests plus store/client tests rather than DOM interaction tests
+- `pnpm typecheck` remains blocked by generated Next.js dev-type corruption and
+  should be cleaned up separately from the Day 80 UI work
+- Day 81 groundwork should wait until the explanation rendering surfaces settle
+  under a DOM-capable test harness
+
+### git status
+
+```text
+On branch feature/day-80-pathadvisor-resume-integration-v1
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   packages/ui/src/resume-workspace/resumeDiagnostics.ts
+	modified:   packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+	modified:   packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+	modified:   packages/ui/src/stores/resumeWorkspaceStore.test.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	docs/change-briefs/day-80.md
+	docs/change-briefs/day-81.md
+	packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx
+	packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+### git branch --show-current
+
+```text
+feature/day-80-pathadvisor-resume-integration-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Working tree diff summary
+
+```text
+M	packages/ui/src/resume-workspace/resumeDiagnostics.ts
+M	packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+M	packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+M	packages/ui/src/stores/resumeWorkspaceStore.test.ts
+```
+
+```text
+ .../ui/src/resume-workspace/resumeDiagnostics.ts   |  45 +++
+ .../ui/src/screens/ResumeWorkspaceScreen.test.tsx  |   4 +-
+ packages/ui/src/screens/ResumeWorkspaceScreen.tsx  | 306 ++++++++-------------
+ .../ui/src/stores/resumeWorkspaceStore.test.ts     |  56 ++++
+ 4 files changed, 222 insertions(+), 189 deletions(-)
+```
+
+### Patch artifacts
+
+```text
+Mode  LastWriteTime       Length Name
+----  -------------       ------ ----
+-a--- 4/8/2026 4:21:32 PM  56846 day-80.patch
+-a--- 4/8/2026 4:21:32 PM  56846 day-80-this-run.patch
+```
+
+## 2026-04-08 - Day 81 Resume Variants and Diagnostics Snapshots v1
+
+### Branch
+
+`feature/day-81-resume-variants-diagnostics-snapshots-v1`
+
+### Summary
+
+Added a minimal but explicit frontend model for resume variants and
+diagnostics snapshots. The Resume Workspace store now preserves backend
+diagnostics and explanation payloads per variant and revision, updates a
+stable latest-snapshot pointer for the active variant, and keeps the last
+saved snapshot renderable while a new diagnostics request is loading.
+
+This slice stays local-first and avoids a broad persistence overhaul. It does
+not add frontend diagnostics logic, does not change backend semantics, and
+does not add comparison UI beyond preserving the data needed for later work.
+
+### Files changed
+
+- `packages/ui/src/stores/resumeWorkspaceStore.ts`
+- `packages/ui/src/stores/resumeWorkspaceStore.test.ts`
+- `packages/ui/src/resume-workspace/resumeDiagnostics.ts`
+- `packages/ui/src/resume-workspace/resumeDiagnostics.test.ts`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+- `docs/change-briefs/day-81.md`
+- `docs/merge-notes/current.md`
+
+### Variant model changes
+
+- `ResumeDraftSummary` now carries explicit variant identity and linkage:
+  - `variantId`
+  - `sourceVariantId`
+  - `currentRevisionId`
+  - `latestSnapshotId`
+- master vs tailored lineage is now stable enough for later comparison work
+- every draft-editing action now bumps `currentRevisionId`, including skills
+  edits
+
+### Snapshot model and lifecycle
+
+New persisted store concepts:
+
+- `diagnosticsSnapshots`
+- `diagnosticsSnapshotIdsByVariant`
+- `ResumeSnapshotMeta`
+- `ResumeDiagnosticsSnapshot`
+
+Snapshot records preserve:
+
+- snapshot id
+- variant id
+- revision id
+- backend diagnostics id
+- input hash
+- readiness band
+- overall summary
+- full backend response including explanations
+- evaluated timestamp
+- engine, ruleset, explainability, and knowledge-pack versions
+
+Evaluation flow now behaves as:
+
+1. build diagnostics request using the active variant revision id
+2. run backend diagnostics
+3. build a saved snapshot from the backend response
+4. attach that snapshot to the active variant as `latestSnapshotId`
+5. retain older snapshot ids for later comparison/history work
+6. avoid letting stale async responses overwrite a newer active revision
+
+### UI behavior
+
+- Resume Workspace builder and review shells now use the latest saved snapshot
+  when no fresh live review response is present
+- active variant identity and current revision are shown explicitly
+- latest evaluation timing is shown when a snapshot exists
+- diagnostics rail shows the latest saved snapshot id
+- refreshing diagnostics over an existing snapshot now keeps the last saved
+  evaluation visible instead of blanking the surface
+
+### Validation performed
+
+Targeted:
+
+- `pnpm test packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/resume-workspace/resumeDiagnostics.test.ts packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+  - passed
+- `pnpm exec eslint packages/ui/src/stores/resumeWorkspaceStore.ts packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/resume-workspace/resumeDiagnostics.ts packages/ui/src/resume-workspace/resumeDiagnostics.test.ts packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/screens/ResumeWorkspaceScreen.tsx packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+  - passed
+
+Full:
+
+- `pnpm test`
+  - passed
+  - `78` files, `1832` tests passed
+- `pnpm build`
+  - passed
+- `pnpm lint`
+  - failed due pre-existing repo-wide errors outside Day 81, including
+    legacy resume-builder and route files
+- `pnpm typecheck`
+  - failed due malformed generated `.next/dev/types/routes.d.ts` and
+    `.next/dev/types/validator.ts` in the current environment
+
+### Notes on carried worktree state
+
+The working tree still contains untracked Day 80 files from the prior slice:
+
+- `docs/change-briefs/day-80.md`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx`
+
+Day 81 builds on that existing state rather than rewriting it.
+
+### git status
+
+```text
+On branch feature/day-81-resume-variants-diagnostics-snapshots-v1
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   docs/merge-notes/current.md
+	modified:   packages/ui/src/resume-workspace/resumeDiagnostics.test.ts
+	modified:   packages/ui/src/resume-workspace/resumeDiagnostics.ts
+	modified:   packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+	modified:   packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+	modified:   packages/ui/src/stores/resumeWorkspaceStore.test.ts
+	modified:   packages/ui/src/stores/resumeWorkspaceStore.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	docs/change-briefs/day-80.md
+	packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx
+	packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+### git branch --show-current
+
+```text
+feature/day-81-resume-variants-diagnostics-snapshots-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Name          : day-81.patch
+Length        : 0
+LastWriteTime : 4/8/2026 4:45:01 PM
+
+Name          : day-81-this-run.patch
+Length        : 81583
+LastWriteTime : 4/8/2026 4:45:01 PM
+```
+
+---
+
+## Day 82 – Resume Snapshot History and Compare UX v1
+
+Added the first review-shell history and compare experience on top of the
+existing persisted snapshot foundation. The active variant can now surface its
+saved backend diagnostics snapshots, choose an older snapshot to view, and
+compare two saved snapshots without re-running diagnostics or inventing new
+frontend diagnostics logic.
+
+The compare UX stays bounded and uses saved backend truth only. It highlights:
+
+- readiness improved, unchanged, or regressed
+- category score deltas
+- added and resolved issue codes
+- added and resolved recommendation codes
+- saved PathAdvisor summary and top-priority continuity
+
+### Files changed
+
+- `packages/ui/src/stores/resumeWorkspaceStore.ts`
+- `packages/ui/src/stores/resumeWorkspaceStore.test.ts`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+- `packages/ui/src/resume-workspace/resumeSnapshotCompare.ts`
+- `packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts`
+- `packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx`
+- `packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx`
+- `docs/change-briefs/day-82.md`
+- `docs/merge-notes/current.md`
+
+### Behavior notes
+
+- compare state now lives in the existing persisted review shell state:
+  - `selectedSnapshotId`
+  - `compareSnapshotId`
+  - `isCompareMode`
+- the review shell can now render a selected saved snapshot instead of always
+  defaulting to the latest one
+- compare mode operates on saved backend outputs only
+- no new persistence system was introduced
+- no frontend diagnostics logic was added
+
+### Validation performed
+
+Targeted:
+
+- `pnpm vitest run packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx`
+  - passed
+- `pnpm exec eslint packages/ui/src/stores/resumeWorkspaceStore.ts packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.tsx packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/resumeSnapshotCompare.ts packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx`
+  - passed
+
+Typecheck:
+
+- `pnpm exec tsc --noEmit`
+  - failed due pre-existing generated `.next/dev/types/routes.d.ts` and
+    `.next/dev/types/validator.ts` syntax errors outside Day 82 changes
+
+Build:
+
+- not run
+  - repo-level type generation is already failing in `.next/dev/types/*`, so a
+    build result would not isolate Day 82 signal cleanly in the current
+    environment
+
+Human simulation gate:
+
+- not run
+- rationale: this slice is a bounded saved-snapshot review UX and the targeted
+  component plus store tests cover the deterministic compare behavior added in
+  this pass
+
+### Notes on carried worktree state
+
+This branch already contained Day 80 and Day 81 worktree state before Day 82
+implementation began. Day 82 builds on that existing branch state and does not
+rewrite or discard it.
+
+### git status
+
+```text
+ M docs/merge-notes/current.md
+ M packages/ui/src/resume-workspace/resumeDiagnostics.test.ts
+ M packages/ui/src/resume-workspace/resumeDiagnostics.ts
+ M packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+ M packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+ M packages/ui/src/stores/resumeWorkspaceStore.test.ts
+ M packages/ui/src/stores/resumeWorkspaceStore.ts
+?? docs/change-briefs/day-80.md
+?? docs/change-briefs/day-81.md
+?? docs/change-briefs/day-82.md
+?? packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx
+?? packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx
+?? packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx
+?? packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx
+?? packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts
+?? packages/ui/src/resume-workspace/resumeSnapshotCompare.ts
+```
+
+### git branch --show-current
+
+```text
+feature/day-82-resume-snapshot-history-compare-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+---
+
+## Day 85d – Builder-Native Rewrite UX Fix v1
+
+### Summary
+
+Day 85d corrects the rewrite workflow placement in the Resume Workspace.
+Rewrite assistance is no longer treated as a review-surface candidate panel.
+Review still points out that a rewrite is needed, but the actual loading,
+candidate review, and apply flow now lives in the builder where the user is
+editing text.
+
+### What was actually wrong
+
+- rewrite triggers and the candidate panel lived in review instead of builder
+- the loading experience was hidden behind the review shell rather than opening
+  immediately beside the editable text
+- recommendation matching only used recommendation code, which could bind the
+  wrong target when duplicate codes were present
+- dismiss and empty-result states were not clean enough for a builder-native
+  edit flow
+
+### Files changed
+
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx`
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.tsx`
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+- `packages/ui/src/resume-workspace/resumeRewrite.ts`
+- `packages/ui/src/resume-workspace/resumeRewrite.test.ts`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+- `packages/ui/src/stores/resumeWorkspaceStore.ts`
+- `packages/ui/src/stores/resumeWorkspaceStore.test.ts`
+- `docs/change-briefs/day-85d.md`
+- `docs/merge-notes/current.md`
+
+### Behavior changes
+
+- builder sections now surface grounded rewrite actions for summary,
+  experience, and skills when current diagnostics support them
+- review recommendation cards now use builder handoff language and no longer
+  host the primary candidate panel
+- the store now focuses the targeted builder section as soon as rewrite starts
+- the rewrite panel opens immediately in loading state and keeps original text
+  visible while the backend request runs
+- recommendation/explanation matching now uses code plus target refs rather
+  than code alone
+- ready-without-candidates now renders an honest empty state
+- dismiss hides the builder panel cleanly
+
+### Validation performed
+
+Targeted tests:
+
+- `pnpm vitest run packages/ui/src/resume-workspace/resumeRewrite.test.ts packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+  - passed
+  - `35` tests passed
+
+Targeted lint:
+
+- `pnpm exec eslint packages/ui/src/resume-workspace/resumeRewrite.ts packages/ui/src/resume-workspace/ResumeRewritePanel.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx packages/ui/src/resume-workspace/resumeRewrite.test.ts packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/stores/resumeWorkspaceStore.ts packages/ui/src/stores/resumeWorkspaceStore.test.ts packages/ui/src/screens/ResumeWorkspaceScreen.tsx packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+  - passed
+
+Build:
+
+- `pnpm build`
+  - passed
+
+Typecheck:
+
+- `pnpm exec tsc --noEmit`
+  - still fails due pre-existing unrelated errors outside Day 85d
+  - remaining failures are in older `packages/ui/src/resume-builder/__tests__/*`
+    files and pre-existing `resumeExportReadiness`, `resumeRevisionDiff`,
+    `resumeSnapshotCompare`, and `ResumeSnapshotPanels` files
+
+### Notes on carried worktree state
+
+This branch still carries uncommitted Day 80–85 workspace state. The Day 85d
+patch artifacts therefore reflect the current cumulative working tree rather
+than an isolated Day 85d-only commit range.
+
+### git status
+
+```text
+ A docs/change-briefs/day-80.md
+ A docs/change-briefs/day-81.md
+ A docs/change-briefs/day-82.md
+ A docs/change-briefs/day-83.md
+ A docs/change-briefs/day-84.md
+ M docs/merge-notes/current.md
+ A packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx
+ A packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx
+ A packages/ui/src/resume-workspace/ResumeExportReadinessCard.test.tsx
+ A packages/ui/src/resume-workspace/ResumeExportReadinessCard.tsx
+ A packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.test.tsx
+ A packages/ui/src/resume-workspace/ResumeRevisionDiffPanel.tsx
+ A packages/ui/src/resume-workspace/ResumeSnapshotPanels.test.tsx
+ A packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx
+ M packages/ui/src/resume-workspace/resumeDiagnostics.test.ts
+ M packages/ui/src/resume-workspace/resumeDiagnostics.ts
+ A packages/ui/src/resume-workspace/resumeExportReadiness.test.ts
+ A packages/ui/src/resume-workspace/resumeExportReadiness.ts
+ A packages/ui/src/resume-workspace/resumeRevisionDiff.test.ts
+ A packages/ui/src/resume-workspace/resumeRevisionDiff.ts
+ A packages/ui/src/resume-workspace/resumeSnapshotCompare.test.ts
+ A packages/ui/src/resume-workspace/resumeSnapshotCompare.ts
+ M packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx
+ M packages/ui/src/screens/ResumeWorkspaceScreen.tsx
+ M packages/ui/src/stores/resumeWorkspaceStore.test.ts
+ M packages/ui/src/stores/resumeWorkspaceStore.ts
+?? app/api/resume/rewrite-assist/
+?? docs/change-briefs/day-85.md
+?? docs/change-briefs/day-85d.md
+?? packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx
+?? packages/ui/src/resume-workspace/ResumeRewritePanel.tsx
+?? packages/ui/src/resume-workspace/resumeRewrite.test.ts
+?? packages/ui/src/resume-workspace/resumeRewrite.ts
+?? packages/ui/src/resume-workspace/resumeRewriteClient.ts
+```
+
+### git branch --show-current
+
+```text
+feature/day-85d-builder-native-rewrite-ux-fix-v1
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+(no output)
+```
+
+### git diff --stat develop...HEAD
+
+```text
+(no output)
+```
+
+### Patch artifacts
+
+```text
+Name          : day-85d.patch
+Length        : 0
+LastWriteTime : 4/8/2026 7:57:51 PM
+
+Name          : day-85d-this-run.patch
+Length        : 321950
+LastWriteTime : 4/8/2026 7:57:59 PM
+```
+
+### Day 85d follow-up — rewrite responsiveness and readability
+
+This follow-up keeps the builder-native rewrite architecture from Day 85d, but
+improves how the panel feels once the request starts.
+
+Changes in this pass:
+
+- added an active `Rewriting...` loading treatment inside the builder panel
+- added a client-side progressive reveal after candidates arrive so the panel
+  feels live without misrepresenting backend completion timing
+- increased contrast for original text and candidate text so the rewrite is
+  readable on the darker PathOS canvas
+
+Files changed in this follow-up:
+
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.tsx`
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+- `docs/change-briefs/day-85d.md`
+- `docs/merge-notes/current.md`
+
+Validation run:
+
+- `pnpm vitest run packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+  - passed
+  - `6` tests passed
+- `pnpm exec eslint packages/ui/src/resume-workspace/ResumeRewritePanel.tsx packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+  - passed
+- `pnpm build`
+  - passed
+
+Limitations:
+
+- this pass does not add true network streaming
+- the progressive reveal starts only after the backend candidate payload exists,
+  which keeps the loading state honest
+- repo-wide `pnpm exec tsc --noEmit` still fails because of pre-existing
+  unrelated issues outside this rewrite-panel pass
+
+### Day 86–90 — resume builder UX cohesion and trust pass
+
+This pass keeps the builder-native rewrite architecture intact, but tightens
+how the Builder reads as a workspace.
+
+What changed:
+
+- improved section navigation hierarchy so the active section and next-step
+  intent are clearer in the left rail
+- strengthened the resume canvas contrast and focus styling so the document no
+  longer blends into the darker shell
+- made builder section cards feel more grounded with clearer active,
+  highlighted, and guidance-attached states
+- attached PathAdvisor guidance more visibly to section editing with explicit
+  builder-side guidance labels and active-section guidance messaging in the
+  right rail
+- refined rewrite panel integration so it reads as attached to the current
+  builder section rather than a detached tool block
+
+Files changed:
+
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx`
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.tsx`
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+- `docs/change-briefs/day-86-90.md`
+- `docs/merge-notes/current.md`
+
+Validation run:
+
+- `pnpm vitest run packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+  - passed
+  - `16` tests passed
+- `pnpm exec eslint packages/ui/src/screens/ResumeWorkspaceScreen.tsx packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/resume-workspace/ResumeRewritePanel.tsx packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+  - passed
+- `pnpm build`
+  - passed
+
+Limitations:
+
+- this pass improves attachment, focus, and readability, but it does not add a
+  new navigation system or a richer per-bullet editor model
+- repo-wide `pnpm exec tsc --noEmit` was not widened into this pass because the
+  known failures are still outside the touched cohesion files
+
+### Day 91–93 — resume builder experience layer upgrade
+
+This pass builds on the existing builder-native rewrite and guidance model by
+making the document feel more alive and more visibly attached to PathAdvisor.
+
+What changed:
+
+- added lightweight anchor-line overlays inside active builder sections so
+  inline guidance and rewrite activity feel visually attached to the document
+- made section editing surfaces feel less boxy and more document-like while
+  keeping the existing textarea model intact
+- added stronger in-place cues such as guidance chips, rewrite-active chips,
+  and calmer direct-edit helper copy
+- tightened rewrite-presence feedback with small pulse indicators instead of
+  adding heavier animation or changing the trust model
+
+Files changed:
+
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx`
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx`
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.tsx`
+- `packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx`
+- `packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx`
+- `docs/change-briefs/day-91-93.md`
+- `docs/merge-notes/current.md`
+
+Validation run:
+
+- `pnpm vitest run packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+  - passed
+  - `16` tests passed
+- `pnpm exec eslint packages/ui/src/screens/ResumeWorkspaceScreen.tsx packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.tsx packages/ui/src/resume-workspace/PathAdvisorResumeGuidance.test.tsx packages/ui/src/resume-workspace/ResumeRewritePanel.tsx packages/ui/src/resume-workspace/ResumeRewritePanel.test.tsx`
+  - passed
+- `pnpm build`
+  - passed
+
+Limitations:
+
+- anchor lines are intentionally section-scoped and lightweight in this pass
+- this does not add bullet-level measurement or a richer editor model
+- repo-wide `pnpm exec tsc --noEmit` was not widened into this pass

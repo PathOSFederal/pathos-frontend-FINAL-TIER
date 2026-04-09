@@ -37,6 +37,13 @@ import {
   type ResumeTargetRef,
 } from '../resume-workspace/resumeDiagnostics';
 import { evaluateResumeDiagnostics } from '../resume-workspace/resumeDiagnosticsClient';
+import {
+  applyResumeRewriteCandidateToDraft,
+  createEmptyResumeRewriteState,
+  type ResumeRewriteRequest,
+  type ResumeRewriteState,
+} from '../resume-workspace/resumeRewrite';
+import { requestResumeRewriteCandidates } from '../resume-workspace/resumeRewriteClient';
 
 // ---------------------------------------------------------------------------
 // Storage key
@@ -93,14 +100,60 @@ export interface ResumeTargetContext {
   linkedJobId: string | null;
 }
 
-export interface ResumeDraftSummary {
+/**
+ * Resume variants are the durable unit the workspace operates on. The store
+ * still keeps the legacy `id` field for existing callers, but Day 81 makes the
+ * variant identity, revision identity, and latest saved diagnostics snapshot
+ * explicit so later comparison/history work has stable anchors.
+ */
+export interface ResumeVariantSummary {
   id: string;
+  variantId: string;
   name: string;
   mode: ResumeMode;
   status: ResumeWorkspaceStatus;
   updatedAt: string;
   targetContext: ResumeTargetContext;
   linkedToResumeId: string | null;
+  sourceVariantId: string | null;
+  currentRevisionId: string;
+  latestSnapshotId: string | null;
+}
+
+export type ResumeDraftSummary = ResumeVariantSummary;
+
+export interface ResumeSnapshotMeta {
+  engineVersion: string;
+  rulesetVersion: string;
+  explainabilityVersion: string;
+  knowledgePackVersion: string | null;
+}
+
+export interface ResumeDiagnosticsSnapshot {
+  snapshotId: string;
+  variantId: string;
+  revisionId: string | null;
+  diagnosticsId: string;
+  inputHash: string;
+  responseState: ResumeDiagnosticsEvaluateResponse['response_state'];
+  readinessBand: ResumeDiagnosticsEvaluateResponse['overall']['readiness_band'];
+  overallSummary: string;
+  response: ResumeDiagnosticsEvaluateResponse;
+  evaluatedAt: string;
+  meta: ResumeSnapshotMeta;
+}
+
+/**
+ * Day 83 adds the smallest safe prerequisite for real revision diffing:
+ * persisted content snapshots keyed by actual revision id. This keeps content
+ * history grounded in saved resume-body state instead of trying to infer body
+ * changes from diagnostics snapshots.
+ */
+export interface ResumeRevisionContentSnapshot {
+  revisionId: string;
+  variantId: string;
+  savedAt: string;
+  draft: ResumeDraft;
 }
 
 export interface ResumeDiagnosticIssue {
@@ -154,7 +207,18 @@ export interface ResumeReviewState {
   lastEvaluatedResumeId: string | null;
   lastEvaluatedAt: string | null;
   highlightedSections: ResumeBuilderSection[];
+  selectedSnapshotId: string | null;
+  compareSnapshotId: string | null;
+  isCompareMode: boolean;
 }
+
+/**
+ * Day 85d keeps rewrite assistance state explicit and builder-native. The
+ * store persists the resume workspace, but rewrite candidate state is still
+ * intentionally transient so stale candidate text does not silently survive
+ * unrelated edits.
+ */
+export type ResumeRewriteReviewState = ResumeRewriteState;
 
 export interface ResumePlaceholderReviewState {
   readinessBand: ResumeReadinessBand;
@@ -177,9 +241,14 @@ export interface ResumeWorkspaceState {
   activeResumeId: string | null;
   resumes: ResumeDraftSummary[];
   resumeDrafts: Record<string, ResumeDraft>;
+  diagnosticsSnapshots: Record<string, ResumeDiagnosticsSnapshot>;
+  diagnosticsSnapshotIdsByVariant: Record<string, string[]>;
+  revisionContentSnapshots: Record<string, ResumeRevisionContentSnapshot>;
+  revisionContentIdsByVariant: Record<string, string[]>;
   creationFlow: ResumeCreationFlowState;
   builder: ResumeBuilderState;
   review: ResumeReviewState;
+  rewrite: ResumeRewriteReviewState;
   ui: ResumeWorkspaceUiState;
 }
 
@@ -205,6 +274,13 @@ export interface ResumeWorkspaceActions {
   duplicateForAnotherTarget: () => string | null;
   markExportReady: () => void;
   evaluateActiveResumeDiagnostics: () => Promise<void>;
+  selectReviewSnapshot: (snapshotId: string | null) => void;
+  setCompareSnapshotId: (snapshotId: string | null) => void;
+  setCompareMode: (isCompareMode: boolean) => void;
+  clearSnapshotCompare: () => void;
+  requestResumeRewrite: (request: ResumeRewriteRequest) => Promise<void>;
+  dismissResumeRewrite: () => void;
+  applyResumeRewriteCandidate: (candidateId: string) => void;
   focusDiagnosticsTargetRefs: (targetRefs: ResumeTargetRef[]) => void;
   clearDiagnosticsHighlights: () => void;
   openDialog: (dialog: ResumeDialogType) => void;
@@ -276,6 +352,14 @@ function generateResumeId(): string {
   return 'resume-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 }
 
+function generateRevisionId(): string {
+  return 'revision-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+}
+
+function generateSnapshotId(): string {
+  return 'snapshot-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+}
+
 function buildWorkspaceName(mode: ResumeMode, goal: ResumeGoalMode, targetContext: ResumeTargetContext): string {
   if (mode === 'master') {
     return 'Master Resume';
@@ -342,7 +426,143 @@ function createEmptyReviewState(): ResumeReviewState {
     lastEvaluatedResumeId: null,
     lastEvaluatedAt: null,
     highlightedSections: [],
+    selectedSnapshotId: null,
+    compareSnapshotId: null,
+    isCompareMode: false,
   };
+}
+
+function createEmptyRewriteReviewState(): ResumeRewriteReviewState {
+  return createEmptyResumeRewriteState();
+}
+
+function buildSnapshotMetaFromResponse(
+  response: ResumeDiagnosticsEvaluateResponse
+): ResumeSnapshotMeta {
+  return {
+    engineVersion: response.meta.engine_version,
+    rulesetVersion: response.meta.ruleset_version,
+    explainabilityVersion: response.meta.explainability_version,
+    knowledgePackVersion:
+      typeof response.meta.knowledge_pack_version === 'string'
+        ? response.meta.knowledge_pack_version
+        : null,
+  };
+}
+
+export function buildResumeDiagnosticsSnapshot(
+  variantId: string,
+  revisionId: string | null,
+  response: ResumeDiagnosticsEvaluateResponse,
+  evaluatedAt: string
+): ResumeDiagnosticsSnapshot {
+  return {
+    snapshotId: generateSnapshotId(),
+    variantId: variantId,
+    revisionId:
+      typeof response.revision_id === 'string' && response.revision_id.trim().length > 0
+        ? response.revision_id
+        : revisionId,
+    diagnosticsId: response.diagnostics_id,
+    inputHash: response.meta.input_hash,
+    responseState: response.response_state,
+    readinessBand: response.overall.readiness_band,
+    overallSummary: response.overall.summary,
+    response: response,
+    evaluatedAt: evaluatedAt,
+    meta: buildSnapshotMetaFromResponse(response),
+  };
+}
+
+export function getLatestDiagnosticsSnapshotForVariant(
+  snapshots: Record<string, ResumeDiagnosticsSnapshot>,
+  variant: ResumeDraftSummary | null
+): ResumeDiagnosticsSnapshot | null {
+  if (variant === null || variant.latestSnapshotId === null) {
+    return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(snapshots, variant.latestSnapshotId)) {
+    return snapshots[variant.latestSnapshotId];
+  }
+  return null;
+}
+
+/**
+ * Day 82 history and compare UX needs a stable way to fetch the full saved
+ * snapshot list for one variant without re-deriving ids in every component.
+ * The store already persists the canonical ordering with newest first, so this
+ * helper simply resolves ids into snapshot objects and ignores stale ids.
+ */
+export function getDiagnosticsSnapshotsForVariant(
+  snapshots: Record<string, ResumeDiagnosticsSnapshot>,
+  snapshotIdsByVariant: Record<string, string[]>,
+  variantId: string | null
+): ResumeDiagnosticsSnapshot[] {
+  if (variantId === null || !Object.prototype.hasOwnProperty.call(snapshotIdsByVariant, variantId)) {
+    return [];
+  }
+  const ids = snapshotIdsByVariant[variantId];
+  const resolved: ResumeDiagnosticsSnapshot[] = [];
+  for (let i = 0; i < ids.length; i++) {
+    const snapshotId = ids[i];
+    if (Object.prototype.hasOwnProperty.call(snapshots, snapshotId)) {
+      resolved.push(snapshots[snapshotId]);
+    }
+  }
+  return resolved;
+}
+
+export function getDiagnosticsSnapshotById(
+  snapshots: Record<string, ResumeDiagnosticsSnapshot>,
+  snapshotId: string | null
+): ResumeDiagnosticsSnapshot | null {
+  if (snapshotId === null || !Object.prototype.hasOwnProperty.call(snapshots, snapshotId)) {
+    return null;
+  }
+  return snapshots[snapshotId];
+}
+
+export function buildResumeRevisionContentSnapshot(
+  variantId: string,
+  revisionId: string,
+  draft: ResumeDraft,
+  savedAt: string
+): ResumeRevisionContentSnapshot {
+  return {
+    revisionId: revisionId,
+    variantId: variantId,
+    savedAt: savedAt,
+    draft: deepCloneDraft(draft),
+  };
+}
+
+export function getRevisionContentSnapshotById(
+  snapshots: Record<string, ResumeRevisionContentSnapshot>,
+  revisionId: string | null
+): ResumeRevisionContentSnapshot | null {
+  if (revisionId === null || !Object.prototype.hasOwnProperty.call(snapshots, revisionId)) {
+    return null;
+  }
+  return snapshots[revisionId];
+}
+
+export function getRevisionContentSnapshotsForVariant(
+  snapshots: Record<string, ResumeRevisionContentSnapshot>,
+  revisionIdsByVariant: Record<string, string[]>,
+  variantId: string | null
+): ResumeRevisionContentSnapshot[] {
+  if (variantId === null || !Object.prototype.hasOwnProperty.call(revisionIdsByVariant, variantId)) {
+    return [];
+  }
+  const revisionIds = revisionIdsByVariant[variantId];
+  const resolved: ResumeRevisionContentSnapshot[] = [];
+  for (let i = 0; i < revisionIds.length; i++) {
+    const revisionId = revisionIds[i];
+    if (Object.prototype.hasOwnProperty.call(snapshots, revisionId)) {
+      resolved.push(snapshots[revisionId]);
+    }
+  }
+  return resolved;
 }
 
 export function deriveSectionCompletion(draft: ResumeDraft): Record<ResumeBuilderSection, boolean> {
@@ -591,6 +811,8 @@ function deriveStatusForSummary(
 function buildSeedState(): ResumeWorkspaceState {
   const masterId = 'resume-master-seed';
   const tailoredId = 'resume-tailored-seed';
+  const masterRevisionId = generateRevisionId();
+  const tailoredRevisionId = generateRevisionId();
   const masterDraft = buildSeedMasterDraft();
   const masterContext = createEmptyTargetContext();
   const masterSectionCompletion = deriveSectionCompletion(masterDraft);
@@ -610,26 +832,54 @@ function buildSeedState(): ResumeWorkspaceState {
     resumes: [
       {
         id: masterId,
+        variantId: masterId,
         name: 'Master Resume',
         mode: 'master',
         status: deriveStatusForSummary('master', masterSectionCompletion),
         updatedAt: new Date().toISOString(),
         targetContext: masterContext,
         linkedToResumeId: null,
+        sourceVariantId: null,
+        currentRevisionId: masterRevisionId,
+        latestSnapshotId: null,
       },
       {
         id: tailoredId,
+        variantId: tailoredId,
         name: 'Program Analyst Variant',
         mode: 'tailored',
         status: deriveStatusForSummary('tailored', tailoredSectionCompletion),
         updatedAt: new Date().toISOString(),
         targetContext: tailoredContext,
         linkedToResumeId: masterId,
+        sourceVariantId: masterId,
+        currentRevisionId: tailoredRevisionId,
+        latestSnapshotId: null,
       },
     ],
     resumeDrafts: {
       'resume-master-seed': masterDraft,
       'resume-tailored-seed': tailoredDraft,
+    },
+    diagnosticsSnapshots: {},
+    diagnosticsSnapshotIdsByVariant: {},
+    revisionContentSnapshots: {
+      [masterRevisionId]: buildResumeRevisionContentSnapshot(
+        masterId,
+        masterRevisionId,
+        masterDraft,
+        new Date().toISOString()
+      ),
+      [tailoredRevisionId]: buildResumeRevisionContentSnapshot(
+        tailoredId,
+        tailoredRevisionId,
+        tailoredDraft,
+        new Date().toISOString()
+      ),
+    },
+    revisionContentIdsByVariant: {
+      [masterId]: [masterRevisionId],
+      [tailoredId]: [tailoredRevisionId],
     },
     creationFlow: {
       currentStep: 'document-type',
@@ -643,6 +893,7 @@ function buildSeedState(): ResumeWorkspaceState {
       sectionCompletion: deriveSectionCompletion(masterDraft),
     },
     review: createEmptyReviewState(),
+    rewrite: createEmptyRewriteReviewState(),
     ui: {
       currentView: 'home',
       rightRailTab: 'guidance',
@@ -660,10 +911,152 @@ interface PersistedResumeWorkspaceState {
   activeResumeId: string | null;
   resumes: ResumeDraftSummary[];
   resumeDrafts: Record<string, ResumeDraft>;
+  diagnosticsSnapshots: Record<string, ResumeDiagnosticsSnapshot>;
+  diagnosticsSnapshotIdsByVariant: Record<string, string[]>;
+  revisionContentSnapshots: Record<string, ResumeRevisionContentSnapshot>;
+  revisionContentIdsByVariant: Record<string, string[]>;
   creationFlow: ResumeCreationFlowState;
   builder: ResumeBuilderState;
   review: ResumeReviewState;
   ui: ResumeWorkspaceUiState;
+}
+
+function normalizePersistedResumeSummary(
+  summary: unknown
+): ResumeDraftSummary | null {
+  if (summary === null || summary === undefined || typeof summary !== 'object') {
+    return null;
+  }
+  const typedSummary = summary as Record<string, unknown>;
+  if (
+    typeof typedSummary.id !== 'string' ||
+    typeof typedSummary.name !== 'string' ||
+    typeof typedSummary.mode !== 'string' ||
+    typeof typedSummary.status !== 'string' ||
+    typeof typedSummary.updatedAt !== 'string' ||
+    typeof typedSummary.targetContext !== 'object' ||
+    typedSummary.targetContext === null
+  ) {
+    return null;
+  }
+  const typedContext = typedSummary.targetContext as ResumeTargetContext;
+  return {
+    id: typedSummary.id,
+    variantId:
+      typeof typedSummary.variantId === 'string'
+        ? typedSummary.variantId
+        : typedSummary.id,
+    name: typedSummary.name,
+    mode: typedSummary.mode as ResumeMode,
+    status: typedSummary.status as ResumeWorkspaceStatus,
+    updatedAt: typedSummary.updatedAt,
+    targetContext: typedContext,
+    linkedToResumeId:
+      typeof typedSummary.linkedToResumeId === 'string'
+        ? typedSummary.linkedToResumeId
+        : null,
+    sourceVariantId:
+      typeof typedSummary.sourceVariantId === 'string'
+        ? typedSummary.sourceVariantId
+        : (
+            typeof typedSummary.linkedToResumeId === 'string'
+              ? typedSummary.linkedToResumeId
+              : null
+          ),
+    currentRevisionId:
+      typeof typedSummary.currentRevisionId === 'string'
+        ? typedSummary.currentRevisionId
+        : generateRevisionId(),
+    latestSnapshotId:
+      typeof typedSummary.latestSnapshotId === 'string'
+        ? typedSummary.latestSnapshotId
+        : null,
+  };
+}
+
+function normalizePersistedSnapshot(
+  snapshot: unknown
+): ResumeDiagnosticsSnapshot | null {
+  if (snapshot === null || snapshot === undefined || typeof snapshot !== 'object') {
+    return null;
+  }
+  const typedSnapshot = snapshot as Record<string, unknown>;
+  if (
+    typeof typedSnapshot.snapshotId !== 'string' ||
+    typeof typedSnapshot.variantId !== 'string' ||
+    typeof typedSnapshot.diagnosticsId !== 'string' ||
+    typeof typedSnapshot.inputHash !== 'string' ||
+    typeof typedSnapshot.responseState !== 'string' ||
+    typeof typedSnapshot.readinessBand !== 'string' ||
+    typeof typedSnapshot.overallSummary !== 'string' ||
+    typeof typedSnapshot.evaluatedAt !== 'string' ||
+    typeof typedSnapshot.response !== 'object' ||
+    typedSnapshot.response === null ||
+    typeof typedSnapshot.meta !== 'object' ||
+    typedSnapshot.meta === null
+  ) {
+    return null;
+  }
+  const typedMeta = typedSnapshot.meta as Record<string, unknown>;
+  return {
+    snapshotId: typedSnapshot.snapshotId,
+    variantId: typedSnapshot.variantId,
+    revisionId:
+      typeof typedSnapshot.revisionId === 'string'
+        ? typedSnapshot.revisionId
+        : null,
+    diagnosticsId: typedSnapshot.diagnosticsId,
+    inputHash: typedSnapshot.inputHash,
+    responseState:
+      typedSnapshot.responseState as ResumeDiagnosticsEvaluateResponse['response_state'],
+    readinessBand:
+      typedSnapshot.readinessBand as ResumeDiagnosticsEvaluateResponse['overall']['readiness_band'],
+    overallSummary: typedSnapshot.overallSummary,
+    response: typedSnapshot.response as ResumeDiagnosticsEvaluateResponse,
+    evaluatedAt: typedSnapshot.evaluatedAt,
+    meta: {
+      engineVersion:
+        typeof typedMeta.engineVersion === 'string'
+          ? typedMeta.engineVersion
+          : '',
+      rulesetVersion:
+        typeof typedMeta.rulesetVersion === 'string'
+          ? typedMeta.rulesetVersion
+          : '',
+      explainabilityVersion:
+        typeof typedMeta.explainabilityVersion === 'string'
+          ? typedMeta.explainabilityVersion
+          : '',
+      knowledgePackVersion:
+        typeof typedMeta.knowledgePackVersion === 'string'
+          ? typedMeta.knowledgePackVersion
+          : null,
+    },
+  };
+}
+
+function normalizePersistedRevisionContentSnapshot(
+  snapshot: unknown
+): ResumeRevisionContentSnapshot | null {
+  if (snapshot === null || snapshot === undefined || typeof snapshot !== 'object') {
+    return null;
+  }
+  const typedSnapshot = snapshot as Record<string, unknown>;
+  if (
+    typeof typedSnapshot.revisionId !== 'string' ||
+    typeof typedSnapshot.variantId !== 'string' ||
+    typeof typedSnapshot.savedAt !== 'string' ||
+    typeof typedSnapshot.draft !== 'object' ||
+    typedSnapshot.draft === null
+  ) {
+    return null;
+  }
+  return {
+    revisionId: typedSnapshot.revisionId,
+    variantId: typedSnapshot.variantId,
+    savedAt: typedSnapshot.savedAt,
+    draft: deepCloneDraft(typedSnapshot.draft as ResumeDraft),
+  };
 }
 
 function normalizePersistedReviewState(
@@ -703,6 +1096,18 @@ function normalizePersistedReviewState(
       Array.isArray(typedReview.highlightedSections)
         ? typedReview.highlightedSections as ResumeBuilderSection[]
         : emptyReview.highlightedSections,
+    selectedSnapshotId:
+      typeof typedReview.selectedSnapshotId === 'string'
+        ? typedReview.selectedSnapshotId
+        : emptyReview.selectedSnapshotId,
+    compareSnapshotId:
+      typeof typedReview.compareSnapshotId === 'string'
+        ? typedReview.compareSnapshotId
+        : emptyReview.compareSnapshotId,
+    isCompareMode:
+      typeof typedReview.isCompareMode === 'boolean'
+        ? typedReview.isCompareMode
+        : emptyReview.isCompareMode,
   };
 }
 
@@ -711,6 +1116,10 @@ function stateToPersist(state: ResumeWorkspaceState): PersistedResumeWorkspaceSt
     activeResumeId: state.activeResumeId,
     resumes: state.resumes,
     resumeDrafts: state.resumeDrafts,
+    diagnosticsSnapshots: state.diagnosticsSnapshots,
+    diagnosticsSnapshotIdsByVariant: state.diagnosticsSnapshotIdsByVariant,
+    revisionContentSnapshots: state.revisionContentSnapshots,
+    revisionContentIdsByVariant: state.revisionContentIdsByVariant,
     creationFlow: state.creationFlow,
     builder: state.builder,
     review: state.review,
@@ -731,13 +1140,107 @@ function loadPersistedState(): ResumeWorkspaceState {
     return buildSeedState();
   }
   const typedRaw = raw as unknown as PersistedResumeWorkspaceState;
+  const normalizedResumes: ResumeDraftSummary[] = [];
+  for (let i = 0; i < typedRaw.resumes.length; i++) {
+    const normalizedSummary = normalizePersistedResumeSummary(typedRaw.resumes[i]);
+    if (normalizedSummary !== null) {
+      normalizedResumes.push(normalizedSummary);
+    }
+  }
+  const normalizedSnapshots: Record<string, ResumeDiagnosticsSnapshot> = {};
+  const rawSnapshots =
+    typedRaw.diagnosticsSnapshots !== null &&
+    typedRaw.diagnosticsSnapshots !== undefined &&
+    typeof typedRaw.diagnosticsSnapshots === 'object'
+      ? typedRaw.diagnosticsSnapshots as Record<string, unknown>
+      : {};
+  const rawSnapshotKeys = Object.keys(rawSnapshots);
+  for (let i = 0; i < rawSnapshotKeys.length; i++) {
+    const snapshotKey = rawSnapshotKeys[i];
+    const normalizedSnapshot = normalizePersistedSnapshot(rawSnapshots[snapshotKey]);
+    if (normalizedSnapshot !== null) {
+      normalizedSnapshots[snapshotKey] = normalizedSnapshot;
+    }
+  }
+  const normalizedSnapshotIdsByVariant: Record<string, string[]> = {};
+  const rawSnapshotIdMap =
+    typedRaw.diagnosticsSnapshotIdsByVariant !== null &&
+    typedRaw.diagnosticsSnapshotIdsByVariant !== undefined &&
+    typeof typedRaw.diagnosticsSnapshotIdsByVariant === 'object'
+      ? typedRaw.diagnosticsSnapshotIdsByVariant as Record<string, unknown>
+      : {};
+  const variantKeys = Object.keys(rawSnapshotIdMap);
+  for (let i = 0; i < variantKeys.length; i++) {
+    const variantKey = variantKeys[i];
+    const rawIds = rawSnapshotIdMap[variantKey];
+    if (!Array.isArray(rawIds)) {
+      continue;
+    }
+    const nextIds: string[] = [];
+    for (let idIndex = 0; idIndex < rawIds.length; idIndex++) {
+      if (typeof rawIds[idIndex] === 'string') {
+        nextIds.push(rawIds[idIndex]);
+      }
+    }
+    normalizedSnapshotIdsByVariant[variantKey] = nextIds;
+  }
+  const normalizedRevisionContentSnapshots: Record<string, ResumeRevisionContentSnapshot> = {};
+  const rawRevisionContentSnapshots =
+    typedRaw.revisionContentSnapshots !== null &&
+    typedRaw.revisionContentSnapshots !== undefined &&
+    typeof typedRaw.revisionContentSnapshots === 'object'
+      ? typedRaw.revisionContentSnapshots as Record<string, unknown>
+      : {};
+  const rawRevisionContentKeys = Object.keys(rawRevisionContentSnapshots);
+  for (let i = 0; i < rawRevisionContentKeys.length; i++) {
+    const revisionContentKey = rawRevisionContentKeys[i];
+    const normalizedRevisionContentSnapshot = normalizePersistedRevisionContentSnapshot(
+      rawRevisionContentSnapshots[revisionContentKey]
+    );
+    if (normalizedRevisionContentSnapshot !== null) {
+      normalizedRevisionContentSnapshots[revisionContentKey] = normalizedRevisionContentSnapshot;
+    }
+  }
+  const normalizedRevisionContentIdsByVariant: Record<string, string[]> = {};
+  const rawRevisionIdMap =
+    typedRaw.revisionContentIdsByVariant !== null &&
+    typedRaw.revisionContentIdsByVariant !== undefined &&
+    typeof typedRaw.revisionContentIdsByVariant === 'object'
+      ? typedRaw.revisionContentIdsByVariant as Record<string, unknown>
+      : {};
+  const revisionVariantKeys = Object.keys(rawRevisionIdMap);
+  for (let i = 0; i < revisionVariantKeys.length; i++) {
+    const revisionVariantKey = revisionVariantKeys[i];
+    const rawIds = rawRevisionIdMap[revisionVariantKey];
+    if (!Array.isArray(rawIds)) {
+      continue;
+    }
+    const nextIds: string[] = [];
+    for (let idIndex = 0; idIndex < rawIds.length; idIndex++) {
+      if (typeof rawIds[idIndex] === 'string') {
+        nextIds.push(rawIds[idIndex]);
+      }
+    }
+    normalizedRevisionContentIdsByVariant[revisionVariantKey] = nextIds;
+  }
+  const seededRevisionContent = ensureRevisionContentSnapshotsExist(
+    normalizedResumes,
+    typedRaw.resumeDrafts,
+    normalizedRevisionContentSnapshots,
+    normalizedRevisionContentIdsByVariant
+  );
   return {
     activeResumeId: typedRaw.activeResumeId,
-    resumes: typedRaw.resumes,
+    resumes: normalizedResumes,
     resumeDrafts: typedRaw.resumeDrafts,
+    diagnosticsSnapshots: normalizedSnapshots,
+    diagnosticsSnapshotIdsByVariant: normalizedSnapshotIdsByVariant,
+    revisionContentSnapshots: seededRevisionContent.snapshots,
+    revisionContentIdsByVariant: seededRevisionContent.revisionIdsByVariant,
     creationFlow: typedRaw.creationFlow,
     builder: typedRaw.builder,
     review: normalizePersistedReviewState(typedRaw.review),
+    rewrite: createEmptyRewriteReviewState(),
     ui: typedRaw.ui,
   };
 }
@@ -782,26 +1285,239 @@ function getActiveSummary(state: ResumeWorkspaceState): ResumeDraftSummary | nul
   return null;
 }
 
-function refreshDerivedState(state: ResumeWorkspaceState): Partial<ResumeWorkspaceState> {
+function getResumeSummaryById(
+  resumes: ResumeDraftSummary[],
+  resumeId: string
+): ResumeDraftSummary | null {
+  for (let i = 0; i < resumes.length; i++) {
+    if (resumes[i].id === resumeId) {
+      return resumes[i];
+    }
+  }
+  return null;
+}
+
+function upsertDiagnosticsSnapshotForVariant(
+  resumes: ResumeDraftSummary[],
+  snapshots: Record<string, ResumeDiagnosticsSnapshot>,
+  snapshotIdsByVariant: Record<string, string[]>,
+  summary: ResumeDraftSummary,
+  snapshot: ResumeDiagnosticsSnapshot
+): {
+  snapshots: Record<string, ResumeDiagnosticsSnapshot>;
+  snapshotIdsByVariant: Record<string, string[]>;
+  resumes: ResumeDraftSummary[];
+} {
+  const nextSnapshots = Object.assign({}, snapshots);
+  nextSnapshots[snapshot.snapshotId] = snapshot;
+
+  const nextSnapshotIdsByVariant = Object.assign({}, snapshotIdsByVariant);
+  const previousIds =
+    Object.prototype.hasOwnProperty.call(snapshotIdsByVariant, summary.variantId)
+      ? snapshotIdsByVariant[summary.variantId]
+      : [];
+  const nextIds: string[] = [snapshot.snapshotId];
+  for (let i = 0; i < previousIds.length; i++) {
+    if (previousIds[i] !== snapshot.snapshotId) {
+      nextIds.push(previousIds[i]);
+    }
+  }
+  nextSnapshotIdsByVariant[summary.variantId] = nextIds;
+
+  const nextResumes = updateResumeSummary(
+    resumes,
+    summary.id,
+    function (currentSummary) {
+      return Object.assign({}, currentSummary, {
+        latestSnapshotId: snapshot.snapshotId,
+      });
+    }
+  );
+
+  return {
+    snapshots: nextSnapshots,
+    snapshotIdsByVariant: nextSnapshotIdsByVariant,
+    resumes: nextResumes,
+  };
+}
+
+function upsertRevisionContentSnapshotForVariant(
+  snapshots: Record<string, ResumeRevisionContentSnapshot>,
+  revisionIdsByVariant: Record<string, string[]>,
+  summary: ResumeDraftSummary,
+  draft: ResumeDraft,
+  savedAt: string
+): {
+  snapshots: Record<string, ResumeRevisionContentSnapshot>;
+  revisionIdsByVariant: Record<string, string[]>;
+} {
+  const snapshot = buildResumeRevisionContentSnapshot(
+    summary.variantId,
+    summary.currentRevisionId,
+    draft,
+    savedAt
+  );
+  const nextSnapshots = Object.assign({}, snapshots);
+  nextSnapshots[snapshot.revisionId] = snapshot;
+
+  const nextRevisionIdsByVariant = Object.assign({}, revisionIdsByVariant);
+  const previousIds =
+    Object.prototype.hasOwnProperty.call(revisionIdsByVariant, summary.variantId)
+      ? revisionIdsByVariant[summary.variantId]
+      : [];
+  const nextIds: string[] = [snapshot.revisionId];
+  for (let i = 0; i < previousIds.length; i++) {
+    if (previousIds[i] !== snapshot.revisionId) {
+      nextIds.push(previousIds[i]);
+    }
+  }
+  nextRevisionIdsByVariant[summary.variantId] = nextIds;
+
+  return {
+    snapshots: nextSnapshots,
+    revisionIdsByVariant: nextRevisionIdsByVariant,
+  };
+}
+
+function ensureRevisionContentSnapshotsExist(
+  resumes: ResumeDraftSummary[],
+  drafts: Record<string, ResumeDraft>,
+  snapshots: Record<string, ResumeRevisionContentSnapshot>,
+  revisionIdsByVariant: Record<string, string[]>
+): {
+  snapshots: Record<string, ResumeRevisionContentSnapshot>;
+  revisionIdsByVariant: Record<string, string[]>;
+} {
+  let nextSnapshots = snapshots;
+  let nextRevisionIdsByVariant = revisionIdsByVariant;
+  for (let i = 0; i < resumes.length; i++) {
+    const summary = resumes[i];
+    const draft =
+      Object.prototype.hasOwnProperty.call(drafts, summary.id)
+        ? drafts[summary.id]
+        : null;
+    if (draft === null || Object.prototype.hasOwnProperty.call(nextSnapshots, summary.currentRevisionId)) {
+      continue;
+    }
+    const upserted = upsertRevisionContentSnapshotForVariant(
+      nextSnapshots,
+      nextRevisionIdsByVariant,
+      summary,
+      draft,
+      summary.updatedAt
+    );
+    nextSnapshots = upserted.snapshots;
+    nextRevisionIdsByVariant = upserted.revisionIdsByVariant;
+  }
+  return {
+    snapshots: nextSnapshots,
+    revisionIdsByVariant: nextRevisionIdsByVariant,
+  };
+}
+
+/**
+ * Review-shell selection is variant-scoped. When the active variant changes or
+ * when snapshot history mutates, this helper keeps the selection deterministic:
+ * - prefer an explicitly selected snapshot when it still exists for the variant
+ * - otherwise fall back to the variant's latest snapshot
+ * - clear compare mode when the compare target disappears or matches the main
+ *   selected snapshot
+ */
+function syncReviewSnapshotSelection(
+  review: ResumeReviewState,
+  summary: ResumeDraftSummary | null,
+  snapshots: Record<string, ResumeDiagnosticsSnapshot>,
+  snapshotIdsByVariant: Record<string, string[]>
+): ResumeReviewState {
+  const nextReview = Object.assign({}, review);
+  const variantId = summary !== null ? summary.variantId : null;
+  const variantSnapshots = getDiagnosticsSnapshotsForVariant(
+    snapshots,
+    snapshotIdsByVariant,
+    variantId
+  );
+  let selectedSnapshotId: string | null = null;
+  if (review.selectedSnapshotId !== null) {
+    for (let i = 0; i < variantSnapshots.length; i++) {
+      if (variantSnapshots[i].snapshotId === review.selectedSnapshotId) {
+        selectedSnapshotId = review.selectedSnapshotId;
+        break;
+      }
+    }
+  }
+  if (selectedSnapshotId === null && summary !== null && summary.latestSnapshotId !== null) {
+    selectedSnapshotId = summary.latestSnapshotId;
+  }
+
+  let compareSnapshotId: string | null = null;
+  if (review.compareSnapshotId !== null && review.compareSnapshotId !== selectedSnapshotId) {
+    for (let i = 0; i < variantSnapshots.length; i++) {
+      if (variantSnapshots[i].snapshotId === review.compareSnapshotId) {
+        compareSnapshotId = review.compareSnapshotId;
+        break;
+      }
+    }
+  }
+
+  nextReview.selectedSnapshotId = selectedSnapshotId;
+  nextReview.compareSnapshotId = compareSnapshotId;
+  nextReview.isCompareMode = review.isCompareMode && compareSnapshotId !== null;
+  return nextReview;
+}
+
+function refreshDerivedState(
+  state: ResumeWorkspaceState,
+  options?: {
+    bumpRevisionId?: boolean;
+  }
+): Partial<ResumeWorkspaceState> {
   const activeDraft = getActiveDraft(state);
   const activeSummary = getActiveSummary(state);
   const sectionCompletion = deriveSectionCompletion(activeDraft);
   let nextResumes = state.resumes;
+  let nextRevisionContentSnapshots = state.revisionContentSnapshots;
+  let nextRevisionContentIdsByVariant = state.revisionContentIdsByVariant;
+  const shouldBumpRevisionId =
+    options !== undefined && options.bumpRevisionId === true;
   if (activeSummary !== null) {
     nextResumes = updateResumeSummary(state.resumes, activeSummary.id, function (summary) {
       return Object.assign({}, summary, {
         updatedAt: new Date().toISOString(),
         status: deriveStatusForSummary(summary.mode, sectionCompletion),
+        currentRevisionId:
+          shouldBumpRevisionId ? generateRevisionId() : summary.currentRevisionId,
       });
     });
+    const nextActiveSummary = getResumeSummaryById(nextResumes, activeSummary.id);
+    if (nextActiveSummary !== null) {
+      const revisionSnapshotResult = upsertRevisionContentSnapshotForVariant(
+        state.revisionContentSnapshots,
+        state.revisionContentIdsByVariant,
+        nextActiveSummary,
+        activeDraft,
+        nextActiveSummary.updatedAt
+      );
+      nextRevisionContentSnapshots = revisionSnapshotResult.snapshots;
+      nextRevisionContentIdsByVariant = revisionSnapshotResult.revisionIdsByVariant;
+    }
   }
   return {
     resumes: nextResumes,
+    revisionContentSnapshots: nextRevisionContentSnapshots,
+    revisionContentIdsByVariant: nextRevisionContentIdsByVariant,
     builder: {
       activeSection: state.builder.activeSection,
       sectionCompletion: sectionCompletion,
     },
-    review: createEmptyReviewState(),
+    review: syncReviewSnapshotSelection(
+      createEmptyReviewState(),
+      activeSummary !== null
+        ? getResumeSummaryById(nextResumes, activeSummary.id)
+        : null,
+      state.diagnosticsSnapshots,
+      state.diagnosticsSnapshotIdsByVariant
+    ),
+    rewrite: createEmptyRewriteReviewState(),
   };
 }
 
@@ -816,20 +1532,39 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
     activeResumeId: initialState.activeResumeId,
     resumes: initialState.resumes,
     resumeDrafts: initialState.resumeDrafts,
+    diagnosticsSnapshots: initialState.diagnosticsSnapshots,
+    diagnosticsSnapshotIdsByVariant: initialState.diagnosticsSnapshotIdsByVariant,
+    revisionContentSnapshots: initialState.revisionContentSnapshots,
+    revisionContentIdsByVariant: initialState.revisionContentIdsByVariant,
     creationFlow: initialState.creationFlow,
     builder: initialState.builder,
     review: initialState.review,
+    rewrite: initialState.rewrite,
     ui: initialState.ui,
 
     hydrate: function () {
       const persisted = loadPersistedState();
+      const hydratedSummary =
+        persisted.activeResumeId !== null
+          ? getResumeSummaryById(persisted.resumes, persisted.activeResumeId)
+          : null;
       set({
         activeResumeId: persisted.activeResumeId,
         resumes: persisted.resumes,
         resumeDrafts: persisted.resumeDrafts,
+        diagnosticsSnapshots: persisted.diagnosticsSnapshots,
+        diagnosticsSnapshotIdsByVariant: persisted.diagnosticsSnapshotIdsByVariant,
+        revisionContentSnapshots: persisted.revisionContentSnapshots,
+        revisionContentIdsByVariant: persisted.revisionContentIdsByVariant,
         creationFlow: persisted.creationFlow,
         builder: persisted.builder,
-        review: persisted.review,
+        review: syncReviewSnapshotSelection(
+          persisted.review,
+          hydratedSummary,
+          persisted.diagnosticsSnapshots,
+          persisted.diagnosticsSnapshotIdsByVariant
+        ),
+        rewrite: createEmptyRewriteReviewState(),
         ui: persisted.ui,
       });
     },
@@ -851,9 +1586,19 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
         activeResumeId: resumeId,
       });
       const derived = refreshDerivedState(nextState);
+      const nextSummary =
+        resumeId !== null ? getResumeSummaryById(state.resumes, resumeId) : null;
+      const nextReview = syncReviewSnapshotSelection(
+        createEmptyReviewState(),
+        nextSummary,
+        state.diagnosticsSnapshots,
+        state.diagnosticsSnapshotIdsByVariant
+      );
       set(
         Object.assign({}, derived, {
           activeResumeId: resumeId,
+          review: nextReview,
+          rewrite: createEmptyRewriteReviewState(),
           ui: Object.assign({}, state.ui, { toastMessage: null }),
         })
       );
@@ -909,12 +1654,16 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       const sectionCompletion = deriveSectionCompletion(baseDraft);
       const summary: ResumeDraftSummary = {
         id: resumeId,
+        variantId: resumeId,
         name: buildWorkspaceName(mode, state.creationFlow.goalMode, state.creationFlow.targetContext),
         mode: mode,
         status: deriveStatusForSummary(mode, sectionCompletion),
         updatedAt: new Date().toISOString(),
         targetContext: cloneTargetContext(state.creationFlow.targetContext),
         linkedToResumeId: mode === 'tailored' ? 'resume-master-seed' : null,
+        sourceVariantId: mode === 'tailored' ? 'resume-master-seed' : null,
+        currentRevisionId: generateRevisionId(),
+        latestSnapshotId: null,
       };
       const nextResumes: ResumeDraftSummary[] = [];
       for (let i = 0; i < state.resumes.length; i++) {
@@ -924,11 +1673,22 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
 
       const nextDrafts: Record<string, ResumeDraft> = Object.assign({}, state.resumeDrafts);
       nextDrafts[resumeId] = baseDraft;
+      const seededRevisionContent = upsertRevisionContentSnapshotForVariant(
+        state.revisionContentSnapshots,
+        state.revisionContentIdsByVariant,
+        summary,
+        baseDraft,
+        summary.updatedAt
+      );
 
       set({
         activeResumeId: resumeId,
         resumes: nextResumes,
         resumeDrafts: nextDrafts,
+        diagnosticsSnapshots: state.diagnosticsSnapshots,
+        diagnosticsSnapshotIdsByVariant: state.diagnosticsSnapshotIdsByVariant,
+        revisionContentSnapshots: seededRevisionContent.snapshots,
+        revisionContentIdsByVariant: seededRevisionContent.revisionIdsByVariant,
         creationFlow: {
           currentStep: 'document-type',
           documentType: 'resume',
@@ -941,6 +1701,7 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
           sectionCompletion: sectionCompletion,
         },
         review: createEmptyReviewState(),
+        rewrite: createEmptyRewriteReviewState(),
         ui: Object.assign({}, state.ui, {
           currentView: 'builder',
           toastMessage: 'Resume workspace created.',
@@ -974,8 +1735,15 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       const nextDrafts = Object.assign({}, state.resumeDrafts);
       nextDrafts[state.activeResumeId] = draft;
       const nextState = Object.assign({}, state, { resumeDrafts: nextDrafts });
-      const derived = refreshDerivedState(nextState);
-      set(Object.assign({}, derived, { resumeDrafts: nextDrafts }));
+      const derived = refreshDerivedState(nextState, {
+        bumpRevisionId: true,
+      });
+      set(
+        Object.assign({}, derived, {
+          resumeDrafts: nextDrafts,
+          rewrite: createEmptyRewriteReviewState(),
+        })
+      );
       get().persist();
     },
 
@@ -989,8 +1757,15 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       const nextDrafts = Object.assign({}, state.resumeDrafts);
       nextDrafts[state.activeResumeId] = draft;
       const nextState = Object.assign({}, state, { resumeDrafts: nextDrafts });
-      const derived = refreshDerivedState(nextState);
-      set(Object.assign({}, derived, { resumeDrafts: nextDrafts }));
+      const derived = refreshDerivedState(nextState, {
+        bumpRevisionId: true,
+      });
+      set(
+        Object.assign({}, derived, {
+          resumeDrafts: nextDrafts,
+          rewrite: createEmptyRewriteReviewState(),
+        })
+      );
       get().persist();
     },
 
@@ -1018,8 +1793,15 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       const nextDrafts = Object.assign({}, state.resumeDrafts);
       nextDrafts[state.activeResumeId] = draft;
       const nextState = Object.assign({}, state, { resumeDrafts: nextDrafts });
-      const derived = refreshDerivedState(nextState);
-      set(Object.assign({}, derived, { resumeDrafts: nextDrafts }));
+      const derived = refreshDerivedState(nextState, {
+        bumpRevisionId: true,
+      });
+      set(
+        Object.assign({}, derived, {
+          resumeDrafts: nextDrafts,
+          rewrite: createEmptyRewriteReviewState(),
+        })
+      );
       get().persist();
     },
 
@@ -1044,8 +1826,15 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       const nextDrafts = Object.assign({}, state.resumeDrafts);
       nextDrafts[state.activeResumeId] = draft;
       const nextState = Object.assign({}, state, { resumeDrafts: nextDrafts });
-      const derived = refreshDerivedState(nextState);
-      set(Object.assign({}, derived, { resumeDrafts: nextDrafts }));
+      const derived = refreshDerivedState(nextState, {
+        bumpRevisionId: true,
+      });
+      set(
+        Object.assign({}, derived, {
+          resumeDrafts: nextDrafts,
+          rewrite: createEmptyRewriteReviewState(),
+        })
+      );
       get().persist();
     },
 
@@ -1073,8 +1862,15 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       const nextDrafts = Object.assign({}, state.resumeDrafts);
       nextDrafts[state.activeResumeId] = draft;
       const nextState = Object.assign({}, state, { resumeDrafts: nextDrafts });
-      const derived = refreshDerivedState(nextState);
-      set(Object.assign({}, derived, { resumeDrafts: nextDrafts }));
+      const derived = refreshDerivedState(nextState, {
+        bumpRevisionId: true,
+      });
+      set(
+        Object.assign({}, derived, {
+          resumeDrafts: nextDrafts,
+          rewrite: createEmptyRewriteReviewState(),
+        })
+      );
       get().persist();
     },
 
@@ -1088,6 +1884,7 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
           mode: 'master' as ResumeMode,
           name: 'Master Resume',
           linkedToResumeId: null,
+          sourceVariantId: null,
         });
       });
       const nextState = Object.assign({}, state, { resumes: nextResumes });
@@ -1121,13 +1918,28 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       const nextResumes: ResumeDraftSummary[] = [];
       nextResumes.push({
         id: resumeId,
+        variantId: resumeId,
         name: buildWorkspaceName('tailored', 'tailor-to-job', nextContext),
         mode: 'tailored',
         status: deriveStatusForSummary('tailored', nextSectionCompletion),
         updatedAt: new Date().toISOString(),
         targetContext: nextContext,
         linkedToResumeId: currentSummary.mode === 'master' ? currentSummary.id : currentSummary.linkedToResumeId,
+        sourceVariantId:
+          currentSummary.mode === 'master'
+            ? currentSummary.id
+            : currentSummary.variantId,
+        currentRevisionId: generateRevisionId(),
+        latestSnapshotId: null,
       });
+      const createdSummary = nextResumes[0];
+      const seededRevisionContent = upsertRevisionContentSnapshotForVariant(
+        state.revisionContentSnapshots,
+        state.revisionContentIdsByVariant,
+        createdSummary,
+        nextDrafts[resumeId],
+        createdSummary.updatedAt
+      );
       for (let i = 0; i < state.resumes.length; i++) {
         nextResumes.push(state.resumes[i]);
       }
@@ -1135,11 +1947,16 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
         activeResumeId: resumeId,
         resumes: nextResumes,
         resumeDrafts: nextDrafts,
+        diagnosticsSnapshots: state.diagnosticsSnapshots,
+        diagnosticsSnapshotIdsByVariant: state.diagnosticsSnapshotIdsByVariant,
+        revisionContentSnapshots: seededRevisionContent.snapshots,
+        revisionContentIdsByVariant: seededRevisionContent.revisionIdsByVariant,
         builder: {
           activeSection: state.builder.activeSection,
           sectionCompletion: nextSectionCompletion,
         },
         review: createEmptyReviewState(),
+        rewrite: createEmptyRewriteReviewState(),
         ui: Object.assign({}, state.ui, {
           activeDialog: null,
           toastMessage: 'Tailored variant created.',
@@ -1170,13 +1987,24 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       const duplicateSectionCompletion = deriveSectionCompletion(duplicateDraft);
       const duplicateSummary: ResumeDraftSummary = {
         id: duplicateId,
+        variantId: duplicateId,
         name: currentSummary.name + ' Copy',
         mode: currentSummary.mode,
         status: deriveStatusForSummary(currentSummary.mode, duplicateSectionCompletion),
         updatedAt: new Date().toISOString(),
         targetContext: duplicateContext,
         linkedToResumeId: currentSummary.linkedToResumeId,
+        sourceVariantId: currentSummary.variantId,
+        currentRevisionId: generateRevisionId(),
+        latestSnapshotId: null,
       };
+      const seededRevisionContent = upsertRevisionContentSnapshotForVariant(
+        state.revisionContentSnapshots,
+        state.revisionContentIdsByVariant,
+        duplicateSummary,
+        duplicateDraft,
+        duplicateSummary.updatedAt
+      );
       const nextResumes: ResumeDraftSummary[] = [];
       nextResumes.push(duplicateSummary);
       for (let i = 0; i < state.resumes.length; i++) {
@@ -1186,11 +2014,16 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
         activeResumeId: duplicateId,
         resumes: nextResumes,
         resumeDrafts: nextDrafts,
+        diagnosticsSnapshots: state.diagnosticsSnapshots,
+        diagnosticsSnapshotIdsByVariant: state.diagnosticsSnapshotIdsByVariant,
+        revisionContentSnapshots: seededRevisionContent.snapshots,
+        revisionContentIdsByVariant: seededRevisionContent.revisionIdsByVariant,
         builder: {
           activeSection: state.builder.activeSection,
           sectionCompletion: duplicateSectionCompletion,
         },
         review: createEmptyReviewState(),
+        rewrite: createEmptyRewriteReviewState(),
         ui: Object.assign({}, state.ui, {
           activeDialog: null,
           toastMessage: 'Duplicate created for a new target.',
@@ -1225,10 +2058,11 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       const state = get();
       const summary = getActiveSummary(state);
       if (summary === null) {
-        set({
-          review: Object.assign({}, createEmptyReviewState(), {
-            status: 'error' as ResumeDiagnosticsStatus,
-            errorMessage: 'Select a resume before running diagnostics.',
+      set({
+        rewrite: createEmptyRewriteReviewState(),
+        review: Object.assign({}, createEmptyReviewState(), {
+          status: 'error' as ResumeDiagnosticsStatus,
+          errorMessage: 'Select a resume before running diagnostics.',
           }),
         });
         get().persist();
@@ -1236,7 +2070,10 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       }
 
       const request = buildResumeDiagnosticsRequest(summary, getActiveDraft(state));
+      const requestedVariantId = summary.variantId;
+      const requestedRevisionId = summary.currentRevisionId;
       set({
+        rewrite: createEmptyRewriteReviewState(),
         review: Object.assign({}, createEmptyReviewState(), {
           status: 'loading' as ResumeDiagnosticsStatus,
           request: request,
@@ -1247,28 +2084,260 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
 
       const result = await evaluateResumeDiagnostics(request);
       if (!result.ok || result.response === null) {
+        const latestState = get();
+        const latestSummary = getResumeSummaryById(latestState.resumes, summary.id);
+        const isStillCurrent =
+          latestSummary !== null &&
+          latestSummary.variantId === requestedVariantId &&
+          latestSummary.currentRevisionId === requestedRevisionId;
+        if (isStillCurrent) {
+          set({
+            rewrite: createEmptyRewriteReviewState(),
+            review: Object.assign({}, createEmptyReviewState(), {
+              status: result.unavailable ? 'unavailable' as ResumeDiagnosticsStatus : 'error' as ResumeDiagnosticsStatus,
+              request: request,
+              errorMessage: result.errorMessage,
+              lastEvaluatedResumeId: summary.id,
+              lastEvaluatedAt: new Date().toISOString(),
+            }),
+          });
+        }
+        get().persist();
+        return;
+      }
+
+      const evaluatedAt = new Date().toISOString();
+      const latestState = get();
+      const latestSummary = getResumeSummaryById(latestState.resumes, summary.id);
+      if (latestSummary === null) {
+        get().persist();
+        return;
+      }
+      const snapshot = buildResumeDiagnosticsSnapshot(
+        latestSummary.variantId,
+        latestSummary.currentRevisionId,
+        result.response,
+        evaluatedAt
+      );
+      const snapshotResult = upsertDiagnosticsSnapshotForVariant(
+        latestState.resumes,
+        latestState.diagnosticsSnapshots,
+        latestState.diagnosticsSnapshotIdsByVariant,
+        latestSummary,
+        snapshot
+      );
+      const isStillCurrent =
+        latestSummary.variantId === requestedVariantId &&
+        latestSummary.currentRevisionId === requestedRevisionId;
+      const nextState: Partial<ResumeWorkspaceState> = {
+        resumes: snapshotResult.resumes,
+        diagnosticsSnapshots: snapshotResult.snapshots,
+        diagnosticsSnapshotIdsByVariant: snapshotResult.snapshotIdsByVariant,
+      };
+      if (isStillCurrent) {
+        nextState.review = syncReviewSnapshotSelection(
+          Object.assign({}, createEmptyReviewState(), {
+          status: result.response.response_state,
+          request: request,
+          response: result.response,
+          lastEvaluatedResumeId: summary.id,
+          lastEvaluatedAt: evaluatedAt,
+          selectedSnapshotId: snapshot.snapshotId,
+        }),
+          snapshotResult.resumes[0].id === latestSummary.id
+            ? snapshotResult.resumes[0]
+            : getResumeSummaryById(snapshotResult.resumes, latestSummary.id),
+          snapshotResult.snapshots,
+          snapshotResult.snapshotIdsByVariant
+        );
+      }
+      nextState.rewrite = createEmptyRewriteReviewState();
+      set(nextState);
+      get().persist();
+    },
+
+    selectReviewSnapshot: function (snapshotId) {
+      const state = get();
+      const activeSummary = getActiveSummary(state);
+      const syncedReview = syncReviewSnapshotSelection(
+        Object.assign({}, state.review, {
+          selectedSnapshotId: snapshotId,
+        }),
+        activeSummary,
+        state.diagnosticsSnapshots,
+        state.diagnosticsSnapshotIdsByVariant
+      );
+      set({
+        review: syncedReview,
+      });
+      get().persist();
+    },
+
+    setCompareSnapshotId: function (snapshotId) {
+      const state = get();
+      const activeSummary = getActiveSummary(state);
+      const syncedReview = syncReviewSnapshotSelection(
+        Object.assign({}, state.review, {
+          compareSnapshotId: snapshotId,
+          isCompareMode: snapshotId !== null,
+        }),
+        activeSummary,
+        state.diagnosticsSnapshots,
+        state.diagnosticsSnapshotIdsByVariant
+      );
+      set({
+        review: syncedReview,
+      });
+      get().persist();
+    },
+
+    setCompareMode: function (isCompareMode) {
+      const state = get();
+      const activeSummary = getActiveSummary(state);
+      const syncedReview = syncReviewSnapshotSelection(
+        Object.assign({}, state.review, {
+          isCompareMode: isCompareMode,
+        }),
+        activeSummary,
+        state.diagnosticsSnapshots,
+        state.diagnosticsSnapshotIdsByVariant
+      );
+      set({
+        review: syncedReview,
+      });
+      get().persist();
+    },
+
+    clearSnapshotCompare: function () {
+      set({
+        review: Object.assign({}, get().review, {
+          compareSnapshotId: null,
+          isCompareMode: false,
+        }),
+      });
+      get().persist();
+    },
+
+    requestResumeRewrite: async function (request) {
+      const currentBuilder = get().builder;
+      const targetSection =
+        request.target.section_id === 'summary' ||
+        request.target.section_id === 'experience' ||
+        request.target.section_id === 'skills'
+          ? request.target.section_id
+          : currentBuilder.activeSection;
+      set({
+        builder: Object.assign({}, currentBuilder, {
+          activeSection: targetSection,
+        }),
+        rewrite: {
+          status: 'loading',
+          request: request,
+          candidates: [],
+          errorMessage: null,
+          appliedCandidateId: null,
+        },
+      });
+      get().persist();
+
+      const result = await requestResumeRewriteCandidates(request);
+      if (!result.ok || result.response === null) {
         set({
-          review: Object.assign({}, createEmptyReviewState(), {
-            status: result.unavailable ? 'unavailable' as ResumeDiagnosticsStatus : 'error' as ResumeDiagnosticsStatus,
+          rewrite: {
+            status: result.unavailable ? 'unavailable' : 'error',
             request: request,
+            candidates: [],
             errorMessage: result.errorMessage,
-            lastEvaluatedResumeId: summary.id,
-            lastEvaluatedAt: new Date().toISOString(),
-          }),
+            appliedCandidateId: null,
+          },
         });
         get().persist();
         return;
       }
 
       set({
-        review: Object.assign({}, createEmptyReviewState(), {
-          status: result.response.response_state,
+        rewrite: {
+          status: 'ready',
           request: request,
-          response: result.response,
-          lastEvaluatedResumeId: summary.id,
-          lastEvaluatedAt: new Date().toISOString(),
-        }),
+          candidates: result.response.candidates,
+          errorMessage: null,
+          appliedCandidateId: null,
+        },
       });
+      get().persist();
+    },
+
+    dismissResumeRewrite: function () {
+      set({
+        rewrite: {
+          status: 'dismissed',
+          request: null,
+          candidates: [],
+          errorMessage: null,
+          appliedCandidateId: null,
+        },
+      });
+      get().persist();
+    },
+
+    applyResumeRewriteCandidate: function (candidateId) {
+      const state = get();
+      if (state.activeResumeId === null || state.rewrite.request === null) {
+        return;
+      }
+
+      let selectedCandidate = null;
+      for (let i = 0; i < state.rewrite.candidates.length; i++) {
+        if (state.rewrite.candidates[i].candidate_id === candidateId) {
+          selectedCandidate = state.rewrite.candidates[i];
+          break;
+        }
+      }
+      if (selectedCandidate === null) {
+        return;
+      }
+
+      const applyResult = applyResumeRewriteCandidateToDraft(
+        getActiveDraft(state),
+        state.rewrite.request,
+        selectedCandidate
+      );
+      if (applyResult.nextDraft === null || applyResult.appliedSectionId === null) {
+        set({
+          rewrite: Object.assign({}, state.rewrite, {
+            status: 'error' as const,
+            errorMessage:
+              'PathOS could not apply that rewrite to the current draft. Re-run diagnostics and request a fresh suggestion.',
+          }),
+        });
+        get().persist();
+        return;
+      }
+
+      const nextDrafts = Object.assign({}, state.resumeDrafts);
+      nextDrafts[state.activeResumeId] = applyResult.nextDraft;
+      const nextState = Object.assign({}, state, { resumeDrafts: nextDrafts });
+      const derived = refreshDerivedState(nextState, {
+        bumpRevisionId: true,
+      });
+      set(
+        Object.assign({}, derived, {
+          resumeDrafts: nextDrafts,
+          builder: Object.assign({}, state.builder, {
+            activeSection: applyResult.appliedSectionId,
+          }),
+          rewrite: {
+            status: 'applied',
+            request: state.rewrite.request,
+            candidates: state.rewrite.candidates,
+            errorMessage: null,
+            appliedCandidateId: candidateId,
+          },
+          ui: Object.assign({}, state.ui, {
+            toastMessage: 'Rewrite applied. Re-run diagnostics to refresh backend guidance.',
+          }),
+        })
+      );
       get().persist();
     },
 
