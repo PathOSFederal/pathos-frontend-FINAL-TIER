@@ -65,6 +65,9 @@ describe('ResumeWorkspaceScreen', function () {
     expect(output).toContain('Resume canvas');
     expect(output).toContain('Sections');
     expect(output).toContain('Right rail');
+    expect(output).toContain('Attached to active section');
+    expect(output).toContain('Focus guidance');
+    expect(output).toContain('Click into the section to edit directly.');
   });
 
   it('renders a resume-not-found fallback for an invalid builder resume id', function () {
@@ -76,7 +79,15 @@ describe('ResumeWorkspaceScreen', function () {
   it('renders the dedicated review shell', function () {
     const output = renderInNavigation(<ResumeWorkspaceScreen view="review" resumeId="resume-master-seed" />);
     expect(output).toContain('Review / Optimize');
-    expect(output).toContain('Overall readiness band');
-    expect(output).toContain('Category breakdown');
+    expect(output).toContain('Export readiness');
+    expect(output).toContain('PathAdvisor summary');
+    expect(output).toContain('Key takeaways');
   });
+
+  it('keeps review as a handoff surface instead of rendering the rewrite panel there', function () {
+    const output = renderInNavigation(<ResumeWorkspaceScreen view="review" resumeId="resume-master-seed" />);
+    expect(output).toContain('Rewrite suggestions open in the builder');
+    expect(output).not.toContain('AI rewrite assistance');
+  });
+
 });

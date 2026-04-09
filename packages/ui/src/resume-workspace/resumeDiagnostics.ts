@@ -150,6 +150,50 @@ export interface ResumeDiagnosticsWarning {
   text: string;
 }
 
+export interface ResumeOverallSummaryExplanation {
+  headline?: string | null;
+  detail?: string | null;
+  top_priority?: string | null;
+}
+
+export interface ResumeKeyTakeawayExplanation {
+  takeaway_id?: string | null;
+  title?: string | null;
+  detail?: string | null;
+  target_refs?: ResumeTargetRef[] | null;
+}
+
+export interface ResumeSectionExplanation {
+  section_id: string;
+  title?: string | null;
+  what_is_wrong?: string | null;
+  why_it_matters?: string | null;
+  what_to_do?: string | null;
+  target_refs?: ResumeTargetRef[] | null;
+}
+
+export interface ResumeRecommendationExplanation {
+  code?: string | null;
+  title?: string | null;
+  short_explanation?: string | null;
+  action_hint?: string | null;
+  target_refs?: ResumeTargetRef[] | null;
+}
+
+export interface ResumeWarningExplanation {
+  code?: string | null;
+  title?: string | null;
+  detail?: string | null;
+}
+
+export interface ResumeDiagnosticsExplanations {
+  overall_summary?: ResumeOverallSummaryExplanation | null;
+  key_takeaways?: ResumeKeyTakeawayExplanation[] | null;
+  section_explanations?: ResumeSectionExplanation[] | null;
+  recommendation_explanations?: ResumeRecommendationExplanation[] | null;
+  warning_explanations?: ResumeWarningExplanation[] | null;
+}
+
 export interface ResumeMissingEvidenceItem {
   code: string;
   text: string;
@@ -195,6 +239,7 @@ export interface ResumeDiagnosticsEvaluateResponse {
   recommendations: ResumeDiagnosticsRecommendation[];
   warnings: ResumeDiagnosticsWarning[];
   missing_evidence: ResumeMissingEvidenceItem[];
+  explanations?: ResumeDiagnosticsExplanations | null;
   meta: ResumeDiagnosticsMeta;
 }
 
@@ -487,7 +532,7 @@ export function buildResumeDiagnosticsRequest(
   return {
     resume: {
       resume_id: summary !== null ? summary.id : null,
-      revision_id: summary !== null ? summary.updatedAt : null,
+      revision_id: summary !== null ? summary.currentRevisionId : null,
       document_text: documentText,
       sections: sections,
     },

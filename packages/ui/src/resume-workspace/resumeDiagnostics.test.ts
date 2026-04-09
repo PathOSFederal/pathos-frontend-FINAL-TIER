@@ -9,6 +9,7 @@ import {
 function buildSummary(): ResumeDraftSummary {
   return {
     id: 'resume-123',
+    variantId: 'resume-123',
     name: 'Program Analyst Variant',
     mode: 'tailored',
     status: 'tailored',
@@ -22,6 +23,9 @@ function buildSummary(): ResumeDraftSummary {
       linkedJobId: null,
     },
     linkedToResumeId: 'resume-master-seed',
+    sourceVariantId: 'resume-master-seed',
+    currentRevisionId: 'revision-123',
+    latestSnapshotId: null,
   };
 }
 
@@ -62,6 +66,7 @@ describe('resumeDiagnostics helpers', function () {
 
     expect(request.scope.evaluation_mode).toBe('full_document');
     expect(request.resume.resume_id).toBe('resume-123');
+    expect(request.resume.revision_id).toBe('revision-123');
     expect(request.target_context).toEqual({
       mode: 'role',
       target_role: 'Program Analyst',
