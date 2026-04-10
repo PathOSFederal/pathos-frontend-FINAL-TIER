@@ -32,6 +32,7 @@ import {
 import {
   buildPathAdvisorCarryForwardContext,
   findMostRecentUserMessage,
+  type PathAdvisorCarryForwardContext,
 } from '@/lib/pathadvisor-governed/carry-forward';
 
 /**
@@ -84,6 +85,8 @@ export function SharedDashboardRouteShell(props: {
     status: 'idle',
     errorMessage: null,
   });
+  const [lastCarryForwardContext, setLastCarryForwardContext] =
+    useState<PathAdvisorCarryForwardContext | null>(null);
   const screenOverrides = usePathAdvisorScreenOverridesStore(function (state) {
     return state.overrides;
   });
@@ -138,6 +141,7 @@ export function SharedDashboardRouteShell(props: {
    */
   const handleClearMessages = useCallback(function () {
     setAdvisorMessages([]);
+    setLastCarryForwardContext(null);
     setGovernedResult({
       status: 'idle',
       response: null,
@@ -169,7 +173,11 @@ export function SharedDashboardRouteShell(props: {
     const carryForwardContext =
       governedDraft.domain === 'fehb'
         ? null
-        : buildPathAdvisorCarryForwardContext(text, findMostRecentUserMessage(advisorMessages));
+        : buildPathAdvisorCarryForwardContext(
+            text,
+            findMostRecentUserMessage(advisorMessages),
+            lastCarryForwardContext
+          );
     const effectiveConversationMessage =
       carryForwardContext !== null ? carryForwardContext.effectiveUserMessage : text;
     const userMessage: PathAdvisorMessage = { role: 'user', content: text };
@@ -297,6 +305,7 @@ export function SharedDashboardRouteShell(props: {
         });
         return next;
       });
+      setLastCarryForwardContext(carryForwardContext);
     } catch (error) {
       const message = error instanceof Error
         ? error.message
@@ -306,7 +315,7 @@ export function SharedDashboardRouteShell(props: {
         errorMessage: message,
       });
     }
-  }, [advisorMessages, currentScreenId, governedDraft, governedResult, profile, props.conversationIntelligence, routeContext]);
+  }, [advisorMessages, currentScreenId, governedDraft, governedResult, lastCarryForwardContext, profile, props.conversationIntelligence, routeContext]);
 
   /**
    * Apply bounded draft edits coming from the governed request form.
@@ -326,6 +335,7 @@ export function SharedDashboardRouteShell(props: {
     setGovernedDraft(nextDraft);
 
     if (didDomainChange) {
+      setLastCarryForwardContext(null);
       setGovernedResult({
         status: 'idle',
         response: null,
@@ -364,6 +374,7 @@ export function SharedDashboardRouteShell(props: {
           : 'Cross-domain explanation requested.';
 
     const userMessage: PathAdvisorMessage = { role: 'user', content: requestLabel };
+    setLastCarryForwardContext(null);
     setAdvisorMessages(function (prev) {
       const next: PathAdvisorMessage[] = [];
       for (let i = 0; i < prev.length; i++) {
@@ -445,6 +456,13 @@ export function SharedDashboardRouteShell(props: {
       });
     }
   }, [governedDraft, profile]);
+
+  useEffect(
+    function () {
+      setLastCarryForwardContext(null);
+    },
+    [currentScreenId]
+  );
 
   return (
     <NavigationProvider adapter={adapter} linkComponent={NextNavLink}>

@@ -65,6 +65,7 @@ import {
 import {
   buildPathAdvisorCarryForwardContext,
   findPreviousUserMessage,
+  type PathAdvisorCarryForwardContext,
 } from '@/lib/pathadvisor-governed/carry-forward';
 import { useCareerResumeIntelligence } from '@/lib/intelligence/useCareerResumeIntelligence';
 
@@ -132,6 +133,9 @@ export default function DashboardPage() {
     status: 'idle',
     errorMessage: null,
   });
+  const [carryForwardContextsByThreadId, setCarryForwardContextsByThreadId] = useState<
+    Record<string, PathAdvisorCarryForwardContext>
+  >({});
   const [dashboardIntelligence, setDashboardIntelligence] =
     useState<DashboardIntelligencePayload | null>(null);
   const routeContext = useMemo(
@@ -163,12 +167,46 @@ export default function DashboardPage() {
     },
     [activeDashboardThreadId, dashboardThreads]
   );
+  const previousDashboardCarryForwardContext = useMemo(
+    function () {
+      if (activeDashboardThreadId === null) {
+        return null;
+      }
+
+      return carryForwardContextsByThreadId[activeDashboardThreadId] ?? null;
+    },
+    [activeDashboardThreadId, carryForwardContextsByThreadId]
+  );
 
   useEffect(function () {
     if (!isProfileLoaded) {
       loadProfileFromStorage();
     }
   }, [isProfileLoaded, loadProfileFromStorage]);
+
+  useEffect(
+    function () {
+      const activeThreadIds = new Set(
+        dashboardThreads.map(function (thread) {
+          return thread.id;
+        })
+      );
+
+      setCarryForwardContextsByThreadId(function (prev) {
+        const next: Record<string, PathAdvisorCarryForwardContext> = {};
+        const prevKeys = Object.keys(prev);
+
+        for (let i = 0; i < prevKeys.length; i += 1) {
+          if (activeThreadIds.has(prevKeys[i])) {
+            next[prevKeys[i]] = prev[prevKeys[i]];
+          }
+        }
+
+        return prevKeys.length === Object.keys(next).length ? prev : next;
+      });
+    },
+    [dashboardThreads]
+  );
 
   useEffect(function () {
     setGovernedDraft(buildInitialPathAdvisorDraft(profile));
@@ -200,7 +238,11 @@ export default function DashboardPage() {
     const carryForwardContext =
       governedDraft.domain === 'fehb'
         ? null
-        : buildPathAdvisorCarryForwardContext(text, previousDashboardUserMessage);
+        : buildPathAdvisorCarryForwardContext(
+            text,
+            previousDashboardUserMessage,
+            previousDashboardCarryForwardContext
+          );
     const effectiveConversationMessage =
       carryForwardContext !== null ? carryForwardContext.effectiveUserMessage : text;
 
@@ -279,6 +321,24 @@ export default function DashboardPage() {
         status: 'idle',
         errorMessage: null,
       });
+      if (activeDashboardThreadId !== null) {
+        setCarryForwardContextsByThreadId(function (prev) {
+          if (carryForwardContext === null) {
+            if (prev[activeDashboardThreadId] === undefined) {
+              return prev;
+            }
+
+            const next = { ...prev };
+            delete next[activeDashboardThreadId];
+            return next;
+          }
+
+          return {
+            ...prev,
+            [activeDashboardThreadId]: carryForwardContext,
+          };
+        });
+      }
 
       return {
         reply: conversationResponse.reply,
@@ -294,7 +354,7 @@ export default function DashboardPage() {
       });
       throw error;
     }
-  }, [governedDraft, governedResult.response, intelligence, previousDashboardUserMessage, profile, routeContext]);
+  }, [activeDashboardThreadId, governedDraft, governedResult.response, intelligence, previousDashboardCarryForwardContext, previousDashboardUserMessage, profile, routeContext]);
 
   return (
     <SharedDashboardRouteShell

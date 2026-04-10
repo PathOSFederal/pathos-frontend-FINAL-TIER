@@ -173,9 +173,16 @@ function buildPayload() {
     carryForwardContext: {
       sourceKind: 'immediately_previous_user_turn',
       transformKind: 'same_thing_but',
+      baseUserMessage: 'Are there law enforcement jobs available?',
       priorUserMessage: 'Are there law enforcement jobs available?',
       originalUserMessage: 'same thing but for florida',
       effectiveUserMessage: 'Are there law enforcement jobs available in florida?',
+      modifiers: [
+        { kind: 'location', value: 'florida' },
+      ],
+      modifierChanges: [
+        { kind: 'location', operation: 'add', value: 'florida', previousValue: null },
+      ],
     },
   });
 
@@ -276,9 +283,16 @@ describe('POST /api/pathadvisor/conversation', function () {
     ).toEqual({
       source_kind: 'immediately_previous_user_turn',
       transform_kind: 'same_thing_but',
+      base_user_message: 'Are there law enforcement jobs available?',
       prior_user_message: 'Are there law enforcement jobs available?',
       original_user_message: 'same thing but for florida',
       effective_user_message: 'Are there law enforcement jobs available in florida?',
+      modifiers: [
+        { kind: 'location', value: 'florida' },
+      ],
+      modifier_changes: [
+        { kind: 'location', operation: 'add', value: 'florida', previous_value: null },
+      ],
     });
     expect(response.status).toBe(200);
     expect(json.reply).toBe('Backend explanation only.');
