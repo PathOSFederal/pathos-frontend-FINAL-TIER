@@ -188,10 +188,21 @@ export interface PathAdvisorConversationRouteContextPayload {
 
 export interface PathAdvisorConversationCarryForwardContextPayload {
   source_kind: 'immediately_previous_user_turn';
-  transform_kind: 'same_thing_but';
+  transform_kind: 'same_thing_but' | 'modifier_follow_up';
+  base_user_message: string;
   prior_user_message: string;
   original_user_message: string;
   effective_user_message: string;
+  modifiers: Array<{
+    kind: 'grade' | 'series' | 'location' | 'work_arrangement' | 'freeform';
+    value: string;
+  }>;
+  modifier_changes: Array<{
+    kind: 'grade' | 'series' | 'location' | 'work_arrangement' | 'freeform';
+    operation: 'add' | 'replace' | 'remove';
+    value: string | null;
+    previous_value: string | null;
+  }>;
 }
 
 export interface PathAdvisorConversationRequestPayload {
@@ -1031,30 +1042,84 @@ function isRouteContext(
 function isCarryForwardContext(
   value: unknown
 ): value is PathAdvisorConversationCarryForwardContextPayload {
+  function isCarryForwardModifier(
+    modifier: unknown
+  ): modifier is PathAdvisorConversationCarryForwardContextPayload['modifiers'][number] {
+    return (
+      isPlainObject(modifier) &&
+      hasOnlyAllowedKeys(modifier, ['kind', 'value']) &&
+      hasRequiredKeys(modifier, ['kind', 'value']) &&
+      (
+        modifier.kind === 'grade' ||
+        modifier.kind === 'series' ||
+        modifier.kind === 'location' ||
+        modifier.kind === 'work_arrangement' ||
+        modifier.kind === 'freeform'
+      ) &&
+      isString(modifier.value) &&
+      modifier.value.trim() !== ''
+    );
+  }
+
   return (
     isPlainObject(value) &&
     hasOnlyAllowedKeys(value, [
       'source_kind',
       'transform_kind',
+      'base_user_message',
       'prior_user_message',
       'original_user_message',
       'effective_user_message',
+      'modifiers',
+      'modifier_changes',
     ]) &&
     hasRequiredKeys(value, [
       'source_kind',
       'transform_kind',
+      'base_user_message',
       'prior_user_message',
       'original_user_message',
       'effective_user_message',
+      'modifiers',
+      'modifier_changes',
     ]) &&
     value.source_kind === 'immediately_previous_user_turn' &&
-    value.transform_kind === 'same_thing_but' &&
+    (value.transform_kind === 'same_thing_but' ||
+      value.transform_kind === 'modifier_follow_up') &&
+    isString(value.base_user_message) &&
+    value.base_user_message.trim() !== '' &&
     isString(value.prior_user_message) &&
     value.prior_user_message.trim() !== '' &&
     isString(value.original_user_message) &&
     value.original_user_message.trim() !== '' &&
     isString(value.effective_user_message) &&
-    value.effective_user_message.trim() !== ''
+    value.effective_user_message.trim() !== '' &&
+    Array.isArray(value.modifiers) &&
+    Array.isArray(value.modifier_changes) &&
+    value.modifiers.every(function (item) {
+      return isCarryForwardModifier(item);
+    }) &&
+    value.modifier_changes.every(function (item) {
+      return (
+        isPlainObject(item) &&
+        hasOnlyAllowedKeys(item, ['kind', 'operation', 'value', 'previous_value']) &&
+        hasRequiredKeys(item, ['kind', 'operation', 'value', 'previous_value']) &&
+        (
+          item.kind === 'grade' ||
+          item.kind === 'series' ||
+          item.kind === 'location' ||
+          item.kind === 'work_arrangement' ||
+          item.kind === 'freeform'
+        ) &&
+        (
+          item.operation === 'add' ||
+          item.operation === 'replace' ||
+          item.operation === 'remove'
+        ) &&
+        isNullableString(item.value) &&
+        isNullableString(item.previous_value)
+      );
+    })
   );
 }
 
@@ -1228,9 +1293,24 @@ export function buildPathAdvisorConversationRequestPayload(
     payload.carry_forward_context = {
       source_kind: context.carryForwardContext.sourceKind,
       transform_kind: context.carryForwardContext.transformKind,
+      base_user_message: context.carryForwardContext.baseUserMessage,
       prior_user_message: context.carryForwardContext.priorUserMessage,
       original_user_message: context.carryForwardContext.originalUserMessage,
       effective_user_message: context.carryForwardContext.effectiveUserMessage,
+      modifiers: context.carryForwardContext.modifiers.map(function (item) {
+        return {
+          kind: item.kind,
+          value: item.value,
+        };
+      }),
+      modifier_changes: context.carryForwardContext.modifierChanges.map(function (item) {
+        return {
+          kind: item.kind,
+          operation: item.operation,
+          value: item.value,
+          previous_value: item.previousValue,
+        };
+      }),
     };
   }
 

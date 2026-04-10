@@ -360,9 +360,18 @@ describe('governed PathAdvisor conversation request', function () {
     context.carryForwardContext = {
       sourceKind: 'immediately_previous_user_turn',
       transformKind: 'same_thing_but',
+      baseUserMessage: 'Are there law enforcement jobs available?',
       priorUserMessage: 'Are there law enforcement jobs available?',
       originalUserMessage: 'same thing but for GS-12 in Florida',
       effectiveUserMessage: 'Are there law enforcement jobs available for gs-12 in florida?',
+      modifiers: [
+        { kind: 'grade', value: 'gs-12' },
+        { kind: 'location', value: 'florida' },
+      ],
+      modifierChanges: [
+        { kind: 'grade', operation: 'add', value: 'gs-12', previousValue: null },
+        { kind: 'location', operation: 'add', value: 'florida', previousValue: null },
+      ],
     };
 
     const payload = buildPathAdvisorConversationRequestPayload(
@@ -373,9 +382,18 @@ describe('governed PathAdvisor conversation request', function () {
     expect(payload.carry_forward_context).toEqual({
       source_kind: 'immediately_previous_user_turn',
       transform_kind: 'same_thing_but',
+      base_user_message: 'Are there law enforcement jobs available?',
       prior_user_message: 'Are there law enforcement jobs available?',
       original_user_message: 'same thing but for GS-12 in Florida',
       effective_user_message: 'Are there law enforcement jobs available for gs-12 in florida?',
+      modifiers: [
+        { kind: 'grade', value: 'gs-12' },
+        { kind: 'location', value: 'florida' },
+      ],
+      modifier_changes: [
+        { kind: 'grade', operation: 'add', value: 'gs-12', previous_value: null },
+        { kind: 'location', operation: 'add', value: 'florida', previous_value: null },
+      ],
     });
     expect(isPathAdvisorConversationRequestPayload(payload)).toBe(true);
   });

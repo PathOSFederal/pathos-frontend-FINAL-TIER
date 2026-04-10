@@ -286,18 +286,36 @@ describe('governed PathAdvisor conversation context', function () {
       carryForwardContext: {
         sourceKind: 'immediately_previous_user_turn',
         transformKind: 'same_thing_but',
+        baseUserMessage: 'Are there law enforcement jobs available?',
         priorUserMessage: 'Are there law enforcement jobs available?',
         originalUserMessage: 'same thing but for GS-12 in Florida',
         effectiveUserMessage: 'Are there law enforcement jobs available for gs-12 in florida?',
+        modifiers: [
+          { kind: 'grade', value: 'gs-12' },
+          { kind: 'location', value: 'florida' },
+        ],
+        modifierChanges: [
+          { kind: 'grade', operation: 'add', value: 'gs-12', previousValue: null },
+          { kind: 'location', operation: 'add', value: 'florida', previousValue: null },
+        ],
       },
     });
 
     expect(context.carryForwardContext).toEqual({
       sourceKind: 'immediately_previous_user_turn',
       transformKind: 'same_thing_but',
+      baseUserMessage: 'Are there law enforcement jobs available?',
       priorUserMessage: 'Are there law enforcement jobs available?',
       originalUserMessage: 'same thing but for GS-12 in Florida',
       effectiveUserMessage: 'Are there law enforcement jobs available for gs-12 in florida?',
+      modifiers: [
+        { kind: 'grade', value: 'gs-12' },
+        { kind: 'location', value: 'florida' },
+      ],
+      modifierChanges: [
+        { kind: 'grade', operation: 'add', value: 'gs-12', previousValue: null },
+        { kind: 'location', operation: 'add', value: 'florida', previousValue: null },
+      ],
     });
   });
 

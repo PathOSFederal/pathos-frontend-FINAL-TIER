@@ -50,10 +50,21 @@ export interface PathAdvisorConversationEntityContext {
 
 export interface PathAdvisorConversationCarryForwardContext {
   sourceKind: 'immediately_previous_user_turn';
-  transformKind: 'same_thing_but';
+  transformKind: 'same_thing_but' | 'modifier_follow_up';
+  baseUserMessage: string;
   priorUserMessage: string;
   originalUserMessage: string;
   effectiveUserMessage: string;
+  modifiers: Array<{
+    kind: 'grade' | 'series' | 'location' | 'work_arrangement' | 'freeform';
+    value: string;
+  }>;
+  modifierChanges: Array<{
+    kind: 'grade' | 'series' | 'location' | 'work_arrangement' | 'freeform';
+    operation: 'add' | 'replace' | 'remove';
+    value: string | null;
+    previousValue: string | null;
+  }>;
 }
 
 export interface PathAdvisorEntryContext {
@@ -884,9 +895,24 @@ export function buildPathAdvisorConversationContext(
         ? {
             sourceKind: args.carryForwardContext.sourceKind,
             transformKind: args.carryForwardContext.transformKind,
+            baseUserMessage: args.carryForwardContext.baseUserMessage,
             priorUserMessage: args.carryForwardContext.priorUserMessage,
             originalUserMessage: args.carryForwardContext.originalUserMessage,
             effectiveUserMessage: args.carryForwardContext.effectiveUserMessage,
+            modifiers: args.carryForwardContext.modifiers.map(function (item) {
+              return {
+                kind: item.kind,
+                value: item.value,
+              };
+            }),
+            modifierChanges: args.carryForwardContext.modifierChanges.map(function (item) {
+              return {
+                kind: item.kind,
+                operation: item.operation,
+                value: item.value,
+                previousValue: item.previousValue,
+              };
+            }),
           }
         : undefined,
     currentTargetScope: buildCurrentTargetScope(args.draft, args.intelligence),
