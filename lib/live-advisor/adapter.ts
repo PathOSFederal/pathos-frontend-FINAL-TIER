@@ -14,6 +14,11 @@
 import type { Profile } from '@/lib/api/profile';
 import type { Job } from '@pathos/core';
 import type {
+  CanonicalIntelligenceSummary,
+  CanonicalJobMatchProjection,
+  DashboardIntelligencePayload,
+  ResumeBuilderIntelligencePayload,
+  ScreenIntelligenceEnvelope,
   SavedJobsLiveApplicationDecision,
   SavedJobsLiveBlockingIssue,
   SavedJobsLiveEvaluation,
@@ -100,6 +105,159 @@ export interface BackendAdvisorOutput {
   } | null;
 }
 
+export interface BackendCanonicalIntelligenceSummary {
+  target_role_clusters: string[];
+  preferred_locations: string[];
+  readiness_state: string;
+  fit_lanes: string[];
+  blockers: string[];
+  top_missing_items: string[];
+  next_best_actions: string[];
+  active_threads: string[];
+  profile_completeness: number;
+  freshness_band: 'fresh' | 'aging' | 'stale' | 'unknown';
+  confidence_band: 'low' | 'medium' | 'high';
+  recent_meaningful_changes: string[];
+  activity_signals: string[];
+  updated_at: string;
+}
+
+export interface BackendScreenNextAction {
+  action_id: string;
+  title: string;
+  description: string;
+  cta_label: string;
+  cta_href: string;
+  reason: string;
+}
+
+export interface BackendCanonicalMatchProjectionDimension {
+  dimension_id: string;
+  label: string;
+  score: number;
+  status: 'strong' | 'building' | 'weak';
+  explanation: string;
+}
+
+export interface BackendCanonicalJobMatchProjection {
+  overall_score: number;
+  confidence_band: 'low' | 'medium' | 'high';
+  blocker_severity: 'low' | 'medium' | 'high';
+  explanation_summary: string;
+  dimensions: BackendCanonicalMatchProjectionDimension[];
+  next_actions: string[];
+  blockers: string[];
+  warnings: string[];
+}
+
+export interface BackendJobSearchIntelligencePayload {
+  screen: 'job_search';
+  pathadvisor_mode: 'search_refinement';
+  context: BackendCanonicalIntelligenceSummary;
+  summary: string;
+  refinement_suggestions: string[];
+  next_best_action: BackendScreenNextAction;
+  job_match_projection: BackendCanonicalJobMatchProjection;
+  evaluation: BackendAdvisorOutput;
+}
+
+export interface BackendJobSearchIntelligenceBatchItem {
+  job_id: string;
+  payload: BackendJobSearchIntelligencePayload;
+}
+
+export interface BackendJobSearchIntelligenceBatchResponse {
+  items: BackendJobSearchIntelligenceBatchItem[];
+}
+
+export interface BackendSavedJobsIntelligencePayload {
+  screen: 'saved_jobs';
+  pathadvisor_mode: 'decision_risk';
+  context: BackendCanonicalIntelligenceSummary;
+  summary: string;
+  decision_guidance: string[];
+  next_best_action: BackendScreenNextAction;
+  job_match_projection: BackendCanonicalJobMatchProjection;
+  evaluation: BackendAdvisorOutput;
+}
+
+export interface BackendSavedJobsSummaryMetric {
+  metric_id: string;
+  label: string;
+  value: number;
+  emphasis: 'neutral' | 'accent' | 'success' | 'warning';
+  explanation: string;
+}
+
+export interface BackendSavedJobsSummaryPayload {
+  screen: 'saved_jobs';
+  summary: string;
+  metrics: BackendSavedJobsSummaryMetric[];
+  next_best_action: BackendScreenNextAction;
+}
+
+export function adaptSavedJobsSummaryPayload(
+  payload: BackendSavedJobsSummaryPayload
+): {
+  screen: 'saved_jobs';
+  summary: string;
+  metrics: Array<{
+    metricId: string;
+    label: string;
+    value: number;
+    emphasis: 'neutral' | 'accent' | 'success' | 'warning';
+    explanation: string;
+  }>;
+  nextBestAction: {
+    actionId: string;
+    title: string;
+    description: string;
+    ctaLabel: string;
+    ctaHref: string;
+    reason: string;
+  };
+} {
+  return {
+    screen: payload.screen,
+    summary: payload.summary,
+    metrics: Array.isArray(payload.metrics)
+      ? payload.metrics.map(function (metric) {
+          return {
+            metricId: metric.metric_id,
+            label: metric.label,
+            value: metric.value,
+            emphasis: metric.emphasis,
+            explanation: metric.explanation,
+          };
+        })
+      : [],
+    nextBestAction: adaptScreenNextAction(payload.next_best_action),
+  };
+}
+
+export interface BackendDashboardIntelligencePayload {
+  screen: 'dashboard';
+  pathadvisor_mode: 'strategy_summary';
+  context: BackendCanonicalIntelligenceSummary;
+  summary: string;
+  strongest_current_fit_lanes: string[];
+  active_blockers: string[];
+  top_missing_items: string[];
+  next_best_action: BackendScreenNextAction;
+  confidence_summary: string;
+}
+
+export interface BackendResumeBuilderIntelligencePayload {
+  screen: 'resume_builder';
+  pathadvisor_mode: 'readiness_evidence';
+  context: BackendCanonicalIntelligenceSummary;
+  summary: string;
+  target_alignment_warnings: string[];
+  evidence_gaps: string[];
+  suggested_builder_focus: string[];
+  next_best_action: BackendScreenNextAction;
+}
+
 export interface BackendStoredJobEvaluationRequest {
   saved_search_id: string;
   job_id: string;
@@ -144,6 +302,15 @@ export interface BackendAdvisorEvaluateRequest {
     source_url: string | null;
   };
   user_notes?: string | null;
+}
+
+export interface BackendAdvisorProfilePayload {
+  user_id: string;
+  years_experience: number;
+  target_roles: string[];
+  skills: string[];
+  preferred_locations: string[];
+  authorized_to_work: boolean;
 }
 
 export interface JobSearchEvaluableJob extends Job {
@@ -430,6 +597,196 @@ export function adaptAdvisorEvaluation(
     ),
     explainabilityVersion: explainabilityVersion,
     engineVersion: engineVersion,
+  };
+}
+
+function adaptCanonicalIntelligenceSummary(
+  payload: BackendCanonicalIntelligenceSummary
+): CanonicalIntelligenceSummary {
+  return {
+    targetRoleClusters: Array.isArray(payload.target_role_clusters)
+      ? payload.target_role_clusters.slice()
+      : [],
+    preferredLocations: Array.isArray(payload.preferred_locations)
+      ? payload.preferred_locations.slice()
+      : [],
+    readinessState: payload.readiness_state,
+    fitLanes: Array.isArray(payload.fit_lanes) ? payload.fit_lanes.slice() : [],
+    blockers: Array.isArray(payload.blockers) ? payload.blockers.slice() : [],
+    topMissingItems: Array.isArray(payload.top_missing_items)
+      ? payload.top_missing_items.slice()
+      : [],
+    nextBestActions: Array.isArray(payload.next_best_actions)
+      ? payload.next_best_actions.slice()
+      : [],
+    activeThreads: Array.isArray(payload.active_threads)
+      ? payload.active_threads.slice()
+      : [],
+    profileCompleteness: payload.profile_completeness,
+    freshnessBand: payload.freshness_band,
+    confidenceBand: payload.confidence_band,
+    recentMeaningfulChanges: Array.isArray(payload.recent_meaningful_changes)
+      ? payload.recent_meaningful_changes.slice()
+      : [],
+    activitySignals: Array.isArray(payload.activity_signals)
+      ? payload.activity_signals.slice()
+      : [],
+    updatedAt: payload.updated_at,
+  };
+}
+
+function adaptScreenNextAction(payload: BackendScreenNextAction) {
+  return {
+    actionId: payload.action_id,
+    title: payload.title,
+    description: payload.description,
+    ctaLabel: payload.cta_label,
+    ctaHref: payload.cta_href,
+    reason: payload.reason,
+  };
+}
+
+function adaptCanonicalProjection(
+  payload: BackendCanonicalJobMatchProjection
+): CanonicalJobMatchProjection {
+  return {
+    overallScore: payload.overall_score,
+    confidenceBand: payload.confidence_band,
+    blockerSeverity: payload.blocker_severity,
+    explanationSummary: payload.explanation_summary,
+    dimensions: Array.isArray(payload.dimensions)
+      ? payload.dimensions.map(function (dimension) {
+          return {
+            dimensionId: dimension.dimension_id,
+            label: dimension.label,
+            score: dimension.score,
+            status: dimension.status,
+            explanation: dimension.explanation,
+          };
+        })
+      : [],
+    nextActions: Array.isArray(payload.next_actions)
+      ? payload.next_actions.slice()
+      : [],
+    blockers: Array.isArray(payload.blockers) ? payload.blockers.slice() : [],
+    warnings: Array.isArray(payload.warnings) ? payload.warnings.slice() : [],
+  };
+}
+
+export function adaptJobSearchIntelligencePayload(
+  payload: BackendJobSearchIntelligencePayload
+): SavedJobsLiveEvaluation {
+  const evaluation = adaptAdvisorEvaluation(payload.evaluation);
+  const context = adaptCanonicalIntelligenceSummary(payload.context);
+  const projection = adaptCanonicalProjection(payload.job_match_projection);
+  const screenIntelligence: ScreenIntelligenceEnvelope = {
+    screen: payload.screen,
+    pathadvisorMode: payload.pathadvisor_mode,
+    context: context,
+    summary: payload.summary,
+    nextBestAction: adaptScreenNextAction(payload.next_best_action),
+    jobMatchProjection: projection,
+    refinementSuggestions: Array.isArray(payload.refinement_suggestions)
+      ? payload.refinement_suggestions.slice()
+      : [],
+  };
+
+  return {
+    recommendation: evaluation.recommendation,
+    decisionBand: evaluation.decisionBand,
+    confidenceBand: evaluation.confidenceBand,
+    overallScore: evaluation.overallScore,
+    reasons: evaluation.reasons,
+    gaps: evaluation.gaps,
+    warnings: evaluation.warnings,
+    missingEvidence: evaluation.missingEvidence,
+    nextActions: evaluation.nextActions,
+    applicationDecision: evaluation.applicationDecision,
+    explainabilityVersion: evaluation.explainabilityVersion,
+    engineVersion: evaluation.engineVersion,
+    canonicalUserContext: context,
+    jobMatchProjection: projection,
+    screenIntelligence: screenIntelligence,
+  };
+}
+
+export function adaptSavedJobsIntelligencePayload(
+  payload: BackendSavedJobsIntelligencePayload
+): SavedJobsLiveEvaluation {
+  const evaluation = adaptAdvisorEvaluation(payload.evaluation);
+  const context = adaptCanonicalIntelligenceSummary(payload.context);
+  const projection = adaptCanonicalProjection(payload.job_match_projection);
+  const screenIntelligence: ScreenIntelligenceEnvelope = {
+    screen: payload.screen,
+    pathadvisorMode: payload.pathadvisor_mode,
+    context: context,
+    summary: payload.summary,
+    nextBestAction: adaptScreenNextAction(payload.next_best_action),
+    jobMatchProjection: projection,
+    decisionGuidance: Array.isArray(payload.decision_guidance)
+      ? payload.decision_guidance.slice()
+      : [],
+  };
+
+  return {
+    recommendation: evaluation.recommendation,
+    decisionBand: evaluation.decisionBand,
+    confidenceBand: evaluation.confidenceBand,
+    overallScore: evaluation.overallScore,
+    reasons: evaluation.reasons,
+    gaps: evaluation.gaps,
+    warnings: evaluation.warnings,
+    missingEvidence: evaluation.missingEvidence,
+    nextActions: evaluation.nextActions,
+    applicationDecision: evaluation.applicationDecision,
+    explainabilityVersion: evaluation.explainabilityVersion,
+    engineVersion: evaluation.engineVersion,
+    canonicalUserContext: context,
+    jobMatchProjection: projection,
+    screenIntelligence: screenIntelligence,
+  };
+}
+
+export function adaptDashboardIntelligencePayload(
+  payload: BackendDashboardIntelligencePayload
+): DashboardIntelligencePayload {
+  return {
+    screen: payload.screen,
+    pathadvisorMode: payload.pathadvisor_mode,
+    context: adaptCanonicalIntelligenceSummary(payload.context),
+    summary: payload.summary,
+    strongestCurrentFitLanes: Array.isArray(payload.strongest_current_fit_lanes)
+      ? payload.strongest_current_fit_lanes.slice()
+      : [],
+    activeBlockers: Array.isArray(payload.active_blockers)
+      ? payload.active_blockers.slice()
+      : [],
+    topMissingItems: Array.isArray(payload.top_missing_items)
+      ? payload.top_missing_items.slice()
+      : [],
+    nextBestAction: adaptScreenNextAction(payload.next_best_action),
+    confidenceSummary: payload.confidence_summary,
+  };
+}
+
+export function adaptResumeBuilderIntelligencePayload(
+  payload: BackendResumeBuilderIntelligencePayload
+): ResumeBuilderIntelligencePayload {
+  return {
+    screen: payload.screen,
+    pathadvisorMode: payload.pathadvisor_mode,
+    context: adaptCanonicalIntelligenceSummary(payload.context),
+    summary: payload.summary,
+    targetAlignmentWarnings: Array.isArray(payload.target_alignment_warnings)
+      ? payload.target_alignment_warnings.slice()
+      : [],
+    evidenceGaps: Array.isArray(payload.evidence_gaps)
+      ? payload.evidence_gaps.slice()
+      : [],
+    suggestedBuilderFocus: Array.isArray(payload.suggested_builder_focus)
+      ? payload.suggested_builder_focus.slice()
+      : [],
+    nextBestAction: adaptScreenNextAction(payload.next_best_action),
   };
 }
 
@@ -785,15 +1142,7 @@ export function buildStoredJobEvaluationRequest(
   return {
     saved_search_id: storedJob.savedSearchId,
     job_id: storedJob.jobId,
-    profile: {
-      user_id: profile.name !== '' ? profile.name : 'pathos-frontend-user',
-      years_experience:
-        profile.jobSeeker !== null ? profile.jobSeeker.yearsOfExperience : 0,
-      target_roles: deriveTargetRoles(profile),
-      skills: [],
-      preferred_locations: derivePreferredLocations(profile),
-      authorized_to_work: true,
-    },
+    profile: buildAdvisorProfilePayload(profile),
     user_notes: null,
   };
 }
@@ -878,16 +1227,9 @@ export function buildJobSearchEvaluationRequest(
   job: JobSearchEvaluableJob,
   profile: Profile
 ): BackendAdvisorEvaluateRequest {
+  const profilePayload = buildAdvisorProfilePayload(profile);
   return {
-    profile: {
-      user_id: profile.name !== '' ? profile.name : 'pathos-frontend-user',
-      years_experience:
-        profile.jobSeeker !== null ? profile.jobSeeker.yearsOfExperience : 0,
-      target_roles: deriveTargetRoles(profile),
-      skills: [],
-      preferred_locations: derivePreferredLocations(profile),
-      authorized_to_work: true,
-    },
+    profile: profilePayload,
     job: {
       job_id: parseJobId(job),
       title: job.title,
@@ -904,5 +1246,28 @@ export function buildJobSearchEvaluationRequest(
       source_url: job.url !== undefined ? job.url : null,
     },
     user_notes: null,
+  };
+}
+
+export function buildAdvisorProfilePayload(profile: Profile): BackendAdvisorProfilePayload {
+  return {
+    user_id: profile.name !== '' ? profile.name : 'pathos-frontend-user',
+    years_experience:
+      profile.jobSeeker !== null ? profile.jobSeeker.yearsOfExperience : 0,
+    target_roles: deriveTargetRoles(profile),
+    skills: [],
+    preferred_locations: derivePreferredLocations(profile),
+    authorized_to_work: true,
+  };
+}
+
+export function buildJobSearchEvaluationBatchRequest(
+  jobs: JobSearchEvaluableJob[],
+  profile: Profile
+): { items: BackendAdvisorEvaluateRequest[] } {
+  return {
+    items: jobs.map(function (job) {
+      return buildJobSearchEvaluationRequest(job, profile);
+    }),
   };
 }

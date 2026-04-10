@@ -89,6 +89,7 @@ import {
   IMPORT,
   RESUME_BUILDER,
 } from '../routes/routes';
+import type { DashboardIntelligencePayload } from '../types/pathadvisorIntelligence';
 
 
 // ============================================================================
@@ -203,6 +204,8 @@ export interface DashboardScreenProps {
   requestConversation?: (text: string) => Promise<DashboardConversationExchange>;
   /** Optional request state for the bounded dashboard conversation path. */
   conversationRequestState?: PathAdvisorConversationRequestState;
+  /** Optional backend-owned dashboard intelligence summary. */
+  intelligencePayload?: DashboardIntelligencePayload | null;
 }
 
 // ============================================================================
@@ -351,6 +354,43 @@ function formatDashboardResponseState(value: 'grounded' | 'partial' | 'refused')
 export function buildGovernedResponseDataFromShapedResponse(
   response: PathAdvisorShapedResponse
 ): GovernedResponseData {
+  const domainCount = response.grounding.domains.length;
+  const hasMixedJobSearchAndQualification =
+    response.domain === 'cross_domain' &&
+    domainCount === 2 &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'job_search';
+    }) &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'qualification';
+    });
+  const hasMixedApplicationConfidenceAndQualification =
+    response.domain === 'cross_domain' &&
+    domainCount === 2 &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'application_confidence';
+    }) &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'qualification';
+    });
+  const hasMixedResumeAndQualification =
+    response.domain === 'cross_domain' &&
+    domainCount === 2 &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'resume_readiness';
+    }) &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'qualification';
+    });
+  const hasMixedApplicationConfidenceAndResume =
+    response.domain === 'cross_domain' &&
+    domainCount === 2 &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'application_confidence';
+    }) &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'resume_readiness';
+    });
   let decisionVariant: 'positive' | 'caution' | 'negative' = 'positive';
   let confidence = 'Grounded';
   let band = 'Governed explanation';
@@ -363,6 +403,96 @@ export function buildGovernedResponseDataFromShapedResponse(
     decisionVariant = 'negative';
     confidence = 'Trust boundary';
     band = 'Governed refusal';
+  }
+
+  if (response.domain === 'job_search') {
+    if (response.responseState === 'grounded') {
+      confidence = 'Live search';
+      band = 'Current job availability';
+    } else if (response.responseState === 'partial') {
+      confidence = 'Needs more scope';
+      band = 'Live job search is partially scoped';
+    } else {
+      confidence = 'Search boundary';
+      band = 'Live job search unavailable';
+    }
+  } else if (response.domain === 'application_confidence') {
+    if (response.responseState === 'grounded') {
+      confidence = 'Selected job';
+      band = 'Current application confidence';
+    } else if (response.responseState === 'partial') {
+      confidence = 'Selected job, limited';
+      band = 'Application evidence gaps remain';
+    } else {
+      confidence = 'Application boundary';
+      band = 'Selected job context unavailable';
+    }
+  } else if (response.domain === 'resume_readiness') {
+    if (response.responseState === 'grounded') {
+      confidence = 'Resume snapshot';
+      band = 'Current resume readiness';
+    } else if (response.responseState === 'partial') {
+      confidence = 'Resume snapshot, limited';
+      band = 'Resume evidence gaps remain';
+    } else {
+      confidence = 'Resume boundary';
+      band = 'Live resume snapshot unavailable';
+    }
+  } else if (hasMixedJobSearchAndQualification) {
+    if (response.responseState === 'grounded') {
+      confidence = 'Combined';
+      band = 'Job availability and qualification';
+    } else if (response.responseState === 'partial') {
+      confidence = 'Combined, limited';
+      band = 'One side still needs support';
+    } else {
+      confidence = 'Combined boundary';
+      band = 'Neither bounded domain is ready';
+    }
+  } else if (hasMixedApplicationConfidenceAndQualification) {
+    if (response.responseState === 'grounded') {
+      confidence = 'Selected job + qualification';
+      band = 'Application and qualification';
+    } else if (response.responseState === 'partial') {
+      confidence = 'Selected job + qualification, limited';
+      band = 'One side still needs support';
+    } else {
+      confidence = 'Selected job + qualification boundary';
+      band = 'Neither bounded domain is ready';
+    }
+  } else if (hasMixedResumeAndQualification) {
+    if (response.responseState === 'grounded') {
+      confidence = 'Resume + qualification';
+      band = 'Resume and qualification';
+    } else if (response.responseState === 'partial') {
+      confidence = 'Resume + qualification, limited';
+      band = 'One side still needs support';
+    } else {
+      confidence = 'Resume + qualification boundary';
+      band = 'Neither bounded domain is ready';
+    }
+  } else if (hasMixedApplicationConfidenceAndResume) {
+    if (response.responseState === 'grounded') {
+      confidence = 'Selected job + resume';
+      band = 'Application and resume';
+    } else if (response.responseState === 'partial') {
+      confidence = 'Selected job + resume, limited';
+      band = 'One side still needs support';
+    } else {
+      confidence = 'Selected job + resume boundary';
+      band = 'Neither bounded domain is ready';
+    }
+  } else if (response.domain === 'cross_domain') {
+    if (response.responseState === 'grounded') {
+      confidence = 'Combined';
+      band = 'Multiple bounded domains';
+    } else if (response.responseState === 'partial') {
+      confidence = 'Combined, limited';
+      band = 'One or more parts still need support';
+    } else {
+      confidence = 'Combined boundary';
+      band = 'Required bounded domains unavailable';
+    }
   }
 
   const groundedReasons: string[] = [];
@@ -382,6 +512,18 @@ export function buildGovernedResponseDataFromShapedResponse(
   for (let i = 0; i < response.missingInputs.length && topGaps.length < 3; i++) {
     topGaps.push(response.missingInputs[i]);
   }
+  if (topGaps.length === 0 && response.domain === 'cross_domain') {
+    for (let i = 0; i < response.grounding.domains.length && topGaps.length < 3; i++) {
+      const item = response.grounding.domains[i];
+      if (item.refusalReason !== null) {
+        topGaps.push(item.refusalReason);
+        continue;
+      }
+      for (let j = 0; j < item.missingInputs.length && topGaps.length < 3; j++) {
+        topGaps.push(item.missingInputs[j]);
+      }
+    }
+  }
   if (topGaps.length === 0 && response.responseState === 'refused' && response.refusalReason !== null) {
     topGaps.push(response.refusalReason);
   }
@@ -394,6 +536,22 @@ export function buildGovernedResponseDataFromShapedResponse(
   let estimatedImpact = 'Governed';
   if (response.packVersionId !== null && response.packVersionId !== '') {
     estimatedImpact = response.packVersionId;
+  } else if (hasMixedJobSearchAndQualification) {
+    estimatedImpact = 'Combined bounded';
+  } else if (hasMixedApplicationConfidenceAndQualification) {
+    estimatedImpact = 'Selected job + governed';
+  } else if (hasMixedResumeAndQualification) {
+    estimatedImpact = 'Resume + governed';
+  } else if (hasMixedApplicationConfidenceAndResume) {
+    estimatedImpact = 'Selected job + resume';
+  } else if (response.domain === 'cross_domain') {
+    estimatedImpact = 'Combined bounded';
+  } else if (response.domain === 'application_confidence') {
+    estimatedImpact = 'Selected job';
+  } else if (response.domain === 'resume_readiness') {
+    estimatedImpact = 'Resume snapshot';
+  } else if (response.domain === 'job_search') {
+    estimatedImpact = 'Live search';
   } else if (response.freshnessState !== null) {
     estimatedImpact = response.freshnessState;
   }
@@ -594,6 +752,71 @@ function CompactSummaryChips(props: {
         value={s.lastUpdated}
         chipId="updated"
       />
+    </div>
+  );
+}
+
+function DashboardIntelligenceCard(props: {
+  intelligencePayload: DashboardIntelligencePayload;
+}) {
+  const payload = props.intelligencePayload;
+  const strongestCurrentFitLanes = Array.isArray(payload.strongestCurrentFitLanes)
+    ? payload.strongestCurrentFitLanes
+    : [];
+  const topMissingItems = Array.isArray(payload.topMissingItems)
+    ? payload.topMissingItems
+    : [];
+  const nextBestActionTitle =
+    payload.nextBestAction !== undefined &&
+    payload.nextBestAction !== null &&
+    payload.nextBestAction.title !== undefined
+      ? payload.nextBestAction.title
+      : 'Review your highest-value next step.';
+
+  return (
+    <div
+      className="rounded-2xl px-4 py-4 mt-3"
+      data-testid="dashboard-intelligence-card"
+      style={{
+        background: 'var(--p-surface)',
+        border: '1px solid var(--p-border)',
+      }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
+            PathAdvisor intelligence
+          </p>
+          <p className="text-sm mt-1" style={{ color: 'var(--p-text)' }}>
+            {payload.summary}
+          </p>
+          <p className="text-xs mt-1" style={{ color: 'var(--p-text-muted)' }}>
+            {payload.confidenceSummary}
+          </p>
+        </div>
+        <div className="px-3 py-2 rounded-xl" style={{ background: 'var(--p-surface2)' }}>
+          <p className="text-lg font-semibold leading-none" style={{ color: 'var(--p-text)' }}>
+            {String(payload.context.profileCompleteness)}%
+          </p>
+          <p className="text-[10px] mt-1 uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
+            completeness
+          </p>
+        </div>
+      </div>
+
+      {strongestCurrentFitLanes.length > 0 ? (
+        <p className="text-xs mt-3" style={{ color: 'var(--p-text-muted)' }}>
+          Fit lanes: {strongestCurrentFitLanes.join(', ')}
+        </p>
+      ) : null}
+      {topMissingItems.length > 0 ? (
+        <p className="text-xs mt-1" style={{ color: 'var(--p-text-muted)' }}>
+          Most valuable missing items: {topMissingItems.join(', ')}
+        </p>
+      ) : null}
+      <p className="text-xs mt-2" style={{ color: 'var(--p-text)' }}>
+        Next best action: {nextBestActionTitle}
+      </p>
     </div>
   );
 }
@@ -1603,6 +1826,7 @@ export function DashboardScreen(props: DashboardScreenProps) {
   const propOnSummaryChipClick = props.onSummaryChipClick;
   const propRequestConversation = props.requestConversation;
   const propConversationRequestState = props.conversationRequestState;
+  const intelligencePayload = props.intelligencePayload !== undefined ? props.intelligencePayload : null;
 
   // ==========================================================================
   // THREAD STORE INTEGRATION
@@ -1962,6 +2186,9 @@ export function DashboardScreen(props: DashboardScreenProps) {
           summary={summary}
           onChipClick={handleChipClick}
         />
+        {intelligencePayload !== null ? (
+          <DashboardIntelligenceCard intelligencePayload={intelligencePayload} />
+        ) : null}
       </div>
 
       {/* Conversation canvas — fills remaining viewport, state-aware alignment */}

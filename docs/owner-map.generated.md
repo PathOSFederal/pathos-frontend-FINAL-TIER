@@ -12,20 +12,30 @@
 | Route | Page File |
 |-------|-----------|
 | `/` | `app/page.tsx` |
+| `/(shared)/dashboard` | `app/(shared)/dashboard/page.tsx` |
+| `/(shared)/dashboard/benefits` | `app/(shared)/dashboard/benefits/page.tsx` |
+| `/(shared)/dashboard/career` | `app/(shared)/dashboard/career/page.tsx` |
+| `/(shared)/dashboard/career-readiness` | `app/(shared)/dashboard/career-readiness/page.tsx` |
+| `/(shared)/dashboard/compensation` | `app/(shared)/dashboard/compensation/page.tsx` |
+| `/(shared)/dashboard/job-search` | `app/(shared)/dashboard/job-search/page.tsx` |
+| `/(shared)/dashboard/resume` | `app/(shared)/dashboard/resume/page.tsx` |
+| `/(shared)/dashboard/resume-builder` | `app/(shared)/dashboard/resume-builder/page.tsx` |
+| `/(shared)/dashboard/resume-builder/review` | `app/(shared)/dashboard/resume-builder/review/page.tsx` |
+| `/(shared)/dashboard/resume-readiness` | `app/(shared)/dashboard/resume-readiness/page.tsx` |
+| `/(shared)/dashboard/resume/[resumeId]` | `app/(shared)/dashboard/resume/[resumeId]/page.tsx` |
+| `/(shared)/dashboard/resume/[resumeId]/review` | `app/(shared)/dashboard/resume/[resumeId]/review/page.tsx` |
+| `/(shared)/dashboard/resume/new` | `app/(shared)/dashboard/resume/new/page.tsx` |
+| `/(shared)/dashboard/retirement` | `app/(shared)/dashboard/retirement/page.tsx` |
+| `/(shared)/dashboard/saved-jobs` | `app/(shared)/dashboard/saved-jobs/page.tsx` |
+| `/(shared)/dashboard/usajobs` | `app/(shared)/dashboard/usajobs/page.tsx` |
 | `/admin` | `app/admin/page.tsx` |
 | `/alerts` | `app/alerts/page.tsx` |
-| `/dashboard` | `app/dashboard/page.tsx` |
-| `/dashboard/benefits` | `app/dashboard/benefits/page.tsx` |
-| `/dashboard/career` | `app/dashboard/career/page.tsx` |
-| `/dashboard/compensation` | `app/dashboard/compensation/page.tsx` |
-| `/dashboard/job-search` | `app/dashboard/job-search/page.tsx` |
-| `/dashboard/resume-builder` | `app/dashboard/resume-builder/page.tsx` |
-| `/dashboard/resume-builder/review` | `app/dashboard/resume-builder/review/page.tsx` |
-| `/dashboard/retirement` | `app/dashboard/retirement/page.tsx` |
-| `/dashboard/usajobs` | `app/dashboard/usajobs/page.tsx` |
+| `/application-confidence-center` | `app/application-confidence-center/page.tsx` |
+| `/desktop-preview` | `app/desktop-preview/page.tsx` |
 | `/desktop/usajobs-guided` | `app/desktop/usajobs-guided/page.tsx` |
 | `/documents` | `app/documents/page.tsx` |
 | `/documents/uploads` | `app/documents/uploads/page.tsx` |
+| `/download` | `app/download/page.tsx` |
 | `/explore/benefits` | `app/explore/benefits/page.tsx` |
 | `/explore/benefits/workspace` | `app/explore/benefits/workspace/page.tsx` |
 | `/fedpath` | `app/fedpath/page.tsx` |
@@ -37,10 +47,12 @@
 | `/fedpath/recommendations` | `app/fedpath/recommendations/page.tsx` |
 | `/fedpath/retirement-tsp` | `app/fedpath/retirement-tsp/page.tsx` |
 | `/fedpath/scenarios` | `app/fedpath/scenarios/page.tsx` |
+| `/guided-apply` | `app/guided-apply/page.tsx` |
 | `/import` | `app/import/page.tsx` |
 | `/ingest/email` | `app/ingest/email/page.tsx` |
 | `/settings` | `app/settings/page.tsx` |
 | `/tax-compliance` | `app/tax-compliance/page.tsx` |
+| `/workbench` | `app/workbench/page.tsx` |
 
 ---
 
@@ -88,9 +100,11 @@
 | `TASKS` | `pathos.tasks.v1` |
 | `AUDIT_LOG` | `pathos.auditLog.v1` |
 | `ONBOARDING` | `pathos-onboarding-state` |
+| `ONBOARDING_SESSION_ID` | `pathos-onboarding-session-id-v1` |
 | `GUIDED_TOUR` | `pathos-guided-tour-state` |
 | `BENEFITS_WORKSPACE` | `pathos-benefits-workspace-v1` |
 | `GUIDED_USAJOBS_GOALS` | `pathos-guided-usajobs-goals-v1` |
+| `PATHADVISOR_THREADS` | `pathos-pathadvisor-threads-v1` |
 
 ---
 

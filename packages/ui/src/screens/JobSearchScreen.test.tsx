@@ -23,12 +23,17 @@ import {
   buildReadinessInputFromMock,
   buildDimensionBriefingPayload,
 } from '../lib/jobMatchSnapshot';
+import type { ScreenIntelligenceEnvelope } from '../types/pathadvisorIntelligence';
 import { CAREER_READINESS_MOCK } from './careerReadiness/careerReadinessMockData';
 import {
+  buildJobListMatchDisplay,
   buildQueryAwareLocationDisplay,
+  deriveMatchLevelFromOverallScore,
   getResetSearchQuery,
   JobDetailsPanel,
   JobSearchScreen,
+  resolveJobListRowState,
+  resolveJobSearchLikelihoodScore,
   resolveUsaJobsUrl,
 } from './JobSearchScreen';
 import { MOCK_JOBS } from './jobSearchMockJobs';
@@ -182,6 +187,39 @@ function renderJobDetailsWithLiveState(state: {
     };
     explainabilityVersion: string | null;
     engineVersion: string | null;
+    canonicalUserContext?: {
+      targetRoleClusters: string[];
+      preferredLocations: string[];
+      readinessState: string;
+      fitLanes: string[];
+      blockers: string[];
+      topMissingItems: string[];
+      nextBestActions: string[];
+      activeThreads: string[];
+      profileCompleteness: number;
+      freshnessBand: 'fresh' | 'aging' | 'stale' | 'unknown';
+      confidenceBand: 'low' | 'medium' | 'high';
+      recentMeaningfulChanges: string[];
+      activitySignals: string[];
+      updatedAt: string;
+    } | null;
+    jobMatchProjection?: {
+      overallScore: number;
+      confidenceBand: 'low' | 'medium' | 'high';
+      blockerSeverity: 'low' | 'medium' | 'high';
+      explanationSummary: string;
+      dimensions: Array<{
+        dimensionId: string;
+        label: string;
+        score: number;
+        status: 'strong' | 'building' | 'weak';
+        explanation: string;
+      }>;
+      nextActions: string[];
+      blockers: string[];
+      warnings: string[];
+    } | null;
+    screenIntelligence?: ScreenIntelligenceEnvelope | null;
   };
 }) {
   const job = MOCK_JOBS[0];
@@ -326,6 +364,114 @@ describe('JobSearchScreen', function () {
       output.indexOf('Live search is unavailable for this request.') !== -1 ||
       output.indexOf('Loading job search') !== -1
     ).toBe(true);
+  });
+
+  it('renders canonical job-search intelligence projection from the backend payload', function () {
+    const output = renderJobDetailsWithLiveState({
+      status: 'success',
+      errorMessage: null,
+      evaluation: {
+        recommendation: 'consider',
+        decisionBand: 'caution',
+        confidenceBand: 'medium',
+        overallScore: 74,
+        reasons: [],
+        gaps: [],
+        warnings: [],
+        missingEvidence: [],
+        nextActions: [],
+        applicationDecision: null,
+        explainabilityVersion: 'explainability-v1',
+        engineVersion: 'qualification-v1',
+        canonicalUserContext: {
+          targetRoleClusters: ['Program analyst'],
+          preferredLocations: ['Maryland and DC'],
+          readinessState: 'Draft resume',
+          fitLanes: ['Target field: Program / policy analyst'],
+          blockers: ['Resume evidence still needs work'],
+          topMissingItems: ['Location flexibility'],
+          nextBestActions: ['Clarify target role cluster'],
+          activeThreads: ['Target direction'],
+          profileCompleteness: 68,
+          freshnessBand: 'fresh',
+          confidenceBand: 'medium',
+          recentMeaningfulChanges: [],
+          activitySignals: ['Recent job activity strengthened analyst direction.'],
+          updatedAt: '2026-04-09T12:00:00Z',
+        },
+        jobMatchProjection: {
+          overallScore: 74,
+          confidenceBand: 'medium',
+          blockerSeverity: 'medium',
+          explanationSummary: 'Match projection is grounded in canonical user context and job evidence.',
+          dimensions: [
+            {
+              dimensionId: 'qualification_alignment',
+              label: 'Qualification alignment',
+              score: 74,
+              status: 'building',
+              explanation: 'Grounded in the backend job-evaluation score against canonical user evidence.',
+            },
+          ],
+          nextActions: ['Clarify your target role cluster'],
+          blockers: ['Resume evidence still needs work'],
+          warnings: [],
+        },
+        screenIntelligence: {
+          screen: 'job_search',
+          pathadvisorMode: 'search_refinement',
+          context: {
+            targetRoleClusters: ['Program analyst'],
+            preferredLocations: ['Maryland and DC'],
+            readinessState: 'Draft resume',
+            fitLanes: ['Target field: Program / policy analyst'],
+            blockers: ['Resume evidence still needs work'],
+            topMissingItems: ['Location flexibility'],
+            nextBestActions: ['Clarify target role cluster'],
+            activeThreads: ['Target direction'],
+            profileCompleteness: 68,
+            freshnessBand: 'fresh',
+            confidenceBand: 'medium',
+            recentMeaningfulChanges: [],
+            activitySignals: ['Recent job activity strengthened analyst direction.'],
+            updatedAt: '2026-04-09T12:00:00Z',
+          },
+          summary: 'Job Search is projecting canonical user intelligence onto this role.',
+          nextBestAction: {
+            actionId: 'clarify_target_cluster',
+            title: 'Clarify your target role cluster',
+            description: 'The selected job is broader than your current target-role context.',
+            ctaLabel: 'Refine role direction',
+            ctaHref: '/dashboard',
+            reason: 'Sharper target direction improves match quality.',
+          },
+          jobMatchProjection: {
+            overallScore: 74,
+            confidenceBand: 'medium',
+            blockerSeverity: 'medium',
+            explanationSummary: 'Match projection is grounded in canonical user context and job evidence.',
+            dimensions: [
+              {
+                dimensionId: 'qualification_alignment',
+                label: 'Qualification alignment',
+                score: 74,
+                status: 'building',
+                explanation: 'Grounded in the backend job-evaluation score against canonical user evidence.',
+              },
+            ],
+            nextActions: ['Clarify your target role cluster'],
+            blockers: ['Resume evidence still needs work'],
+            warnings: [],
+          },
+          refinementSuggestions: ['Clarify target role cluster'],
+        },
+      },
+    });
+
+    expect(output).toContain('Canonical user intelligence');
+    expect(output).toContain('Canonical match projection');
+    expect(output).toContain('Screen guidance');
+    expect(output).toContain('Clarify your target role cluster');
   });
 
   it('renders structured live salary in the decision band instead of See announcement', function () {
@@ -959,6 +1105,113 @@ describe('JobSearchScreen', function () {
 });
 
 describe('JobSearchScreen live advisor integration', function () {
+  it('uses canonical backend row score when live evaluation is available', function () {
+    const display = buildJobListMatchDisplay(
+      true,
+      {
+        matchLevel: 'Moderate',
+        overallMatchScore: 58,
+      },
+      {
+        recommendation: 'consider',
+        decisionBand: 'caution',
+        confidenceBand: 'medium',
+        overallScore: 71,
+        reasons: [],
+        gaps: [],
+        warnings: [],
+        missingEvidence: [],
+        nextActions: [],
+        applicationDecision: null,
+        explainabilityVersion: 'explainability-v1',
+        engineVersion: 'qualification-v1',
+      }
+    );
+
+    expect(display.overallMatchScore).toBe(71);
+    expect(display.matchLevel).toBe('Moderate');
+    expect(display.scoreSource).toBe('canonical');
+  });
+
+  it('falls back to the local row score when no live evaluation is cached', function () {
+    const display = buildJobListMatchDisplay(
+      true,
+      {
+        matchLevel: 'Strong',
+        overallMatchScore: 82,
+      },
+      undefined
+    );
+
+    expect(display.overallMatchScore).toBe(82);
+    expect(display.matchLevel).toBe('Strong');
+    expect(display.scoreSource).toBe('local');
+  });
+
+  it('derives row match level from canonical score thresholds', function () {
+    expect(deriveMatchLevelFromOverallScore(80)).toBe('Strong');
+    expect(deriveMatchLevelFromOverallScore(60)).toBe('Moderate');
+    expect(deriveMatchLevelFromOverallScore(40)).toBe('Stretch');
+  });
+
+  it('uses canonical score for likelihood sorting when live evaluation is cached', function () {
+    const score = resolveJobSearchLikelihoodScore(
+      true,
+      58,
+      {
+        recommendation: 'consider',
+        decisionBand: 'caution',
+        confidenceBand: 'medium',
+        overallScore: 73,
+        reasons: [],
+        gaps: [],
+        warnings: [],
+        missingEvidence: [],
+        nextActions: [],
+        applicationDecision: null,
+        explainabilityVersion: 'explainability-v1',
+        engineVersion: 'qualification-v1',
+      }
+    );
+
+    expect(score).toBe(73);
+  });
+
+  it('falls back to local score for likelihood sorting when canonical score is unavailable', function () {
+    const score = resolveJobSearchLikelihoodScore(true, 58, undefined);
+    expect(score).toBe(58);
+  });
+
+  it('marks a live row as loading until canonical match data arrives', function () {
+    expect(
+      resolveJobListRowState({
+        isLiveAdvisorMode: true,
+        scoreSource: 'local',
+        liveStatus: 'loading',
+      })
+    ).toBe('loading');
+  });
+
+  it('marks a live row as estimated when it is still showing fallback data', function () {
+    expect(
+      resolveJobListRowState({
+        isLiveAdvisorMode: true,
+        scoreSource: 'local',
+        liveStatus: 'error',
+      })
+    ).toBe('estimated');
+  });
+
+  it('marks a live row as canonical once backend match data is cached', function () {
+    expect(
+      resolveJobListRowState({
+        isLiveAdvisorMode: true,
+        scoreSource: 'canonical',
+        liveStatus: 'success',
+      })
+    ).toBe('live');
+  });
+
   it('renders live loading state for the selected job panel', function () {
     const output = renderJobDetailsWithLiveState({
       status: 'loading',
@@ -1070,9 +1323,29 @@ describe('JobSearchScreen live advisor integration', function () {
         },
         explainabilityVersion: 'explainability-v1',
         engineVersion: 'qualification-v1',
+        jobMatchProjection: {
+          overallScore: 71,
+          confidenceBand: 'medium',
+          blockerSeverity: 'medium',
+          explanationSummary: 'Match projection is grounded in canonical user context and job evidence.',
+          dimensions: [
+            {
+              dimensionId: 'qualification_alignment',
+              label: 'Qualification alignment',
+              score: 71,
+              status: 'building',
+              explanation: 'Grounded in the backend job-evaluation score against canonical user evidence.',
+            },
+          ],
+          nextActions: ['Review missing profile evidence before applying.'],
+          blockers: ['No skills evidence was provided.'],
+          warnings: ['Confidence is reduced because profile evidence is incomplete.'],
+        },
       },
     });
 
+    expect(output).toContain('Match');
+    expect(output).toContain('Building match');
     expect(output).toContain('Partial evidence');
     expect(output).toContain('The role aligns with your target series.');
     expect(output).toContain('No skills evidence was provided.');

@@ -69,6 +69,7 @@ All keys are defined in `lib/storage-keys.ts`:
 | `ALERT_SEEN_JOBS_STORAGE_KEY` | `pathos-alert-seen-jobs` | jobAlertsStore |
 | `RESUME_BUILDER_STORAGE_KEY` | `pathos-resume-builder-v1` | resumeBuilderStore |
 | `BENEFITS_ASSUMPTIONS_STORAGE_KEY` | `pathos-benefits-assumptions` | benefitsAssumptionsStore |
+| `ONBOARDING_SESSION_ID_STORAGE_KEY` | `pathos-onboarding-session-id-v1` | dashboard onboarding resume |
 
 (userPreferencesStore uses a local constant `STORAGE_KEY = 'pathos-user-preferences'`)
 
@@ -94,6 +95,12 @@ All keys are defined in `lib/storage-keys.ts`:
 3. **Persistence**: Writes to `pathos-resume-builder-v1` localStorage
 4. **UI**: Tailored resume appears in resume builder with suggestions
 
+### "Dashboard Onboarding"
+1. **UI**: Enter `/dashboard` and the shared dashboard page renders PathAdvisor onboarding mode for users without a completed onboarding session
+2. **Client**: `components/dashboard/PathAdvisorOnboardingGate.tsx` checks `pathos-onboarding-session-id-v1` and resumes or creates a backend onboarding session
+3. **API**: `app/api/onboarding/session/**` and `app/api/pathadvisor/context/bootstrap/route.ts` proxy the bounded onboarding contracts to the backend
+4. **UI**: `components/dashboard/PathAdvisorOnboardingExperience.tsx` renders only backend-provided questions, progress, and first-insight payloads inside the dashboard shell
+
 ---
 
 ## "Where Do I Change X?" Cheat Sheet
@@ -105,10 +112,12 @@ All keys are defined in `lib/storage-keys.ts`:
 | Add a localStorage key | `lib/storage-keys.ts` |
 | Modify sidebar navigation | `components/path-os-sidebar.tsx` |
 | Add dashboard widget | `components/dashboard/` |
+| Modify dashboard onboarding mode | `components/dashboard/PathAdvisorOnboardingGate.tsx`, `components/dashboard/PathAdvisorOnboardingExperience.tsx`, `app/(shared)/dashboard/page.tsx` |
 | Change job card behavior | `components/dashboard/job-card*.tsx` |
 | Modify alerts logic | `store/jobAlertsStore.ts`, `app/alerts/page.tsx` |
 | Change job search filters | `store/jobSearchStore.ts`, `app/dashboard/job-search/page.tsx` |
 | Add API endpoint | `app/api/<endpoint>/route.ts` |
+| Modify onboarding API proxying | `app/api/onboarding/**`, `app/api/pathadvisor/context/bootstrap/route.ts`, `lib/onboarding/client.ts` |
 | Modify user profile | `store/profileStore.ts` |
 
 ---
@@ -363,4 +372,3 @@ No new storage keys added (uses existing `pathos.documentImport.v1`).
 ---
 
 *Last updated: December 2025 (Day 29)*
-

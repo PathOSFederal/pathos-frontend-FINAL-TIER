@@ -75,6 +75,21 @@ export type ResumeBuilderSection =
   | 'skills'
   | 'review';
 export type ResumeRightRailTab = 'guidance' | 'diagnostics' | 'context';
+
+/**
+ * BUILDER VIEW MODE — controls the primary workspace composition.
+ *
+ * 'canvas'          — Default. Document is central and dominant. Right rail is
+ *                     hidden. Guidance cues are subtle (badges, indicators).
+ * 'focus_guidance'  — Right rail is open showing section-specific guidance and
+ *                     rewrite actions for the active section.
+ * 'diagnostics'     — Right rail is open showing backend diagnostics snapshot
+ *                     and status for the current draft.
+ * 'review'          — Not used directly here; the review route view is separate.
+ *                     This mode is reserved for future inline review activation.
+ */
+export type ResumeBuilderViewMode = 'canvas' | 'focus_guidance' | 'diagnostics' | 'review';
+
 export type ResumeDialogType = 'save-master' | 'save-variant' | 'duplicate' | 'export' | null;
 export type ResumeReadinessBand =
   | 'Not started'
@@ -233,6 +248,13 @@ export interface ResumePlaceholderReviewState {
 export interface ResumeWorkspaceUiState {
   currentView: ResumeWorkspaceRouteView;
   rightRailTab: ResumeRightRailTab;
+  /**
+   * Controls the builder workspace composition mode. 'canvas' keeps the
+   * document dominant with the right rail hidden. Other modes open the right
+   * rail with the corresponding content. Defaults to 'canvas' so the user
+   * sees the resume first.
+   */
+  builderViewMode: ResumeBuilderViewMode;
   activeDialog: ResumeDialogType;
   toastMessage: string | null;
 }
@@ -264,6 +286,7 @@ export interface ResumeWorkspaceActions {
   createResumeFromFlow: () => string;
   setActiveSection: (section: ResumeBuilderSection) => void;
   setRightRailTab: (tab: ResumeRightRailTab) => void;
+  setBuilderViewMode: (mode: ResumeBuilderViewMode) => void;
   updateContactField: (field: keyof ResumeContact, value: string) => void;
   updateSummary: (value: string) => void;
   updateExperienceText: (value: string) => void;
@@ -897,6 +920,7 @@ function buildSeedState(): ResumeWorkspaceState {
     ui: {
       currentView: 'home',
       rightRailTab: 'guidance',
+      builderViewMode: 'canvas',
       activeDialog: null,
       toastMessage: null,
     },
@@ -1241,7 +1265,31 @@ function loadPersistedState(): ResumeWorkspaceState {
     builder: typedRaw.builder,
     review: normalizePersistedReviewState(typedRaw.review),
     rewrite: createEmptyRewriteReviewState(),
-    ui: typedRaw.ui,
+    ui: normalizePersistedUiState(typedRaw.ui),
+  };
+}
+
+/**
+ * Normalizes the persisted UI state to ensure newer fields (like
+ * builderViewMode) get safe defaults when loading state saved before
+ * those fields existed.
+ */
+function normalizePersistedUiState(
+  raw: ResumeWorkspaceUiState
+): ResumeWorkspaceUiState {
+  const VALID_VIEW_MODES: ResumeBuilderViewMode[] = [
+    'canvas', 'focus_guidance', 'diagnostics', 'review',
+  ];
+  const rawMode = (raw as unknown as Record<string, unknown>).builderViewMode;
+  const isValidMode =
+    typeof rawMode === 'string' &&
+    VALID_VIEW_MODES.indexOf(rawMode as ResumeBuilderViewMode) >= 0;
+  return {
+    currentView: raw.currentView,
+    rightRailTab: raw.rightRailTab,
+    builderViewMode: isValidMode ? rawMode as ResumeBuilderViewMode : 'canvas',
+    activeDialog: raw.activeDialog,
+    toastMessage: raw.toastMessage,
   };
 }
 
@@ -1722,6 +1770,25 @@ export const useResumeWorkspaceStore = create<ResumeWorkspaceStore>(function (se
       set({
         ui: Object.assign({}, get().ui, { rightRailTab: tab }),
       });
+      get().persist();
+    },
+
+    /**
+     * Switches the builder workspace between canvas (document-dominant, rail
+     * hidden), focus_guidance (rail open with section guidance), and
+     * diagnostics (rail open with diagnostics). Also syncs the right rail tab
+     * to match the selected mode so the rail content is immediately relevant.
+     */
+    setBuilderViewMode: function (mode) {
+      const nextUi = Object.assign({}, get().ui, {
+        builderViewMode: mode,
+      });
+      if (mode === 'focus_guidance') {
+        nextUi.rightRailTab = 'guidance';
+      } else if (mode === 'diagnostics') {
+        nextUi.rightRailTab = 'diagnostics';
+      }
+      set({ ui: nextUi });
       get().persist();
     },
 

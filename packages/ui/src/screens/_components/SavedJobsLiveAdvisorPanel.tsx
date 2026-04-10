@@ -14,6 +14,16 @@
 
 import type React from 'react';
 import { AlertTriangle, LoaderCircle, RefreshCcw, ShieldAlert, Target } from 'lucide-react';
+import type {
+  CanonicalIntelligenceSummary,
+  CanonicalJobMatchProjection,
+  ScreenIntelligenceEnvelope,
+} from '../../types/pathadvisorIntelligence';
+import {
+  MatchBreakdownHeader,
+  MatchBreakdownRow,
+  type MatchBreakdownRowData,
+} from '../../components/MatchBreakdownTable';
 
 export interface SavedJobsLiveStoredJob {
   savedSearchId: string;
@@ -88,6 +98,9 @@ export interface SavedJobsLiveEvaluation {
   applicationDecision: SavedJobsLiveApplicationDecision | null;
   explainabilityVersion: string | null;
   engineVersion: string | null;
+  canonicalUserContext?: CanonicalIntelligenceSummary | null;
+  jobMatchProjection?: CanonicalJobMatchProjection | null;
+  screenIntelligence?: ScreenIntelligenceEnvelope | null;
 }
 
 export interface SavedJobsLiveEvaluationState {
@@ -96,11 +109,115 @@ export interface SavedJobsLiveEvaluationState {
   evaluation: SavedJobsLiveEvaluation | null;
 }
 
+export interface PathAdvisorLiveEvaluationSummary {
+  summaryLines: string[];
+  keyReasons: string[];
+  missingEvidence: string[];
+  nextActions: string[];
+}
+
 function decisionLabel(value: string): string {
   if (value === 'apply_now') return 'Apply now';
   if (value === 'not_recommended') return 'Not recommended';
   if (value === 'low_priority') return 'Low priority';
   return value.replace(/_/g, ' ');
+}
+
+function takeUniqueStrings(values: string[], maxItems: number): string[] {
+  const output: string[] = [];
+
+  for (let i = 0; i < values.length; i++) {
+    const value = values[i];
+    if (value.trim() === '' || output.indexOf(value) !== -1) {
+      continue;
+    }
+    output.push(value);
+    if (output.length >= maxItems) {
+      break;
+    }
+  }
+
+  return output;
+}
+
+export function buildLiveEvaluationPathAdvisorSummary(
+  evaluation: SavedJobsLiveEvaluation
+): PathAdvisorLiveEvaluationSummary {
+  const summaryLines: string[] = [
+    'Recommendation: ' + decisionLabel(evaluation.recommendation),
+    'Overall score: ' +
+      String(evaluation.overallScore) +
+      ' (' +
+      decisionLabel(evaluation.decisionBand) +
+      ', confidence ' +
+      evaluation.confidenceBand +
+      ')',
+  ];
+
+  if (evaluation.applicationDecision !== null) {
+    summaryLines.push(
+      'Application decision: ' +
+        decisionLabel(evaluation.applicationDecision.decisionBand) +
+        ' — ' +
+        evaluation.applicationDecision.rationaleSummary
+    );
+  } else if (evaluation.jobMatchProjection !== undefined && evaluation.jobMatchProjection !== null) {
+    summaryLines.push(
+      'Match projection: ' +
+        canonicalProjectionHeadline(evaluation.jobMatchProjection) +
+        ' — ' +
+        evaluation.jobMatchProjection.explanationSummary
+    );
+  }
+
+  const keyReasons = takeUniqueStrings(
+    evaluation.reasons.map(function (item) {
+      return item.text;
+    }),
+    3
+  );
+
+  const missingEvidence = takeUniqueStrings(
+    evaluation.missingEvidence
+      .map(function (item) {
+        return item.text;
+      })
+      .concat(
+        evaluation.applicationDecision !== null
+          ? evaluation.applicationDecision.blockingIssues.map(function (item) {
+              return item.text;
+            })
+          : []
+      ),
+    4
+  );
+
+  const nextActions = takeUniqueStrings(
+    (evaluation.applicationDecision !== null
+      ? evaluation.applicationDecision.recommendedNextActions.map(function (item) {
+          return item.action;
+        })
+      : []
+    )
+      .concat(
+        evaluation.nextActions.map(function (item) {
+          return item.action;
+        })
+      )
+      .concat(
+        evaluation.jobMatchProjection !== undefined && evaluation.jobMatchProjection !== null
+          ? evaluation.jobMatchProjection.nextActions
+          : []
+      ),
+    4
+  );
+
+  return {
+    summaryLines: summaryLines,
+    keyReasons: keyReasons,
+    missingEvidence: missingEvidence,
+    nextActions: nextActions,
+  };
 }
 
 function scoreTone(score: number): string {
@@ -205,6 +322,144 @@ function NextActionsList(props: { actions: SavedJobsLiveNextAction[] }) {
   );
 }
 
+function projectionTone(status: 'strong' | 'building' | 'weak'): string {
+  if (status === 'strong') return 'var(--p-success)';
+  if (status === 'building') return 'var(--p-warning, #eab308)';
+  return 'var(--p-danger, #ef4444)';
+}
+
+/**
+ * Convert the canonical backend projection into one stable user-facing match
+ * headline.
+ *
+ * WHY THIS EXISTS:
+ * The v5 intelligence distribution milestone makes canonical user-job matching
+ * the source of truth. Job Search and Saved Jobs should therefore lead with the
+ * canonical projection when it is available, instead of foregrounding the older
+ * decision-band language such as "hold".
+ */
+export function canonicalProjectionHeadline(
+  projection: CanonicalJobMatchProjection
+): string {
+  if (
+    projection.overallScore >= 80 &&
+    projection.blockerSeverity === 'low'
+  ) {
+    return 'Strong match';
+  }
+
+  if (projection.overallScore >= 60) {
+    return 'Building match';
+  }
+
+  return 'Weak match';
+}
+
+function CanonicalContextPanel(props: { context: CanonicalIntelligenceSummary }) {
+  return (
+    <div
+      className="rounded-md px-3 py-3"
+      style={{ background: 'var(--p-surface2)', border: '1px solid var(--p-border)' }}
+    >
+      <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
+        Canonical user intelligence
+      </p>
+      <p className="text-xs mt-2" style={{ color: 'var(--p-text-muted)' }}>
+        Completeness {String(props.context.profileCompleteness)}% · Confidence {props.context.confidenceBand} · Freshness {props.context.freshnessBand}
+      </p>
+      {props.context.targetRoleClusters.length > 0 ? (
+        <p className="text-xs mt-2" style={{ color: 'var(--p-text-muted)' }}>
+          Target roles: {props.context.targetRoleClusters.join(', ')}
+        </p>
+      ) : null}
+      {props.context.preferredLocations.length > 0 ? (
+        <p className="text-xs mt-1" style={{ color: 'var(--p-text-muted)' }}>
+          Preferred locations: {props.context.preferredLocations.join(', ')}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function CanonicalProjectionPanel(props: {
+  projection: CanonicalJobMatchProjection;
+  screenIntelligence: ScreenIntelligenceEnvelope | null;
+}) {
+  function buildRowData(
+    dimension: CanonicalJobMatchProjection['dimensions'][number]
+  ): MatchBreakdownRowData {
+    const statusColor = projectionTone(dimension.status);
+    const emphasisLevel =
+      dimension.score >= 75 ? 'High' : dimension.score >= 55 ? 'Medium' : 'Low';
+
+    return {
+      label: dimension.label,
+      score: dimension.score,
+      emphasisLevel: emphasisLevel,
+      statusLabel:
+        dimension.status === 'strong'
+          ? 'Strong'
+          : dimension.status === 'building'
+            ? 'Building'
+            : 'Weak',
+      statusColor: statusColor,
+      tooltipText: dimension.explanation,
+      ariaLabel:
+        'View canonical projection dimension ' +
+        dimension.label +
+        ' with score ' +
+        String(dimension.score),
+    };
+  }
+
+  return (
+    <div
+      className="rounded-md px-3 py-3"
+      style={{ background: 'var(--p-surface2)', border: '1px solid var(--p-border)' }}
+    >
+      <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
+        Canonical match projection
+      </p>
+      <p className="text-sm mt-2" style={{ color: 'var(--p-text-muted)' }}>
+        {props.projection.explanationSummary}
+      </p>
+      <div className="mt-3">
+        <p
+          className="text-[10px] font-semibold uppercase tracking-wider mb-2"
+          style={{ color: 'var(--p-text-dim)' }}
+        >
+          Match breakdown
+        </p>
+        <MatchBreakdownHeader />
+        <ul className="list-none space-y-1.5" role="list">
+          {props.projection.dimensions.map(function (dimension, index) {
+            return (
+              <MatchBreakdownRow
+                key={dimension.dimensionId}
+                data={buildRowData(dimension)}
+                tooltipIdSuffix={'live-projection-' + String(index)}
+              />
+            );
+          })}
+        </ul>
+      </div>
+      {props.screenIntelligence !== null ? (
+        <div className="mt-3 rounded-md px-3 py-2" style={{ background: 'var(--p-surface)' }}>
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
+            Screen guidance
+          </p>
+          <p className="text-sm mt-1" style={{ color: 'var(--p-text)' }}>
+            {props.screenIntelligence.summary}
+          </p>
+          <p className="text-xs mt-1" style={{ color: 'var(--p-text-muted)' }}>
+            Next: {props.screenIntelligence.nextBestAction.title}
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function SavedJobsLiveAdvisorPanel(props: {
   jobTitle: string;
   state: SavedJobsLiveEvaluationState;
@@ -288,6 +543,28 @@ export function SavedJobsLiveAdvisorPanel(props: {
   const applicationDecision = evaluation.applicationDecision;
   const hasPartialEvidence =
     evaluation.missingEvidence.length > 0 || evaluation.confidenceBand !== 'high';
+  const canonicalContext =
+    evaluation.canonicalUserContext !== undefined ? evaluation.canonicalUserContext : null;
+  const jobMatchProjection =
+    evaluation.jobMatchProjection !== undefined ? evaluation.jobMatchProjection : null;
+  const screenIntelligence =
+    evaluation.screenIntelligence !== undefined ? evaluation.screenIntelligence : null;
+  const overviewEyebrow =
+    jobMatchProjection !== null ? 'Match for this job' : 'Live Advisor Decision';
+  const overviewHeadline =
+    jobMatchProjection !== null
+      ? canonicalProjectionHeadline(jobMatchProjection)
+      : applicationDecision !== null
+        ? decisionLabel(applicationDecision.decisionBand)
+        : decisionLabel(evaluation.recommendation);
+  const overviewSummary =
+    jobMatchProjection !== null
+      ? screenIntelligence !== null
+        ? screenIntelligence.summary
+        : jobMatchProjection.explanationSummary
+      : applicationDecision !== null
+        ? applicationDecision.rationaleSummary
+        : 'This is the backend qualification result for the selected stored job.';
 
   return (
     <div className="space-y-3" data-testid="saved-jobs-live-advisor-success">
@@ -298,17 +575,13 @@ export function SavedJobsLiveAdvisorPanel(props: {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
-              Live Advisor Decision
+              {overviewEyebrow}
             </p>
             <p className="text-lg font-semibold mt-1" style={{ color: 'var(--p-text)' }}>
-              {applicationDecision !== null
-                ? decisionLabel(applicationDecision.decisionBand)
-                : decisionLabel(evaluation.recommendation)}
+              {overviewHeadline}
             </p>
             <p className="text-sm mt-2" style={{ color: 'var(--p-text-muted)' }}>
-              {applicationDecision !== null
-                ? applicationDecision.rationaleSummary
-                : 'This is the backend qualification result for the selected stored job.'}
+              {overviewSummary}
             </p>
           </div>
           <div
@@ -415,6 +688,17 @@ export function SavedJobsLiveAdvisorPanel(props: {
             : evaluation.nextActions
         }
       />
+
+      {canonicalContext !== null ? (
+        <CanonicalContextPanel context={canonicalContext} />
+      ) : null}
+
+      {jobMatchProjection !== null ? (
+        <CanonicalProjectionPanel
+          projection={jobMatchProjection}
+          screenIntelligence={screenIntelligence}
+        />
+      ) : null}
 
       <div
         className="rounded-md px-3 py-3 flex items-start gap-2"

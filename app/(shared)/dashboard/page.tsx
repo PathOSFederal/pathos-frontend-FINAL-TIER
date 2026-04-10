@@ -35,23 +35,38 @@
 
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   DashboardScreen,
+  type DashboardIntelligencePayload,
   type DashboardConversationExchange,
   type PathAdvisorConversationRequestState,
   type PathAdvisorGovernedDraft,
   type PathAdvisorGovernedResultState,
+  usePathAdvisorContextLogStore,
+  usePathAdvisorThreadStore,
 } from '@pathos/ui';
 import { SharedDashboardRouteShell } from './_components/SharedDashboardRouteShell';
+import { PathAdvisorOnboardingGate } from '@/components/dashboard/PathAdvisorOnboardingGate';
 import { useProfileStore } from '@/store/profileStore';
+import { fetchDashboardIntelligence } from '@/lib/pathadvisor-intelligence/client';
 import {
   buildInitialPathAdvisorDraft,
+  fetchPathAdvisorEntryResponse,
   fetchGovernedPathAdvisorResponse,
   fetchPathAdvisorConversationResponse,
 } from '@/lib/pathadvisor-governed/client';
-import { buildPathAdvisorConversationContext } from '@/lib/pathadvisor-governed/conversation-context';
+import {
+  buildPathAdvisorConversationContext,
+  buildPathAdvisorEntryContext,
+  buildPathAdvisorRouteContext,
+} from '@/lib/pathadvisor-governed/conversation-context';
+import {
+  buildPathAdvisorCarryForwardContext,
+  findPreviousUserMessage,
+} from '@/lib/pathadvisor-governed/carry-forward';
+import { useCareerResumeIntelligence } from '@/lib/intelligence/useCareerResumeIntelligence';
 
 /**
  * Route constants for navigation targets.
@@ -83,6 +98,7 @@ const CAREER_READINESS_ROUTE = '/dashboard/career-readiness';
  */
 export default function DashboardPage() {
   const router = useRouter();
+  const intelligence = useCareerResumeIntelligence();
   const profile = useProfileStore(function (state) {
     return state.profile;
   });
@@ -91,6 +107,18 @@ export default function DashboardPage() {
   });
   const loadProfileFromStorage = useProfileStore(function (state) {
     return state.loadFromStorage;
+  });
+  const contextEntriesByAnchor = usePathAdvisorContextLogStore(function (state) {
+    return state.entriesByAnchor;
+  });
+  const activeContextAnchorKey = usePathAdvisorContextLogStore(function (state) {
+    return state.activeAnchorKey;
+  });
+  const dashboardThreads = usePathAdvisorThreadStore(function (state) {
+    return state.threads;
+  });
+  const activeDashboardThreadId = usePathAdvisorThreadStore(function (state) {
+    return state.activeThreadId;
   });
   const [governedDraft, setGovernedDraft] = useState<PathAdvisorGovernedDraft>(
     buildInitialPathAdvisorDraft(profile)
@@ -104,6 +132,37 @@ export default function DashboardPage() {
     status: 'idle',
     errorMessage: null,
   });
+  const [dashboardIntelligence, setDashboardIntelligence] =
+    useState<DashboardIntelligencePayload | null>(null);
+  const routeContext = useMemo(
+    function () {
+      return buildPathAdvisorRouteContext(
+        'dashboard',
+        contextEntriesByAnchor,
+        activeContextAnchorKey,
+        {
+          allowActiveAnchorFallback: true,
+        }
+      );
+    },
+    [activeContextAnchorKey, contextEntriesByAnchor]
+  );
+  const previousDashboardUserMessage = useMemo(
+    function () {
+      if (activeDashboardThreadId === null) {
+        return null;
+      }
+
+      for (let i = 0; i < dashboardThreads.length; i += 1) {
+        if (dashboardThreads[i].id === activeDashboardThreadId) {
+          return findPreviousUserMessage(dashboardThreads[i].messages);
+        }
+      }
+
+      return null;
+    },
+    [activeDashboardThreadId, dashboardThreads]
+  );
 
   useEffect(function () {
     if (!isProfileLoaded) {
@@ -115,9 +174,36 @@ export default function DashboardPage() {
     setGovernedDraft(buildInitialPathAdvisorDraft(profile));
   }, [profile]);
 
+  useEffect(function () {
+    let cancelled = false;
+
+    void fetchDashboardIntelligence()
+      .then(function (payload) {
+        if (!cancelled) {
+          setDashboardIntelligence(payload);
+        }
+      })
+      .catch(function () {
+        if (!cancelled) {
+          setDashboardIntelligence(null);
+        }
+      });
+
+    return function () {
+      cancelled = true;
+    };
+  }, []);
+
   const requestDashboardConversation = useCallback(async function (
     text: string
   ): Promise<DashboardConversationExchange> {
+    const carryForwardContext =
+      governedDraft.domain === 'fehb'
+        ? null
+        : buildPathAdvisorCarryForwardContext(text, previousDashboardUserMessage);
+    const effectiveConversationMessage =
+      carryForwardContext !== null ? carryForwardContext.effectiveUserMessage : text;
+
     setConversationState({
       status: 'loading',
       errorMessage: null,
@@ -126,7 +212,7 @@ export default function DashboardPage() {
     let nextGovernedResponse = governedResult.response;
 
     try {
-      if (nextGovernedResponse === null) {
+      if (nextGovernedResponse === null || carryForwardContext !== null) {
         setGovernedResult(function (prev) {
           return {
             status: 'loading',
@@ -135,7 +221,25 @@ export default function DashboardPage() {
           };
         });
 
-        const governedResponse = await fetchGovernedPathAdvisorResponse(governedDraft, profile);
+        const governedResponse =
+          governedDraft.domain === 'qualification' || carryForwardContext !== null
+            ? await fetchPathAdvisorEntryResponse(
+                effectiveConversationMessage,
+                governedDraft,
+                profile,
+                buildPathAdvisorEntryContext({
+                  currentView: 'dashboard',
+                  draft: governedDraft,
+                  result: {
+                    status: 'idle',
+                    response: null,
+                    errorMessage: null,
+                  },
+                  intelligence: intelligence,
+                  routeContext: routeContext,
+                })
+              )
+            : await fetchGovernedPathAdvisorResponse(governedDraft, profile);
         if (governedResponse === null) {
           setGovernedResult({
             status: 'empty',
@@ -162,8 +266,14 @@ export default function DashboardPage() {
         currentView: 'dashboard',
         draft: governedDraft,
         result: governedResultForConversation,
+        intelligence: intelligence,
+        routeContext: routeContext,
+        carryForwardContext: carryForwardContext,
       });
-      const conversationResponse = await fetchPathAdvisorConversationResponse(text, context);
+      const conversationResponse = await fetchPathAdvisorConversationResponse(
+        effectiveConversationMessage,
+        context
+      );
 
       setConversationState({
         status: 'idle',
@@ -184,23 +294,30 @@ export default function DashboardPage() {
       });
       throw error;
     }
-  }, [governedDraft, governedResult.response, profile]);
+  }, [governedDraft, governedResult.response, intelligence, previousDashboardUserMessage, profile, routeContext]);
 
   return (
-    <SharedDashboardRouteShell hideAdvisor>
-      <DashboardScreen
-        requestConversation={requestDashboardConversation}
-        conversationRequestState={conversationState}
-        onStartImprovement={function () {
-          router.push(CAREER_READINESS_ROUTE + '#action-plan');
-        }}
-        onOpenResumeBuilder={function () {
-          router.push(RESUME_BUILDER_ROUTE);
-        }}
-        onOpenReadinessBreakdown={function () {
-          router.push(CAREER_READINESS_ROUTE);
-        }}
-      />
+    <SharedDashboardRouteShell
+      currentView="dashboard"
+      conversationIntelligence={intelligence}
+      hideAdvisor
+    >
+      <PathAdvisorOnboardingGate>
+        <DashboardScreen
+          intelligencePayload={dashboardIntelligence}
+          requestConversation={requestDashboardConversation}
+          conversationRequestState={conversationState}
+          onStartImprovement={function () {
+            router.push(CAREER_READINESS_ROUTE + '#action-plan');
+          }}
+          onOpenResumeBuilder={function () {
+            router.push(RESUME_BUILDER_ROUTE);
+          }}
+          onOpenReadinessBreakdown={function () {
+            router.push(CAREER_READINESS_ROUTE);
+          }}
+        />
+      </PathAdvisorOnboardingGate>
     </SharedDashboardRouteShell>
   );
 }

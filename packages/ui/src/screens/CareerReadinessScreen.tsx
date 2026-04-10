@@ -32,10 +32,14 @@ import {
   CAREER_READINESS_MOCK,
   type CareerReadinessMockData,
   type ActionPlanItem,
+  type ReadinessGap,
+  type RadarSpoke,
+  type TrajectoryData,
 } from './careerReadiness/careerReadinessMockData';
 import { ReadinessTrajectoryEChart } from './careerReadiness/ReadinessTrajectoryEChart';
 import { ReadinessRadarEChart } from './careerReadiness/ReadinessRadarEChart';
 import { publishScreenContext } from '../lib/pathAdvisorPublish';
+import type { UnifiedCareerResumeIntelligenceState } from '../intelligence/careerResumeIntelligence';
 
 // ---------------------------------------------------------------------------
 // Target role dropdown options (header)
@@ -71,20 +75,236 @@ function computeProjectedScore(baseScore: number, selectedIds: Set<string>, item
   return total > 100 ? 100 : total;
 }
 
+function mapSpokeLabel(key: string): string {
+  if (key === 'qualification') {
+    return 'Qualification';
+  }
+  if (key === 'specialized_experience') {
+    return 'Specialized Experience';
+  }
+  if (key === 'resume_evidence') {
+    return 'Resume Evidence';
+  }
+  if (key === 'keywords') {
+    return 'Keywords Coverage';
+  }
+  if (key === 'leadership_scope') {
+    return 'Leadership & Scope';
+  }
+  if (key === 'target_alignment') {
+    return 'Target Alignment';
+  }
+  return key
+    .split('_')
+    .map(function (part) {
+      if (part.length === 0) {
+        return '';
+      }
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join(' ');
+}
+
+function buildLiveTrajectory(
+  baseScore: number,
+  selectedIds: Set<string>,
+  items: ActionPlanItem[]
+): TrajectoryData {
+  const projectedScore = computeProjectedScore(baseScore, selectedIds, items);
+  const midpointScore = Math.round(baseScore + (projectedScore - baseScore) * 0.5);
+
+  return {
+    actualPoints: [
+      { label: 'Today', score: baseScore },
+      { label: '3 mo', score: baseScore },
+      { label: '6 mo', score: baseScore },
+      { label: '12 mo', score: baseScore },
+    ],
+    possiblePoints: [
+      { label: 'Today', score: baseScore },
+      { label: '3 mo', score: midpointScore },
+      { label: '6 mo', score: projectedScore },
+      { label: '12 mo', score: projectedScore },
+    ],
+  };
+}
+
+function collectEvidenceLabels(
+  intelligence: UnifiedCareerResumeIntelligenceState
+): string[] {
+  if (intelligence.careerReadiness === null) {
+    return [];
+  }
+
+  const labels: string[] = [];
+  for (let i = 0; i < intelligence.careerReadiness.evidence_used.length; i++) {
+    const item = intelligence.careerReadiness.evidence_used[i];
+    if (item.source_type !== 'profile_field') {
+      continue;
+    }
+    if (labels.indexOf(item.label) === -1) {
+      labels.push(item.label);
+    }
+  }
+  return labels;
+}
+
+function collectResumeEvidenceLabel(
+  intelligence: UnifiedCareerResumeIntelligenceState
+): string {
+  if (intelligence.careerReadiness === null) {
+    return CAREER_READINESS_MOCK.evidenceResumeUsed;
+  }
+
+  for (let i = 0; i < intelligence.careerReadiness.evidence_used.length; i++) {
+    const item = intelligence.careerReadiness.evidence_used[i];
+    if (item.source_type === 'resume_section' || item.source_type === 'resume_bullet') {
+      if (intelligence.workspaceResume !== null) {
+        return intelligence.workspaceResume.name;
+      }
+      return 'Active Resume Workspace draft';
+    }
+  }
+
+  return 'No resume evidence referenced';
+}
+
+interface CareerReadinessDisplayData extends CareerReadinessMockData {
+  isLive: boolean;
+  statusText: string;
+  targetRoleMicrocopy: string;
+  evidenceBanner: string;
+}
+
+function buildCareerReadinessDisplayData(
+  intelligence: UnifiedCareerResumeIntelligenceState | undefined,
+  selectedActionIds: Set<string>,
+  targetRole: string
+): CareerReadinessDisplayData {
+  if (intelligence === undefined || intelligence.careerReadiness === null) {
+    return {
+      ...CAREER_READINESS_MOCK,
+      isLive: false,
+      statusText:
+        intelligence !== undefined &&
+        intelligence.errorMessage !== null &&
+        intelligence.errorMessage.trim() !== ''
+          ? 'Local fallback • Live snapshot unavailable'
+          : 'Local-only • Updated 2 min ago',
+      targetRoleMicrocopy: getTargetRoleMicrocopy(targetRole),
+      evidenceBanner: 'Determined locally • No backend snapshot in use',
+    };
+  }
+
+  const snapshot = intelligence.careerReadiness;
+  const actionPlanItems: ActionPlanItem[] = snapshot.action_plan.map(function (item) {
+    return {
+      id: item.key,
+      label: item.title,
+      impact: item.impact_points,
+      effort: item.effort,
+      helperText: item.helper,
+    };
+  });
+  const gaps: ReadinessGap[] = snapshot.top_gaps.map(function (item) {
+    return {
+      name: item.title,
+      impact: item.impact_points,
+      reason: item.reason,
+      ctaLabel: 'Review gap',
+    };
+  });
+
+  const radarSpokes: RadarSpoke[] = [];
+  const orderedKeys = [
+    'target_alignment',
+    'specialized_experience',
+    'resume_evidence',
+    'keywords',
+    'leadership_scope',
+    'qualification',
+  ];
+  for (let i = 0; i < orderedKeys.length; i++) {
+    const key = orderedKeys[i];
+    if (Object.prototype.hasOwnProperty.call(snapshot.spokes, key)) {
+      radarSpokes.push({
+        name: mapSpokeLabel(key),
+        value: snapshot.spokes[key],
+      });
+    }
+  }
+  const snapshotKeys = Object.keys(snapshot.spokes);
+  for (let i = 0; i < snapshotKeys.length; i++) {
+    const key = snapshotKeys[i];
+    let exists = false;
+    for (let j = 0; j < radarSpokes.length; j++) {
+      if (radarSpokes[j].name === mapSpokeLabel(key)) {
+        exists = true;
+        break;
+      }
+    }
+    if (!exists) {
+      radarSpokes.push({
+        name: mapSpokeLabel(key),
+        value: snapshot.spokes[key],
+      });
+    }
+  }
+
+  const explanationParts = snapshot.reasons
+    .slice(0, 2)
+    .map(function (item) {
+      return item.message;
+    });
+  const liveUpdatedLabel =
+    intelligence.lastUpdatedLabel !== null ? intelligence.lastUpdatedLabel : 'Live';
+
+  return {
+    score: snapshot.overall_score,
+    scoreMax: 100,
+    badgeLabel: snapshot.label,
+    explanationText:
+      explanationParts.length > 0
+        ? explanationParts.join(' ')
+        : 'Deterministic readiness assessment generated from your current frontend profile and resume context.',
+    trajectory: buildLiveTrajectory(
+      snapshot.overall_score,
+      selectedActionIds,
+      actionPlanItems
+    ),
+    radarSpokes: radarSpokes,
+    gaps: gaps,
+    actionPlanItems: actionPlanItems,
+    evidenceProfileFields: collectEvidenceLabels(intelligence),
+    evidenceResumeUsed: collectResumeEvidenceLabel(intelligence),
+    evidenceTargetRoleUsed: snapshot.target_role,
+    evidencePrivacyNote:
+      'Live backend snapshot. Deterministic scoring with explicit evidence and missing-evidence tracking.',
+    isLive: true,
+    statusText: 'Live backend • ' + liveUpdatedLabel,
+    targetRoleMicrocopy: 'Live snapshot for ' + snapshot.target_role + '.',
+    evidenceBanner: 'Live backend snapshot • Deterministic scoring',
+  };
+}
+
 // ---------------------------------------------------------------------------
 // CareerReadinessScreen
 // ---------------------------------------------------------------------------
 
-export function CareerReadinessScreen(): React.ReactElement {
-  const mock: CareerReadinessMockData = CAREER_READINESS_MOCK;
+export interface CareerReadinessScreenProps {
+  intelligence?: UnifiedCareerResumeIntelligenceState;
+}
+
+export function CareerReadinessScreen(props: CareerReadinessScreenProps): React.ReactElement {
   const setOverrides = usePathAdvisorScreenOverridesStore(function (s) { return s.setOverrides; });
 
   const [targetRole, setTargetRole] = useState('general');
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [assumptionsOpen, setAssumptionsOpen] = useState(false);
   const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(new Set(['quantified']));
+  const data = buildCareerReadinessDisplayData(props.intelligence, selectedActionIds, targetRole);
 
-  const projectedScore = computeProjectedScore(mock.score, selectedActionIds, mock.actionPlanItems);
+  const projectedScore = computeProjectedScore(data.score, selectedActionIds, data.actionPlanItems);
 
   useEffect(
     function scrollToActionPlanWhenHashPresent() {
@@ -169,7 +389,7 @@ export function CareerReadinessScreen(): React.ReactElement {
             />
           </div>
           <span className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
-            Local-only • Updated 2 min ago
+            {data.statusText}
           </span>
           <button
             type="button"
@@ -181,8 +401,14 @@ export function CareerReadinessScreen(): React.ReactElement {
             }}
             aria-label="Recompute readiness"
             title="Recompute readiness"
+            onClick={props.intelligence?.refresh ?? undefined}
+            disabled={props.intelligence?.refresh === undefined || props.intelligence?.refresh === null}
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw
+              className={
+                'w-4 h-4' + (props.intelligence?.isRefreshing === true ? ' animate-spin' : '')
+              }
+            />
           </button>
         </div>
       </div>
@@ -201,19 +427,19 @@ export function CareerReadinessScreen(): React.ReactElement {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-3xl font-bold" style={{ color: 'var(--p-text)' }}>
-              {mock.score} / {mock.scoreMax}
+              {data.score} / {data.scoreMax}
             </p>
             <span
               className="inline-block mt-2 px-2.5 py-1 text-[12px] font-medium rounded"
               style={{ background: 'var(--p-warning-bg)', color: 'var(--p-warning)' }}
             >
-              {mock.badgeLabel}
+              {data.badgeLabel}
             </span>
             <p className="mt-1.5 text-[11px] max-w-xl" style={{ color: 'var(--p-text-dim)' }}>
-              {getTargetRoleMicrocopy(targetRole)}
+              {data.targetRoleMicrocopy}
             </p>
             <p className="mt-2 text-sm max-w-xl" style={{ color: 'var(--p-text-muted)' }}>
-              {mock.explanationText}
+              {data.explanationText}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -230,10 +456,10 @@ export function CareerReadinessScreen(): React.ReactElement {
                   anchor: { type: 'card', id: 'career-readiness:improve', label: 'Improve readiness' },
                   title: 'What to do next',
                   sections: [
-                    { title: 'Why this matters', lines: [mock.explanationText] },
-                    { title: 'Next steps', bullets: mock.actionPlanItems.slice(0, 3).map(function (a) { return a.label + ' (+' + String(a.impact) + ')'; }) },
+                    { title: 'Why this matters', lines: [data.explanationText] },
+                    { title: 'Next steps', bullets: data.actionPlanItems.slice(0, 3).map(function (a) { return a.label + ' (+' + String(a.impact) + ')'; }) },
                   ],
-                  tags: ['localOnly'],
+                  tags: [data.isLive ? 'explainability' : 'localOnly'],
                   dedupeKey: 'career-readiness:improve',
                 });
               }}
@@ -274,9 +500,11 @@ export function CareerReadinessScreen(): React.ReactElement {
           className="h-full flex flex-col"
         >
           <div className="flex-1 flex flex-col justify-center min-h-0">
-            <ReadinessTrajectoryEChart trajectory={mock.trajectory} />
+            <ReadinessTrajectoryEChart trajectory={data.trajectory} />
             <p className="mt-2 text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
-              Actual shows your progress over time. Possible shows where you could be if you complete selected actions. Local-only.
+              {data.isLive
+                ? 'Actual holds your current live readiness baseline. Possible projects where you could be if you complete selected actions.'
+                : 'Actual shows your progress over time. Possible shows where you could be if you complete selected actions. Local-only.'}
             </p>
             <button
             type="button"
@@ -303,12 +531,12 @@ export function CareerReadinessScreen(): React.ReactElement {
           variant="default"
           className="h-full flex flex-col"
         >
-          <ReadinessRadarEChart spokes={mock.radarSpokes} />
+          <ReadinessRadarEChart spokes={data.radarSpokes} />
           <p className="mt-3 text-[12px] font-medium" style={{ color: 'var(--p-text)' }}>
             Top gaps holding you back
           </p>
           <ul className="mt-2 space-y-3">
-            {mock.gaps.map(function (g, i) {
+            {data.gaps.map(function (g, i) {
               return (
                 <li key={i}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -337,7 +565,7 @@ export function CareerReadinessScreen(): React.ReactElement {
                             { title: 'Impact', lines: ['+' + String(g.impact) + ' points'] },
                             { title: 'What to do', lines: [g.reason] },
                           ],
-                          tags: ['localOnly'],
+                          tags: [data.isLive ? 'explainability' : 'localOnly'],
                           dedupeKey: 'career-readiness:gap:' + g.name,
                         });
                       }}
@@ -381,7 +609,7 @@ export function CareerReadinessScreen(): React.ReactElement {
         }
       >
         <ul className="space-y-3">
-          {mock.actionPlanItems.map(function (item) {
+          {data.actionPlanItems.map(function (item) {
             const checked = selectedActionIds.has(item.id);
             return (
               <li
@@ -412,7 +640,7 @@ export function CareerReadinessScreen(): React.ReactElement {
                         { lines: [item.helperText] },
                         { title: 'Impact', lines: ['+' + String(item.impact) + ' • ' + item.effort] },
                       ],
-                      tags: ['localOnly'],
+                      tags: [data.isLive ? 'explainability' : 'localOnly'],
                       dedupeKey: 'career-readiness:action:' + item.id,
                     });
                   }}
@@ -489,19 +717,19 @@ export function CareerReadinessScreen(): React.ReactElement {
         {evidenceOpen ? (
           <div className="px-4 py-3 space-y-2" style={{ background: 'var(--p-surface)' }}>
             <p className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
-              Deterministic scoring • No hidden factors
+              {data.evidenceBanner}
             </p>
             <p className="text-[12px]" style={{ color: 'var(--p-text-muted)' }}>
-              Profile fields used: {mock.evidenceProfileFields.join(', ')}
+              Profile fields used: {data.evidenceProfileFields.join(', ')}
             </p>
             <p className="text-[12px]" style={{ color: 'var(--p-text-muted)' }}>
-              Resume used: {mock.evidenceResumeUsed}
+              Resume used: {data.evidenceResumeUsed}
             </p>
             <p className="text-[12px]" style={{ color: 'var(--p-text-muted)' }}>
-              Target role used: {mock.evidenceTargetRoleUsed}
+              Target role used: {data.evidenceTargetRoleUsed}
             </p>
             <p className="text-[11px] mt-2" style={{ color: 'var(--p-text-dim)' }}>
-              {mock.evidencePrivacyNote}
+              {data.evidencePrivacyNote}
             </p>
           </div>
         ) : null}

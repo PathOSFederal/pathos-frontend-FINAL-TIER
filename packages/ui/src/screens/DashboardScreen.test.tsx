@@ -43,6 +43,7 @@ import {
   DashboardScreen,
   buildGovernedResponseDataFromShapedResponse,
 } from './DashboardScreen';
+import type { DashboardIntelligencePayload } from '../types/pathadvisorIntelligence';
 import { usePathAdvisorThreadStore } from '../stores/pathAdvisorThreadStore';
 import type { PathAdvisorShapedResponse } from '../shell/pathadvisor-governed-types';
 
@@ -127,6 +128,14 @@ function renderDashboardWithSummary(summary: {
   return renderToString(
     <NavigationProvider adapter={testAdapter} linkComponent={TestLink}>
       <DashboardScreen summary={summary} />
+    </NavigationProvider>
+  );
+}
+
+function renderDashboardWithIntelligence(payload: DashboardIntelligencePayload) {
+  return renderToString(
+    <NavigationProvider adapter={testAdapter} linkComponent={TestLink}>
+      <DashboardScreen intelligencePayload={payload} />
     </NavigationProvider>
   );
 }
@@ -412,5 +421,558 @@ describe('DashboardScreen — Live bounded conversation path', function () {
     expect(mapped.decision).toBe('Refused');
     expect(mapped.decisionVariant).toBe('negative');
     expect(mapped.topGaps).toContain('cross_domain_fehb_unavailable');
+  });
+
+  it('maps mixed job-search plus qualification responses distinctly', function () {
+    const mapped = buildGovernedResponseDataFromShapedResponse({
+      domain: 'cross_domain',
+      responseState: 'partial',
+      grounded: true,
+      summary: 'Combined answer is limited by one unavailable domain.',
+      explanation: 'Job availability is live. Qualification guidance is unavailable.',
+      keyFactors: [],
+      missingInputs: [],
+      nextSteps: ['Open Job Search.'],
+      refusalReason: null,
+      packVersionId: null,
+      freshnessState: null,
+      grounding: {
+        domain: 'cross_domain',
+        responseState: 'partial',
+        grounded: true,
+        partial: true,
+        refusalReason: null,
+        missingInputs: [],
+        packId: null,
+        packKey: null,
+        versionId: null,
+        version: null,
+        freshnessState: null,
+        freshnessReason: null,
+        effectiveAt: null,
+        reviewedAt: null,
+        reviewBy: null,
+        expiresAt: null,
+        servingEligible: true,
+        sourceSummary: null,
+        conversationProvider: 'pathadvisor_job_search_qualification_entry',
+        providerUsed: false,
+        refusalDomain: null,
+        domains: [
+          {
+            domain: 'qualification',
+            responseState: 'refused',
+            grounded: false,
+            partial: false,
+            refusalReason: 'governed_target_family_uncovered',
+            missingInputs: [],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: null,
+            freshnessReason: null,
+          },
+          {
+            domain: 'job_search',
+            responseState: 'grounded',
+            grounded: true,
+            partial: false,
+            refusalReason: null,
+            missingInputs: [],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: 'fresh',
+            freshnessReason: 'live_usajobs_search',
+          },
+        ],
+      },
+      servedAt: '2026-04-09T12:00:00Z',
+    });
+
+    expect(mapped.confidence).toBe('Combined, limited');
+    expect(mapped.band).toBe('One side still needs support');
+    expect(mapped.topGaps).toContain('governed_target_family_uncovered');
+    expect(mapped.recommendedNextStep.estimatedImpact).toBe('Combined bounded');
+  });
+
+  it('maps mixed application-confidence plus qualification responses distinctly', function () {
+    const mapped = buildGovernedResponseDataFromShapedResponse({
+      domain: 'cross_domain',
+      responseState: 'partial',
+      grounded: true,
+      summary: 'Combined answer is limited by one unavailable domain.',
+      explanation: 'Application confidence is available. Qualification guidance is unavailable.',
+      keyFactors: [],
+      missingInputs: [],
+      nextSteps: ['Open job details.'],
+      refusalReason: null,
+      packVersionId: null,
+      freshnessState: null,
+      grounding: {
+        domain: 'cross_domain',
+        responseState: 'partial',
+        grounded: true,
+        partial: true,
+        refusalReason: null,
+        missingInputs: [],
+        packId: null,
+        packKey: null,
+        versionId: null,
+        version: null,
+        freshnessState: null,
+        freshnessReason: null,
+        effectiveAt: null,
+        reviewedAt: null,
+        reviewBy: null,
+        expiresAt: null,
+        servingEligible: true,
+        sourceSummary: null,
+        conversationProvider: 'pathadvisor_application_confidence_qualification_entry',
+        providerUsed: false,
+        refusalDomain: null,
+        domains: [
+          {
+            domain: 'qualification',
+            responseState: 'refused',
+            grounded: false,
+            partial: false,
+            refusalReason: 'governed_target_family_uncovered',
+            missingInputs: [],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: null,
+            freshnessReason: null,
+          },
+          {
+            domain: 'application_confidence',
+            responseState: 'grounded',
+            grounded: true,
+            partial: false,
+            refusalReason: null,
+            missingInputs: [],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: 'fresh',
+            freshnessReason: 'live_selected_job_application_confidence',
+          },
+        ],
+      },
+      servedAt: '2026-04-09T12:00:00Z',
+    });
+
+    expect(mapped.confidence).toBe('Selected job + qualification, limited');
+    expect(mapped.band).toBe('One side still needs support');
+    expect(mapped.topGaps).toContain('governed_target_family_uncovered');
+    expect(mapped.recommendedNextStep.estimatedImpact).toBe('Selected job + governed');
+  });
+
+  it('maps mixed resume-readiness plus qualification responses distinctly', function () {
+    const mapped = buildGovernedResponseDataFromShapedResponse({
+      domain: 'cross_domain',
+      responseState: 'partial',
+      grounded: true,
+      summary: 'Combined answer is limited by one unavailable domain.',
+      explanation: 'Resume readiness is available. Qualification guidance is unavailable.',
+      keyFactors: [],
+      missingInputs: [],
+      nextSteps: ['Open resume workspace.'],
+      refusalReason: null,
+      packVersionId: null,
+      freshnessState: null,
+      grounding: {
+        domain: 'cross_domain',
+        responseState: 'partial',
+        grounded: true,
+        partial: true,
+        refusalReason: null,
+        missingInputs: [],
+        packId: null,
+        packKey: null,
+        versionId: null,
+        version: null,
+        freshnessState: null,
+        freshnessReason: null,
+        effectiveAt: null,
+        reviewedAt: null,
+        reviewBy: null,
+        expiresAt: null,
+        servingEligible: true,
+        sourceSummary: null,
+        conversationProvider: 'pathadvisor_resume_qualification_entry',
+        providerUsed: false,
+        refusalDomain: null,
+        domains: [
+          {
+            domain: 'qualification',
+            responseState: 'refused',
+            grounded: false,
+            partial: false,
+            refusalReason: 'governed_target_family_uncovered',
+            missingInputs: [],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: null,
+            freshnessReason: null,
+          },
+          {
+            domain: 'resume_readiness',
+            responseState: 'grounded',
+            grounded: true,
+            partial: false,
+            refusalReason: null,
+            missingInputs: [],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: 'fresh',
+            freshnessReason: 'live_resume_readiness_snapshot',
+          },
+        ],
+      },
+      servedAt: '2026-04-09T12:00:00Z',
+    });
+
+    expect(mapped.confidence).toBe('Resume + qualification, limited');
+    expect(mapped.band).toBe('One side still needs support');
+    expect(mapped.topGaps).toContain('governed_target_family_uncovered');
+    expect(mapped.recommendedNextStep.estimatedImpact).toBe('Resume + governed');
+  });
+
+  it('maps mixed application-confidence plus resume-readiness responses distinctly', function () {
+    const mapped = buildGovernedResponseDataFromShapedResponse({
+      domain: 'cross_domain',
+      responseState: 'partial',
+      grounded: true,
+      summary: 'Combined answer is limited by one unavailable domain.',
+      explanation: 'Application confidence is available. Resume readiness is unavailable.',
+      keyFactors: [],
+      missingInputs: [],
+      nextSteps: ['Open resume workspace.'],
+      refusalReason: null,
+      packVersionId: null,
+      freshnessState: null,
+      grounding: {
+        domain: 'cross_domain',
+        responseState: 'partial',
+        grounded: true,
+        partial: true,
+        refusalReason: null,
+        missingInputs: [],
+        packId: null,
+        packKey: null,
+        versionId: null,
+        version: null,
+        freshnessState: null,
+        freshnessReason: null,
+        effectiveAt: null,
+        reviewedAt: null,
+        reviewBy: null,
+        expiresAt: null,
+        servingEligible: true,
+        sourceSummary: null,
+        conversationProvider: 'pathadvisor_application_confidence_resume_entry',
+        providerUsed: false,
+        refusalDomain: null,
+        domains: [
+          {
+            domain: 'application_confidence',
+            responseState: 'grounded',
+            grounded: true,
+            partial: false,
+            refusalReason: null,
+            missingInputs: [],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: 'fresh',
+            freshnessReason: 'live_selected_job_application_confidence',
+          },
+          {
+            domain: 'resume_readiness',
+            responseState: 'refused',
+            grounded: false,
+            partial: false,
+            refusalReason: 'resume_readiness_snapshot_unavailable',
+            missingInputs: [],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: null,
+            freshnessReason: null,
+          },
+        ],
+      },
+      servedAt: '2026-04-09T12:00:00Z',
+    });
+
+    expect(mapped.confidence).toBe('Selected job + resume, limited');
+    expect(mapped.band).toBe('One side still needs support');
+    expect(mapped.topGaps).toContain('resume_readiness_snapshot_unavailable');
+    expect(mapped.recommendedNextStep.estimatedImpact).toBe('Selected job + resume');
+  });
+
+  it('maps generic multi-domain responses distinctly', function () {
+    const mapped = buildGovernedResponseDataFromShapedResponse({
+      domain: 'cross_domain',
+      responseState: 'partial',
+      grounded: true,
+      summary: 'Combined answer is limited by missing inputs across domains.',
+      explanation: 'Application confidence and qualification are grounded, but resume readiness is still incomplete.',
+      keyFactors: [],
+      missingInputs: ['resume_employment_dates'],
+      nextSteps: ['Add employment dates to each role.'],
+      refusalReason: null,
+      packVersionId: null,
+      freshnessState: null,
+      grounding: {
+        domain: 'cross_domain',
+        responseState: 'partial',
+        grounded: true,
+        partial: true,
+        refusalReason: null,
+        missingInputs: ['resume_employment_dates'],
+        packId: null,
+        packKey: null,
+        versionId: null,
+        version: null,
+        freshnessState: null,
+        freshnessReason: null,
+        effectiveAt: null,
+        reviewedAt: null,
+        reviewBy: null,
+        expiresAt: null,
+        servingEligible: true,
+        sourceSummary: null,
+        conversationProvider: 'pathadvisor_multi_domain_entry',
+        providerUsed: false,
+        refusalDomain: null,
+        domains: [
+          {
+            domain: 'application_confidence',
+            responseState: 'grounded',
+            grounded: true,
+            partial: false,
+            refusalReason: null,
+            missingInputs: [],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: 'fresh',
+            freshnessReason: 'live_selected_job_application_confidence',
+          },
+          {
+            domain: 'resume_readiness',
+            responseState: 'partial',
+            grounded: true,
+            partial: true,
+            refusalReason: null,
+            missingInputs: ['resume_employment_dates'],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: 'fresh',
+            freshnessReason: 'live_resume_readiness_snapshot',
+          },
+          {
+            domain: 'qualification',
+            responseState: 'grounded',
+            grounded: true,
+            partial: false,
+            refusalReason: null,
+            missingInputs: [],
+            packId: 'qualification-pack',
+            packKey: 'qualification.pack',
+            versionId: 'qualification-version-1',
+            version: 1,
+            freshnessState: 'fresh',
+            freshnessReason: 'Fresh.',
+          },
+        ],
+      },
+      servedAt: '2026-04-09T12:00:00Z',
+    });
+
+    expect(mapped.confidence).toBe('Combined, limited');
+    expect(mapped.band).toBe('One or more parts still need support');
+    expect(mapped.recommendedNextStep.estimatedImpact).toBe('Combined bounded');
+  });
+
+  it('maps resume-readiness responses distinctly', function () {
+    const mapped = buildGovernedResponseDataFromShapedResponse({
+      domain: 'resume_readiness',
+      responseState: 'partial',
+      grounded: true,
+      summary: 'Current resume readiness is 61/100 for Criminal Investigator.',
+      explanation: 'Resume evidence is still incomplete.',
+      keyFactors: [],
+      missingInputs: ['resume_employment_dates'],
+      nextSteps: ['Add employment dates to each role.'],
+      refusalReason: null,
+      packVersionId: null,
+      freshnessState: 'fresh',
+      grounding: {
+        domain: 'resume_readiness',
+        responseState: 'partial',
+        grounded: true,
+        partial: true,
+        refusalReason: null,
+        missingInputs: ['resume_employment_dates'],
+        packId: null,
+        packKey: null,
+        versionId: null,
+        version: null,
+        freshnessState: 'fresh',
+        freshnessReason: 'live_resume_readiness_snapshot',
+        effectiveAt: null,
+        reviewedAt: null,
+        reviewBy: null,
+        expiresAt: null,
+        servingEligible: true,
+        sourceSummary: null,
+        conversationProvider: 'pathadvisor_resume_entry',
+        providerUsed: false,
+        refusalDomain: null,
+        domains: [
+          {
+            domain: 'resume_readiness',
+            responseState: 'partial',
+            grounded: true,
+            partial: true,
+            refusalReason: null,
+            missingInputs: ['resume_employment_dates'],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: 'fresh',
+            freshnessReason: 'live_resume_readiness_snapshot',
+          },
+        ],
+      },
+      servedAt: '2026-04-09T12:00:00Z',
+    });
+
+    expect(mapped.confidence).toBe('Resume snapshot, limited');
+    expect(mapped.band).toBe('Resume evidence gaps remain');
+    expect(mapped.topGaps).toEqual(['resume_employment_dates']);
+    expect(mapped.recommendedNextStep.estimatedImpact).toBe('Resume snapshot');
+  });
+
+  it('maps application-confidence responses distinctly', function () {
+    const mapped = buildGovernedResponseDataFromShapedResponse({
+      domain: 'application_confidence',
+      responseState: 'partial',
+      grounded: true,
+      summary: 'Current application confidence is limited by missing evidence.',
+      explanation: 'The selected-job evaluation is still incomplete.',
+      keyFactors: [],
+      missingInputs: ['application_skills_evidence'],
+      nextSteps: ['Open job details and add clearer skills evidence.'],
+      refusalReason: null,
+      packVersionId: null,
+      freshnessState: 'fresh',
+      grounding: {
+        domain: 'application_confidence',
+        responseState: 'partial',
+        grounded: true,
+        partial: true,
+        refusalReason: null,
+        missingInputs: ['application_skills_evidence'],
+        packId: null,
+        packKey: null,
+        versionId: null,
+        version: null,
+        freshnessState: 'fresh',
+        freshnessReason: 'live_selected_job_application_confidence',
+        effectiveAt: null,
+        reviewedAt: null,
+        reviewBy: null,
+        expiresAt: null,
+        servingEligible: true,
+        sourceSummary: null,
+        conversationProvider: 'pathadvisor_application_confidence_entry',
+        providerUsed: false,
+        refusalDomain: null,
+        domains: [
+          {
+            domain: 'application_confidence',
+            responseState: 'partial',
+            grounded: true,
+            partial: true,
+            refusalReason: null,
+            missingInputs: ['application_skills_evidence'],
+            packId: null,
+            packKey: null,
+            versionId: null,
+            version: null,
+            freshnessState: 'fresh',
+            freshnessReason: 'live_selected_job_application_confidence',
+          },
+        ],
+      },
+      servedAt: '2026-04-09T12:00:00Z',
+    });
+
+    expect(mapped.confidence).toBe('Selected job, limited');
+    expect(mapped.band).toBe('Application evidence gaps remain');
+    expect(mapped.topGaps).toEqual(['application_skills_evidence']);
+    expect(mapped.recommendedNextStep.estimatedImpact).toBe('Selected job');
+  });
+
+  it('renders backend-owned dashboard intelligence without inventing local logic', function () {
+    const output = renderDashboardWithIntelligence({
+      screen: 'dashboard',
+      pathadvisorMode: 'strategy_summary',
+      context: {
+        targetRoleClusters: ['Program analyst'],
+        preferredLocations: ['Washington, DC'],
+        readinessState: 'Draft resume',
+        fitLanes: ['Target field: Program / policy analyst'],
+        blockers: ['Resume evidence still needs work'],
+        topMissingItems: ['Location flexibility'],
+        nextBestActions: ['Clarify location flexibility'],
+        activeThreads: ['Target direction'],
+        profileCompleteness: 68,
+        freshnessBand: 'fresh',
+        confidenceBand: 'medium',
+        recentMeaningfulChanges: ['Target role: Improved role-matching and downstream handoff quality.'],
+        activitySignals: ['Recent job activity strengthened analyst direction.'],
+        updatedAt: '2026-04-09T12:00:00Z',
+      },
+      summary: 'PathAdvisor is distributing your strongest current intelligence across the dashboard.',
+      strongestCurrentFitLanes: ['Target field: Program / policy analyst'],
+      activeBlockers: ['Resume evidence still needs work'],
+      topMissingItems: ['Location flexibility'],
+      nextBestAction: {
+        actionId: 'dashboard_next_best_action',
+        title: 'Keep building your canonical profile',
+        description: 'Clarify the highest-value missing item next.',
+        ctaLabel: 'Continue improving profile',
+        ctaHref: '/dashboard',
+        reason: 'This unlocks stronger guidance across the app.',
+      },
+      confidenceSummary: 'Confidence is medium with profile completeness at 68%.',
+    });
+
+    expect(output).toContain('PathAdvisor intelligence');
+    expect(output).toContain('68%');
+    expect(output).toContain('Fit lanes:');
+    expect(output).toContain('Target field: Program / policy analyst');
+    expect(output).toContain('Next best action:');
+    expect(output).toContain('Keep building your canonical profile');
   });
 });

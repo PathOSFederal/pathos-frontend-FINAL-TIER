@@ -82,6 +82,15 @@ function domainLabel(domain: PathAdvisorGovernedDomain): string {
   if (domain === 'fehb') {
     return 'FEHB';
   }
+  if (domain === 'job_search') {
+    return 'Job Search';
+  }
+  if (domain === 'application_confidence') {
+    return 'Application Confidence';
+  }
+  if (domain === 'resume_readiness') {
+    return 'Resume Readiness';
+  }
   return 'Cross-domain';
 }
 
@@ -129,6 +138,53 @@ function freshnessLabel(value: string | null): string {
 }
 
 /**
+ * Keep entry-planning basis labels readable in the trust footer.
+ */
+function planningBasisLabel(value: string): string {
+  if (value === 'explicit_intent') {
+    return 'explicit intent';
+  }
+  if (value === 'capability_fallback') {
+    return 'capability fallback';
+  }
+  if (value === 'default_fallback') {
+    return 'default fallback';
+  }
+  if (value === 'mixed') {
+    return 'mixed planning';
+  }
+  return value;
+}
+
+/**
+ * Render one compact planning detail for a selected bounded domain.
+ */
+function planningDomainDetail(response: PathAdvisorShapedResponse): string[] {
+  const entryPlanning = response.grounding.entryPlanning ?? null;
+  if (entryPlanning === null) {
+    return [];
+  }
+
+  return entryPlanning.plannedDomains.map(function (item) {
+    let capabilitySummary = 'no bounded context required';
+    if (item.capabilityState === 'available') {
+      capabilitySummary = 'bounded context available';
+    } else if (item.capabilityState === 'unavailable') {
+      capabilitySummary = 'bounded context unavailable';
+    }
+
+    return (
+      domainLabel(item.domain) +
+      ' via ' +
+      planningBasisLabel(item.selectionBasis) +
+      ' (' +
+      capabilitySummary +
+      ')'
+    );
+  });
+}
+
+/**
  * Provide one sentence of framing for the top trust-state banner.
  *
  * Why this exists:
@@ -137,6 +193,117 @@ function freshnessLabel(value: string | null): string {
  * not need to infer trust from the longer explanation body.
  */
 function buildStatusSummary(response: PathAdvisorShapedResponse): string {
+  const domainCount = response.grounding.domains.length;
+  const hasMixedJobSearchAndQualification =
+    response.domain === 'cross_domain' &&
+    domainCount === 2 &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'job_search';
+    }) &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'qualification';
+    });
+  const hasMixedApplicationConfidenceAndQualification =
+    response.domain === 'cross_domain' &&
+    domainCount === 2 &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'application_confidence';
+    }) &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'qualification';
+    });
+  const hasMixedResumeAndQualification =
+    response.domain === 'cross_domain' &&
+    domainCount === 2 &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'resume_readiness';
+    }) &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'qualification';
+    });
+  const hasMixedApplicationConfidenceAndResume =
+    response.domain === 'cross_domain' &&
+    domainCount === 2 &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'application_confidence';
+    }) &&
+    response.grounding.domains.some(function (item) {
+      return item.domain === 'resume_readiness';
+    });
+
+  if (hasMixedJobSearchAndQualification) {
+    if (response.responseState === 'grounded') {
+      return 'This answer combines live federal job search and governed qualification guidance.';
+    }
+    if (response.responseState === 'partial') {
+      return 'This answer combines live federal job search and governed qualification guidance, but one part of the answer is still limited.';
+    }
+    return 'PathAdvisor is intentionally holding this combined answer until job search and qualification boundaries support it safely.';
+  }
+  if (hasMixedApplicationConfidenceAndQualification) {
+    if (response.responseState === 'grounded') {
+      return 'This answer combines current selected-job application confidence and governed qualification guidance.';
+    }
+    if (response.responseState === 'partial') {
+      return 'This answer combines current selected-job application confidence and governed qualification guidance, but one part of the answer is still limited.';
+    }
+    return 'PathAdvisor is intentionally holding this combined answer until selected-job application context and qualification boundaries support it safely.';
+  }
+  if (hasMixedResumeAndQualification) {
+    if (response.responseState === 'grounded') {
+      return 'This answer combines current resume readiness and governed qualification guidance.';
+    }
+    if (response.responseState === 'partial') {
+      return 'This answer combines current resume readiness and governed qualification guidance, but one part of the answer is still limited.';
+    }
+    return 'PathAdvisor is intentionally holding this combined answer until resume-readiness context and qualification boundaries support it safely.';
+  }
+  if (hasMixedApplicationConfidenceAndResume) {
+    if (response.responseState === 'grounded') {
+      return 'This answer combines current selected-job application confidence and current resume readiness.';
+    }
+    if (response.responseState === 'partial') {
+      return 'This answer combines current selected-job application confidence and current resume readiness, but one part of the answer is still limited.';
+    }
+    return 'PathAdvisor is intentionally holding this combined answer until selected-job application context and resume-readiness context support it safely.';
+  }
+  if (response.domain === 'cross_domain') {
+    if (response.responseState === 'grounded') {
+      return 'This answer combines multiple bounded PathAdvisor domains.';
+    }
+    if (response.responseState === 'partial') {
+      return 'This answer combines multiple bounded PathAdvisor domains, but one or more parts are still limited.';
+    }
+    return 'PathAdvisor is intentionally holding this combined answer until the required bounded domains support it safely.';
+  }
+
+  if (response.domain === 'job_search') {
+    if (response.responseState === 'grounded') {
+      return 'This answer is grounded in the current live federal job search result.';
+    }
+    if (response.responseState === 'partial') {
+      return 'This answer uses live federal job search, but the search scope is still incomplete.';
+    }
+    return 'PathAdvisor is intentionally holding this answer until live federal job search or search scope supports it safely.';
+  }
+  if (response.domain === 'application_confidence') {
+    if (response.responseState === 'grounded') {
+      return 'This answer is grounded in the current selected-job application-confidence context.';
+    }
+    if (response.responseState === 'partial') {
+      return 'This answer uses the current selected-job application-confidence context, but application evidence is still incomplete.';
+    }
+    return 'PathAdvisor is intentionally holding this answer until a current selected-job application context and target alignment support it safely.';
+  }
+  if (response.domain === 'resume_readiness') {
+    if (response.responseState === 'grounded') {
+      return 'This answer is grounded in the current live resume-readiness snapshot.';
+    }
+    if (response.responseState === 'partial') {
+      return 'This answer uses the current live resume-readiness snapshot, but resume evidence is still incomplete.';
+    }
+    return 'PathAdvisor is intentionally holding this answer until a live resume snapshot and target alignment support it safely.';
+  }
   if (response.responseState === 'grounded') {
     return 'This answer is grounded in the current governed pack.';
   }
@@ -150,7 +317,12 @@ interface PathAdvisorMissingInputDescriptor {
   key: string;
   label: string;
   detail: string;
-  domain: 'qualification' | 'fehb' | 'cross_domain';
+  domain:
+    | 'qualification'
+    | 'fehb'
+    | 'application_confidence'
+    | 'resume_readiness'
+    | 'cross_domain';
 }
 
 /**
@@ -228,6 +400,126 @@ function describeMissingInput(input: string): PathAdvisorMissingInputDescriptor 
       domain: 'fehb',
     };
   }
+  if (input === 'job_search.keyword' || input === 'job_search_target_keyword') {
+    return {
+      key: input,
+      label: 'Target role or keyword',
+      detail: 'Needed so PathAdvisor can search for the right type of federal jobs.',
+      domain: 'cross_domain',
+    };
+  }
+  if (input === 'job_search_live_search') {
+    return {
+      key: input,
+      label: 'Live job search availability',
+      detail: 'Needed when PathAdvisor must use live USAJOBS-backed search to answer availability questions safely.',
+      domain: 'cross_domain',
+    };
+  }
+  if (input === 'application_confidence_context') {
+    return {
+      key: input,
+      label: 'Selected job application context',
+      detail: 'Needed before PathAdvisor can explain whether you should apply for the current selected job safely.',
+      domain: 'application_confidence',
+    };
+  }
+  if (input === 'application_target_role_alignment') {
+    return {
+      key: input,
+      label: 'Selected job target alignment',
+      detail: 'Needed when the current selected-job application context does not match the target role in the question.',
+      domain: 'application_confidence',
+    };
+  }
+  if (input === 'application_skills_evidence') {
+    return {
+      key: input,
+      label: 'Skills evidence',
+      detail: 'Needed because the current selected-job evaluation is still missing skills evidence for a stronger apply-or-hold answer.',
+      domain: 'application_confidence',
+    };
+  }
+  if (input === 'application_employment_dates') {
+    return {
+      key: input,
+      label: 'Employment dates',
+      detail: 'Needed because the current selected-job evaluation is still missing dated experience evidence.',
+      domain: 'application_confidence',
+    };
+  }
+  if (input === 'application_hours_per_week') {
+    return {
+      key: input,
+      label: 'Hours per week',
+      detail: 'Needed because the current selected-job evaluation is still missing workload evidence.',
+      domain: 'application_confidence',
+    };
+  }
+  if (input === 'application_transcript_evidence') {
+    return {
+      key: input,
+      label: 'Transcript evidence',
+      detail: 'Needed when the current selected-job application path still depends on transcript-backed evidence.',
+      domain: 'application_confidence',
+    };
+  }
+  if (input === 'application_missing_evidence') {
+    return {
+      key: input,
+      label: 'Application evidence',
+      detail: 'Needed because the current selected-job evaluation still has unresolved evidence gaps.',
+      domain: 'application_confidence',
+    };
+  }
+  if (input === 'resume_readiness_snapshot') {
+    return {
+      key: input,
+      label: 'Resume readiness snapshot',
+      detail: 'Needed before PathAdvisor can explain resume readiness from the current live application intelligence state.',
+      domain: 'resume_readiness',
+    };
+  }
+  if (input === 'resume_target_role_alignment') {
+    return {
+      key: input,
+      label: 'Resume target alignment',
+      detail: 'Needed when the current live resume snapshot does not match the target role or selected job in the question.',
+      domain: 'resume_readiness',
+    };
+  }
+  if (input === 'resume_employment_dates') {
+    return {
+      key: input,
+      label: 'Employment dates',
+      detail: 'Needed because federal resume review depends on dated experience evidence.',
+      domain: 'resume_readiness',
+    };
+  }
+  if (input === 'resume_hours_per_week') {
+    return {
+      key: input,
+      label: 'Hours per week',
+      detail: 'Needed when federal resume evidence must show workload or time basis clearly.',
+      domain: 'resume_readiness',
+    };
+  }
+  if (input === 'resume_transcript_evidence') {
+    return {
+      key: input,
+      label: 'Transcript evidence',
+      detail: 'Needed when the current resume or qualification path depends on transcript-backed evidence.',
+      domain: 'resume_readiness',
+    };
+  }
+  if (input === 'resume_missing_evidence') {
+    return {
+      key: input,
+      label: 'Resume evidence',
+      detail: 'Needed because the current live resume snapshot still has unresolved evidence gaps.',
+      domain: 'resume_readiness',
+    };
+  }
 
   return {
     key: input,
@@ -244,12 +536,25 @@ function describeMissingInput(input: string): PathAdvisorMissingInputDescriptor 
  * Missing-input affordances should help users navigate the current bounded form,
  * not launch a larger wizard or infer hidden workflow.
  */
-function missingInputActionLabel(domain: 'qualification' | 'fehb' | 'cross_domain'): string {
+function missingInputActionLabel(
+  domain:
+    | 'qualification'
+    | 'fehb'
+    | 'application_confidence'
+    | 'resume_readiness'
+    | 'cross_domain'
+): string {
   if (domain === 'qualification') {
     return 'Review qualification inputs';
   }
   if (domain === 'fehb') {
     return 'Review FEHB inputs';
+  }
+  if (domain === 'application_confidence') {
+    return 'Open job details';
+  }
+  if (domain === 'resume_readiness') {
+    return 'Open resume workspace';
   }
   return 'Review request inputs';
 }
@@ -640,14 +945,18 @@ function MissingInputsSection(props: {
                     {item.detail}
                   </p>
                   <p className="text-[10px] mt-2" style={{ color: 'var(--p-text-dim)' }}>
-                    Provide this in the {item.domain === 'qualification' ? 'qualification' : item.domain === 'fehb' ? 'FEHB' : 'request'} inputs above.
+                    Provide this in the {item.domain === 'qualification' ? 'qualification' : item.domain === 'fehb' ? 'FEHB' : item.domain === 'application_confidence' ? 'current job details' : item.domain === 'resume_readiness' ? 'resume workspace' : 'request'} inputs above.
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={function () {
                     const nextDraft = cloneDraft(props.draft);
-                    if (props.draft.domain !== 'cross_domain' && item.domain !== 'cross_domain') {
+                    if (
+                      props.draft.domain !== 'cross_domain' &&
+                      item.domain !== 'cross_domain' &&
+                      item.domain !== 'application_confidence'
+                    ) {
                       nextDraft.domain = item.domain;
                     }
                     props.onDraftChange(nextDraft);
@@ -902,6 +1211,17 @@ function PathAdvisorGovernedResponseView(props: {
           </span>
         </div>
         <div className="grid grid-cols-1 gap-2 mt-3">
+          {response.grounding.entryPlanning != null ? (
+            <p className="text-[12px]" style={{ color: 'var(--p-text-muted)' }}>
+              Entry planning: {response.grounding.entryPlanning.planningSummary}
+            </p>
+          ) : null}
+          {response.grounding.entryPlanning != null &&
+          response.grounding.entryPlanning.plannedDomains.length > 0 ? (
+            <p className="text-[12px]" style={{ color: 'var(--p-text-muted)' }}>
+              Planning detail: {planningDomainDetail(response).join(' • ')}
+            </p>
+          ) : null}
           {response.grounding.domains.length > 0 ? (
             <p className="text-[12px]" style={{ color: 'var(--p-text-muted)' }}>
               Domain grounding: {response.grounding.domains.map(function (item) {

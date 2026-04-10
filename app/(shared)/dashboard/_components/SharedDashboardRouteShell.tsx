@@ -1,7 +1,7 @@
 'use client';
 
 import type React from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { NavigationProvider } from '@pathos/adapters';
 import { parseThemeVariant } from '@pathos/core';
@@ -13,14 +13,26 @@ import {
   type PathAdvisorGovernedDraft,
   type PathAdvisorGovernedResultState,
   type PathAdvisorMessage,
+  type UnifiedCareerResumeIntelligenceState,
+  usePathAdvisorContextLogStore,
+  usePathAdvisorScreenOverridesStore,
 } from '@pathos/ui';
 import { useProfileStore } from '@/store/profileStore';
 import {
   buildInitialPathAdvisorDraft,
+  fetchPathAdvisorEntryResponse,
   fetchPathAdvisorConversationResponse,
   fetchGovernedPathAdvisorResponse,
 } from '@/lib/pathadvisor-governed/client';
-import { buildPathAdvisorConversationContext } from '@/lib/pathadvisor-governed/conversation-context';
+import {
+  buildPathAdvisorConversationContext,
+  buildPathAdvisorEntryContext,
+  buildPathAdvisorRouteContext,
+} from '@/lib/pathadvisor-governed/conversation-context';
+import {
+  buildPathAdvisorCarryForwardContext,
+  findMostRecentUserMessage,
+} from '@/lib/pathadvisor-governed/carry-forward';
 
 /**
  * Shared dashboard shell wrapper for routes that use the canonical PathAdvisor
@@ -37,6 +49,8 @@ import { buildPathAdvisorConversationContext } from '@/lib/pathadvisor-governed/
  */
 export function SharedDashboardRouteShell(props: {
   children: React.ReactNode;
+  currentView?: string;
+  conversationIntelligence?: UnifiedCareerResumeIntelligenceState | null;
   /**
    * When true, the PathAdvisor right rail is not rendered. Used by
    * surfaces that provide their own section-scoped guidance model
@@ -70,6 +84,34 @@ export function SharedDashboardRouteShell(props: {
     status: 'idle',
     errorMessage: null,
   });
+  const screenOverrides = usePathAdvisorScreenOverridesStore(function (state) {
+    return state.overrides;
+  });
+  const contextEntriesByAnchor = usePathAdvisorContextLogStore(function (state) {
+    return state.entriesByAnchor;
+  });
+  const activeContextAnchorKey = usePathAdvisorContextLogStore(function (state) {
+    return state.activeAnchorKey;
+  });
+  const currentScreenId =
+    screenOverrides !== null &&
+    screenOverrides.screenId !== undefined &&
+    screenOverrides.screenId !== ''
+      ? screenOverrides.screenId
+      : props.currentView ?? 'shared-dashboard';
+  const routeContext = useMemo(
+    function () {
+      return buildPathAdvisorRouteContext(
+        currentScreenId,
+        contextEntriesByAnchor,
+        activeContextAnchorKey,
+        {
+          allowActiveAnchorFallback: true,
+        }
+      );
+    },
+    [activeContextAnchorKey, contextEntriesByAnchor, currentScreenId]
+  );
 
   /**
    * Load the persisted profile once for shared dashboard routes.
@@ -124,6 +166,12 @@ export function SharedDashboardRouteShell(props: {
    * backend conversation layer produces the actual reply.
    */
   const handleAdvisorConversationSend = useCallback(async function (text: string) {
+    const carryForwardContext =
+      governedDraft.domain === 'fehb'
+        ? null
+        : buildPathAdvisorCarryForwardContext(text, findMostRecentUserMessage(advisorMessages));
+    const effectiveConversationMessage =
+      carryForwardContext !== null ? carryForwardContext.effectiveUserMessage : text;
     const userMessage: PathAdvisorMessage = { role: 'user', content: text };
 
     setAdvisorMessages(function (prev) {
@@ -139,13 +187,101 @@ export function SharedDashboardRouteShell(props: {
       errorMessage: null,
     });
 
-    const context = buildPathAdvisorConversationContext({
-      currentView: 'shared-dashboard',
-      draft: governedDraft,
-      result: governedResult,
-    });
     try {
-      const response = await fetchPathAdvisorConversationResponse(text, context);
+      let nextGovernedResult = governedResult;
+      if (
+        nextGovernedResult.response === null &&
+        governedDraft.domain === 'qualification'
+      ) {
+        setGovernedResult(function (prev) {
+          return {
+            status: 'loading',
+            response: prev.status === 'success' ? prev.response : null,
+            errorMessage: null,
+          };
+        });
+
+        const entryResponse = await fetchPathAdvisorEntryResponse(
+          effectiveConversationMessage,
+          governedDraft,
+          profile,
+          buildPathAdvisorEntryContext({
+            currentView: currentScreenId,
+            draft: governedDraft,
+            result: {
+              status: 'idle',
+              response: null,
+              errorMessage: null,
+            },
+            intelligence: props.conversationIntelligence,
+            routeContext: routeContext,
+          })
+        );
+        if (entryResponse === null) {
+          setGovernedResult({
+            status: 'empty',
+            response: null,
+            errorMessage: null,
+          });
+          throw new Error('PathAdvisor could not load governed evidence for this explanation.');
+        }
+
+        nextGovernedResult = {
+          status: 'success',
+          response: entryResponse,
+          errorMessage: null,
+        };
+        setGovernedResult(nextGovernedResult);
+      } else if (carryForwardContext !== null) {
+        setGovernedResult(function (prev) {
+          return {
+            status: 'loading',
+            response: prev.status === 'success' ? prev.response : null,
+            errorMessage: null,
+          };
+        });
+
+        const entryResponse = await fetchPathAdvisorEntryResponse(
+          effectiveConversationMessage,
+          governedDraft,
+          profile,
+          buildPathAdvisorEntryContext({
+            currentView: currentScreenId,
+            draft: governedDraft,
+            result: nextGovernedResult,
+            intelligence: props.conversationIntelligence,
+            routeContext: routeContext,
+          })
+        );
+        if (entryResponse === null) {
+          setGovernedResult({
+            status: 'empty',
+            response: null,
+            errorMessage: null,
+          });
+          throw new Error('PathAdvisor could not load governed evidence for this explanation.');
+        }
+
+        nextGovernedResult = {
+          status: 'success',
+          response: entryResponse,
+          errorMessage: null,
+        };
+        setGovernedResult(nextGovernedResult);
+      }
+
+      const context = buildPathAdvisorConversationContext({
+        currentView: currentScreenId,
+        draft: governedDraft,
+        result: nextGovernedResult,
+        intelligence: props.conversationIntelligence,
+        routeContext: routeContext,
+        carryForwardContext: carryForwardContext,
+      });
+      const response = await fetchPathAdvisorConversationResponse(
+        effectiveConversationMessage,
+        context
+      );
       setConversationState({
         status: 'idle',
         errorMessage: null,
@@ -170,7 +306,7 @@ export function SharedDashboardRouteShell(props: {
         errorMessage: message,
       });
     }
-  }, [governedDraft, governedResult]);
+  }, [advisorMessages, currentScreenId, governedDraft, governedResult, profile, props.conversationIntelligence, routeContext]);
 
   /**
    * Apply bounded draft edits coming from the governed request form.

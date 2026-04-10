@@ -20,7 +20,10 @@ import type {
   PathAdvisorGovernedDomain,
   PathAdvisorShapedResponse,
 } from '@pathos/ui';
-import type { PathAdvisorGovernedConversationContext } from './conversation-context';
+import type {
+  PathAdvisorEntryContext,
+  PathAdvisorGovernedConversationContext,
+} from './conversation-context';
 import { buildPathAdvisorConversationRequestPayload } from './conversation-request';
 
 interface PathAdvisorErrorPayload {
@@ -37,7 +40,12 @@ interface BackendPathAdvisorKeyFactor {
 }
 
 interface BackendPathAdvisorDomainGroundingRecord {
-  domain: 'qualification' | 'fehb';
+  domain:
+    | 'qualification'
+    | 'fehb'
+    | 'job_search'
+    | 'application_confidence'
+    | 'resume_readiness';
   response_state: 'grounded' | 'partial' | 'refused';
   grounded: boolean;
   partial: boolean;
@@ -51,8 +59,27 @@ interface BackendPathAdvisorDomainGroundingRecord {
   freshness_reason?: string | null;
 }
 
+interface BackendPathAdvisorEntryPlanningDomainRecord {
+  domain: 'qualification' | 'job_search' | 'application_confidence' | 'resume_readiness';
+  selection_basis: 'explicit_intent' | 'capability_fallback' | 'default_fallback' | 'mixed';
+  capability_state: 'available' | 'unavailable' | 'not_required';
+  capability_reason?: string | null;
+}
+
+interface BackendPathAdvisorEntryPlanning {
+  planning_basis: 'explicit_intent' | 'capability_fallback' | 'default_fallback' | 'mixed';
+  planning_summary: string;
+  planned_domains?: BackendPathAdvisorEntryPlanningDomainRecord[] | null;
+}
+
 interface BackendPathAdvisorGrounding {
-  domain: 'qualification' | 'fehb' | 'cross_domain';
+  domain:
+    | 'qualification'
+    | 'application_confidence'
+    | 'fehb'
+    | 'job_search'
+    | 'resume_readiness'
+    | 'cross_domain';
   response_state: 'grounded' | 'partial' | 'refused';
   grounded: boolean;
   partial: boolean;
@@ -79,10 +106,17 @@ interface BackendPathAdvisorGrounding {
   provider_used: boolean;
   refusal_domain?: 'qualification' | 'fehb' | null;
   domains?: BackendPathAdvisorDomainGroundingRecord[] | null;
+  entry_planning?: BackendPathAdvisorEntryPlanning | null;
 }
 
 interface BackendPathAdvisorShapedResponse {
-  domain: 'qualification' | 'fehb' | 'cross_domain';
+  domain:
+    | 'qualification'
+    | 'application_confidence'
+    | 'fehb'
+    | 'job_search'
+    | 'resume_readiness'
+    | 'cross_domain';
   response_state: 'grounded' | 'partial' | 'refused';
   grounded: boolean;
   summary: string;
@@ -108,6 +142,66 @@ interface BackendQualificationRequest {
   };
   use_persisted_profile: boolean;
   request_id: string;
+}
+
+interface BackendQualificationEntryRequest {
+  user_message: string;
+  user_facts: BackendQualificationRequest['user_facts'];
+  intelligence_context?: BackendEntryIntelligenceContext | null;
+  current_target_label?: string | null;
+  route_target_label?: string | null;
+  route_anchor_label?: string | null;
+  route_screen_id?: string | null;
+  use_persisted_profile: boolean;
+  request_id: string;
+}
+
+interface BackendEntryCareerReadinessContext {
+  snapshot_id: string;
+  generated_at: string;
+  overall_score: number;
+  label: string;
+  target_role: string;
+  spokes: Record<string, number>;
+  top_gaps: string[];
+  next_actions: string[];
+  missing_evidence: string[];
+}
+
+interface BackendEntryResumeReadinessContext {
+  snapshot_id: string;
+  generated_at: string;
+  overall_score: number;
+  target_role: string;
+  categories: Record<string, number>;
+  suggestions: string[];
+  missing_evidence: string[];
+}
+
+interface BackendEntryApplicationConfidenceContext {
+  source: 'fallback' | 'partial_live' | 'live';
+  screen_id: string;
+  job_id: string;
+  job_title: string;
+  target_role: string;
+  overall_score: number;
+  recommendation: string;
+  decision_band: string;
+  confidence_band: string;
+  rationale_summary: string;
+  priority_level: string | null;
+  alert_importance: string | null;
+  blocking_issues: string[];
+  missing_evidence: string[];
+  next_actions: string[];
+  decision_version: string | null;
+}
+
+interface BackendEntryIntelligenceContext {
+  source: 'fallback' | 'partial_live' | 'live';
+  career_readiness?: BackendEntryCareerReadinessContext | null;
+  resume_readiness?: BackendEntryResumeReadinessContext | null;
+  application_confidence?: BackendEntryApplicationConfidenceContext | null;
 }
 
 interface BackendFehbRequest {
@@ -226,6 +320,345 @@ function normalizeStringList(values: string[] | null | undefined): string[] {
   return normalized;
 }
 
+function isStringArray(value: unknown): value is string[] {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+
+  for (let i = 0; i < value.length; i++) {
+    if (typeof value[i] !== 'string') {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isStringNumberRecord(value: unknown): value is Record<string, number> {
+  if (value === null || Array.isArray(value) || typeof value !== 'object') {
+    return false;
+  }
+
+  const actualKeys = Object.keys(value as Record<string, unknown>);
+  for (let i = 0; i < actualKeys.length; i++) {
+    if (typeof (value as Record<string, unknown>)[actualKeys[i]] !== 'number') {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isEntryCareerReadinessContext(
+  value: unknown
+): value is BackendEntryCareerReadinessContext {
+  if (value === null || Array.isArray(value) || typeof value !== 'object') {
+    return false;
+  }
+
+  const typedValue = value as Record<string, unknown>;
+  const allowedKeys = [
+    'snapshot_id',
+    'generated_at',
+    'overall_score',
+    'label',
+    'target_role',
+    'spokes',
+    'top_gaps',
+    'next_actions',
+    'missing_evidence',
+  ];
+  const actualKeys = Object.keys(typedValue);
+
+  for (let i = 0; i < actualKeys.length; i++) {
+    if (allowedKeys.indexOf(actualKeys[i]) === -1) {
+      return false;
+    }
+  }
+
+  return (
+    typeof typedValue.snapshot_id === 'string' &&
+    typedValue.snapshot_id.trim() !== '' &&
+    typeof typedValue.generated_at === 'string' &&
+    typedValue.generated_at.trim() !== '' &&
+    typeof typedValue.overall_score === 'number' &&
+    typeof typedValue.label === 'string' &&
+    typedValue.label.trim() !== '' &&
+    typeof typedValue.target_role === 'string' &&
+    typedValue.target_role.trim() !== '' &&
+    isStringNumberRecord(typedValue.spokes) &&
+    isStringArray(typedValue.top_gaps) &&
+    isStringArray(typedValue.next_actions) &&
+    isStringArray(typedValue.missing_evidence)
+  );
+}
+
+function isEntryResumeReadinessContext(
+  value: unknown
+): value is BackendEntryResumeReadinessContext {
+  if (value === null || Array.isArray(value) || typeof value !== 'object') {
+    return false;
+  }
+
+  const typedValue = value as Record<string, unknown>;
+  const allowedKeys = [
+    'snapshot_id',
+    'generated_at',
+    'overall_score',
+    'target_role',
+    'categories',
+    'suggestions',
+    'missing_evidence',
+  ];
+  const actualKeys = Object.keys(typedValue);
+
+  for (let i = 0; i < actualKeys.length; i++) {
+    if (allowedKeys.indexOf(actualKeys[i]) === -1) {
+      return false;
+    }
+  }
+
+  return (
+    typeof typedValue.snapshot_id === 'string' &&
+    typedValue.snapshot_id.trim() !== '' &&
+    typeof typedValue.generated_at === 'string' &&
+    typedValue.generated_at.trim() !== '' &&
+    typeof typedValue.overall_score === 'number' &&
+    typeof typedValue.target_role === 'string' &&
+    typedValue.target_role.trim() !== '' &&
+    isStringNumberRecord(typedValue.categories) &&
+    isStringArray(typedValue.suggestions) &&
+    isStringArray(typedValue.missing_evidence)
+  );
+}
+
+function isEntryIntelligenceContext(
+  value: unknown
+): value is BackendEntryIntelligenceContext {
+  if (value === null || Array.isArray(value) || typeof value !== 'object') {
+    return false;
+  }
+
+  const typedValue = value as Record<string, unknown>;
+  const allowedKeys = [
+    'source',
+    'career_readiness',
+    'resume_readiness',
+    'application_confidence',
+  ];
+  const actualKeys = Object.keys(typedValue);
+
+  for (let i = 0; i < actualKeys.length; i++) {
+    if (allowedKeys.indexOf(actualKeys[i]) === -1) {
+      return false;
+    }
+  }
+
+  return (
+    (typedValue.source === 'fallback' ||
+      typedValue.source === 'partial_live' ||
+      typedValue.source === 'live') &&
+    (typedValue.career_readiness === undefined ||
+      typedValue.career_readiness === null ||
+      isEntryCareerReadinessContext(typedValue.career_readiness)) &&
+    (typedValue.resume_readiness === undefined ||
+      typedValue.resume_readiness === null ||
+      isEntryResumeReadinessContext(typedValue.resume_readiness)) &&
+    (typedValue.application_confidence === undefined ||
+      typedValue.application_confidence === null ||
+      isEntryApplicationConfidenceContext(typedValue.application_confidence))
+  );
+}
+
+function isEntryApplicationConfidenceContext(
+  value: unknown
+): value is BackendEntryApplicationConfidenceContext {
+  if (value === null || Array.isArray(value) || typeof value !== 'object') {
+    return false;
+  }
+
+  const typedValue = value as Record<string, unknown>;
+  const allowedKeys = [
+    'source',
+    'screen_id',
+    'job_id',
+    'job_title',
+    'target_role',
+    'overall_score',
+    'recommendation',
+    'decision_band',
+    'confidence_band',
+    'rationale_summary',
+    'priority_level',
+    'alert_importance',
+    'blocking_issues',
+    'missing_evidence',
+    'next_actions',
+    'decision_version',
+  ];
+  const actualKeys = Object.keys(typedValue);
+
+  for (let i = 0; i < actualKeys.length; i++) {
+    if (allowedKeys.indexOf(actualKeys[i]) === -1) {
+      return false;
+    }
+  }
+
+  return (
+    (typedValue.source === 'fallback' ||
+      typedValue.source === 'partial_live' ||
+      typedValue.source === 'live') &&
+    typeof typedValue.screen_id === 'string' &&
+    typedValue.screen_id.trim() !== '' &&
+    typeof typedValue.job_id === 'string' &&
+    typedValue.job_id.trim() !== '' &&
+    typeof typedValue.job_title === 'string' &&
+    typedValue.job_title.trim() !== '' &&
+    typeof typedValue.target_role === 'string' &&
+    typedValue.target_role.trim() !== '' &&
+    typeof typedValue.overall_score === 'number' &&
+    typeof typedValue.recommendation === 'string' &&
+    typedValue.recommendation.trim() !== '' &&
+    typeof typedValue.decision_band === 'string' &&
+    typedValue.decision_band.trim() !== '' &&
+    typeof typedValue.confidence_band === 'string' &&
+    typedValue.confidence_band.trim() !== '' &&
+    typeof typedValue.rationale_summary === 'string' &&
+    typedValue.rationale_summary.trim() !== '' &&
+    (typedValue.priority_level === null ||
+      typeof typedValue.priority_level === 'string') &&
+    (typedValue.alert_importance === null ||
+      typeof typedValue.alert_importance === 'string') &&
+    isStringArray(typedValue.blocking_issues) &&
+    isStringArray(typedValue.missing_evidence) &&
+    isStringArray(typedValue.next_actions) &&
+    (typedValue.decision_version === null ||
+      typeof typedValue.decision_version === 'string')
+  );
+}
+
+function isQualificationUserFacts(value: unknown): value is BackendQualificationRequest['user_facts'] {
+  if (value === null || Array.isArray(value) || typeof value !== 'object') {
+    return false;
+  }
+
+  const typedValue = value as Record<string, unknown>;
+  const allowedKeys = [
+    'user_id',
+    'years_experience',
+    'target_roles',
+    'skills',
+    'preferred_locations',
+    'authorized_to_work',
+  ];
+  const actualKeys = Object.keys(typedValue);
+
+  for (let i = 0; i < actualKeys.length; i++) {
+    if (allowedKeys.indexOf(actualKeys[i]) === -1) {
+      return false;
+    }
+  }
+
+  return (
+    (typedValue.user_id === undefined ||
+      typedValue.user_id === null ||
+      typeof typedValue.user_id === 'string') &&
+    (typedValue.years_experience === undefined ||
+      typedValue.years_experience === null ||
+      typeof typedValue.years_experience === 'number') &&
+    (typedValue.target_roles === undefined || isStringArray(typedValue.target_roles)) &&
+    (typedValue.skills === undefined || isStringArray(typedValue.skills)) &&
+    (typedValue.preferred_locations === undefined || isStringArray(typedValue.preferred_locations)) &&
+    (typedValue.authorized_to_work === undefined ||
+      typedValue.authorized_to_work === null ||
+      typeof typedValue.authorized_to_work === 'boolean')
+  );
+}
+
+export function isPathAdvisorQualificationEntryRequestPayload(
+  payload: unknown
+): payload is BackendQualificationEntryRequest {
+  if (payload === null || Array.isArray(payload) || typeof payload !== 'object') {
+    return false;
+  }
+
+  const typedPayload = payload as Record<string, unknown>;
+  const allowedKeys = [
+    'user_message',
+    'user_facts',
+    'use_persisted_profile',
+    'request_id',
+  ];
+  const actualKeys = Object.keys(typedPayload);
+
+  for (let i = 0; i < actualKeys.length; i++) {
+    if (allowedKeys.indexOf(actualKeys[i]) === -1) {
+      return false;
+    }
+  }
+
+  return (
+    typeof typedPayload.user_message === 'string' &&
+    typedPayload.user_message.trim() !== '' &&
+    isQualificationUserFacts(typedPayload.user_facts) &&
+    typeof typedPayload.use_persisted_profile === 'boolean' &&
+    typeof typedPayload.request_id === 'string' &&
+    typedPayload.request_id.trim() !== ''
+  );
+}
+
+export function isPathAdvisorEntryRequestPayload(
+  payload: unknown
+): payload is BackendQualificationEntryRequest {
+  if (payload === null || Array.isArray(payload) || typeof payload !== 'object') {
+    return false;
+  }
+
+  const typedPayload = payload as Record<string, unknown>;
+  const allowedKeys = [
+    'user_message',
+    'user_facts',
+    'intelligence_context',
+    'current_target_label',
+    'route_target_label',
+    'route_anchor_label',
+    'route_screen_id',
+    'use_persisted_profile',
+    'request_id',
+  ];
+  const actualKeys = Object.keys(typedPayload);
+
+  for (let i = 0; i < actualKeys.length; i++) {
+    if (allowedKeys.indexOf(actualKeys[i]) === -1) {
+      return false;
+    }
+  }
+
+  return (
+    typeof typedPayload.user_message === 'string' &&
+    typedPayload.user_message.trim() !== '' &&
+    isQualificationUserFacts(typedPayload.user_facts) &&
+    (typedPayload.intelligence_context === undefined ||
+      typedPayload.intelligence_context === null ||
+      isEntryIntelligenceContext(typedPayload.intelligence_context)) &&
+    (typedPayload.current_target_label === undefined ||
+      typedPayload.current_target_label === null ||
+      typeof typedPayload.current_target_label === 'string') &&
+    (typedPayload.route_target_label === undefined ||
+      typedPayload.route_target_label === null ||
+      typeof typedPayload.route_target_label === 'string') &&
+    (typedPayload.route_anchor_label === undefined ||
+      typedPayload.route_anchor_label === null ||
+      typeof typedPayload.route_anchor_label === 'string') &&
+    (typedPayload.route_screen_id === undefined ||
+      typedPayload.route_screen_id === null ||
+      typeof typedPayload.route_screen_id === 'string') &&
+    typeof typedPayload.use_persisted_profile === 'boolean' &&
+    typeof typedPayload.request_id === 'string' &&
+    typedPayload.request_id.trim() !== ''
+  );
+}
+
 function adaptResponse(payload: BackendPathAdvisorShapedResponse): PathAdvisorShapedResponse {
   const keyFactors = Array.isArray(payload.key_factors) ? payload.key_factors : [];
   const domainGrounding = Array.isArray(payload.grounding.domains) ? payload.grounding.domains : [];
@@ -313,6 +746,25 @@ function adaptResponse(payload: BackendPathAdvisorShapedResponse): PathAdvisorSh
           freshnessReason: item.freshness_reason !== undefined ? item.freshness_reason : null,
         };
       }),
+      entryPlanning:
+        payload.grounding.entry_planning !== undefined &&
+        payload.grounding.entry_planning !== null
+          ? {
+              planningBasis: payload.grounding.entry_planning.planning_basis,
+              planningSummary: payload.grounding.entry_planning.planning_summary,
+              plannedDomains: Array.isArray(payload.grounding.entry_planning.planned_domains)
+                ? payload.grounding.entry_planning.planned_domains.map(function (item) {
+                    return {
+                      domain: item.domain,
+                      selectionBasis: item.selection_basis,
+                      capabilityState: item.capability_state,
+                      capabilityReason:
+                        item.capability_reason !== undefined ? item.capability_reason : null,
+                    };
+                  })
+                : [],
+            }
+          : null,
     },
     servedAt: payload.served_at,
   };
@@ -489,6 +941,171 @@ export async function fetchGovernedPathAdvisorResponse(
       extractErrorMessage(
         payload,
         'The frontend could not load the governed PathAdvisor response.'
+      )
+    );
+  }
+
+  if (payload === null || Array.isArray(payload) || typeof payload !== 'object') {
+    return null;
+  }
+
+  return adaptResponse(payload as BackendPathAdvisorShapedResponse);
+}
+
+export async function fetchQualificationEntryPathAdvisorResponse(
+  userMessage: string,
+  draft: PathAdvisorGovernedDraft,
+  profile: Profile
+): Promise<PathAdvisorShapedResponse | null> {
+  const requestPayload: BackendQualificationEntryRequest = {
+    user_message: userMessage,
+    user_facts: buildQualificationUserFacts(draft, profile),
+    use_persisted_profile: false,
+    request_id: createRequestId('qualification'),
+  };
+
+  const response = await fetch('/api/pathadvisor/qualification/entry', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    cache: 'no-store',
+    body: JSON.stringify(requestPayload),
+  });
+  const payload = await readJsonPayload(response);
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      extractErrorMessage(
+        payload,
+        'The frontend could not load the coverage-aware PathAdvisor qualification response.'
+      )
+    );
+  }
+
+  if (payload === null || Array.isArray(payload) || typeof payload !== 'object') {
+    return null;
+  }
+
+  return adaptResponse(payload as BackendPathAdvisorShapedResponse);
+}
+
+export async function fetchPathAdvisorEntryResponse(
+  userMessage: string,
+  draft: PathAdvisorGovernedDraft,
+  profile: Profile,
+  entryContext?: PathAdvisorEntryContext
+): Promise<PathAdvisorShapedResponse | null> {
+  const requestPayload: BackendQualificationEntryRequest = {
+    user_message: userMessage,
+    user_facts: buildQualificationUserFacts(draft, profile),
+    intelligence_context:
+      entryContext !== undefined && entryContext.intelligenceContext !== null
+        ? {
+            source: entryContext.intelligenceContext.source,
+            career_readiness:
+              entryContext.intelligenceContext.careerReadiness !== null
+                ? {
+                    snapshot_id: entryContext.intelligenceContext.careerReadiness.snapshotId,
+                    generated_at: entryContext.intelligenceContext.careerReadiness.generatedAt,
+                    overall_score: entryContext.intelligenceContext.careerReadiness.overallScore,
+                    label: entryContext.intelligenceContext.careerReadiness.label,
+                    target_role: entryContext.intelligenceContext.careerReadiness.targetRole,
+                    spokes: entryContext.intelligenceContext.careerReadiness.spokes,
+                    top_gaps: entryContext.intelligenceContext.careerReadiness.topGaps,
+                    next_actions: entryContext.intelligenceContext.careerReadiness.nextActions,
+                    missing_evidence:
+                      entryContext.intelligenceContext.careerReadiness.missingEvidence,
+                  }
+                : null,
+            resume_readiness:
+              entryContext.intelligenceContext.resumeReadiness !== null
+                ? {
+                    snapshot_id: entryContext.intelligenceContext.resumeReadiness.snapshotId,
+                    generated_at: entryContext.intelligenceContext.resumeReadiness.generatedAt,
+                    overall_score: entryContext.intelligenceContext.resumeReadiness.overallScore,
+                    target_role: entryContext.intelligenceContext.resumeReadiness.targetRole,
+                    categories: entryContext.intelligenceContext.resumeReadiness.categories,
+                    suggestions: entryContext.intelligenceContext.resumeReadiness.suggestions,
+                    missing_evidence:
+                      entryContext.intelligenceContext.resumeReadiness.missingEvidence,
+                  }
+                : null,
+            application_confidence:
+              entryContext.intelligenceContext.applicationConfidence !== null &&
+              entryContext.intelligenceContext.applicationConfidence !== undefined
+                ? {
+                    source:
+                      entryContext.intelligenceContext.applicationConfidence.source,
+                    screen_id:
+                      entryContext.intelligenceContext.applicationConfidence.screenId,
+                    job_id:
+                      entryContext.intelligenceContext.applicationConfidence.jobId,
+                    job_title:
+                      entryContext.intelligenceContext.applicationConfidence.jobTitle,
+                    target_role:
+                      entryContext.intelligenceContext.applicationConfidence.targetRole,
+                    overall_score:
+                      entryContext.intelligenceContext.applicationConfidence.overallScore,
+                    recommendation:
+                      entryContext.intelligenceContext.applicationConfidence.recommendation,
+                    decision_band:
+                      entryContext.intelligenceContext.applicationConfidence.decisionBand,
+                    confidence_band:
+                      entryContext.intelligenceContext.applicationConfidence.confidenceBand,
+                    rationale_summary:
+                      entryContext.intelligenceContext.applicationConfidence.rationaleSummary,
+                    priority_level:
+                      entryContext.intelligenceContext.applicationConfidence.priorityLevel,
+                    alert_importance:
+                      entryContext.intelligenceContext.applicationConfidence.alertImportance,
+                    blocking_issues:
+                      entryContext.intelligenceContext.applicationConfidence.blockingIssues,
+                    missing_evidence:
+                      entryContext.intelligenceContext.applicationConfidence.missingEvidence,
+                    next_actions:
+                      entryContext.intelligenceContext.applicationConfidence.nextActions,
+                    decision_version:
+                      entryContext.intelligenceContext.applicationConfidence.decisionVersion,
+                  }
+                : null,
+          }
+        : undefined,
+    current_target_label:
+      entryContext !== undefined ? entryContext.currentTargetLabel : undefined,
+    route_target_label:
+      entryContext !== undefined ? entryContext.routeTargetLabel : undefined,
+    route_anchor_label:
+      entryContext !== undefined ? entryContext.routeAnchorLabel : undefined,
+    route_screen_id:
+      entryContext !== undefined ? entryContext.routeScreenId : undefined,
+    use_persisted_profile: false,
+    request_id: createRequestId(draft.domain),
+  };
+
+  const response = await fetch('/api/pathadvisor/entry', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    cache: 'no-store',
+    body: JSON.stringify(requestPayload),
+  });
+  const payload = await readJsonPayload(response);
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      extractErrorMessage(
+        payload,
+        'The frontend could not load the PathAdvisor entry response.'
       )
     );
   }

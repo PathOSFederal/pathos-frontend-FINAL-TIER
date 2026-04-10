@@ -85,6 +85,7 @@ export const AUDIT_LOG_STORAGE_KEY = 'pathos.auditLog.v1';
  * Day 36: Used by onboardingStore to persist onboarding mode state and progress.
  */
 export const ONBOARDING_STORAGE_KEY = 'pathos-onboarding-state';
+export const ONBOARDING_SESSION_ID_STORAGE_KEY = 'pathos-onboarding-session-id-v1';
 
 /**
  * Storage key for guided tour state.
@@ -146,6 +147,7 @@ export const STORAGE_KEYS = {
   TASKS: TASKS_STORAGE_KEY,
   AUDIT_LOG: AUDIT_LOG_STORAGE_KEY,
   ONBOARDING: ONBOARDING_STORAGE_KEY,
+  ONBOARDING_SESSION_ID: ONBOARDING_SESSION_ID_STORAGE_KEY,
   GUIDED_TOUR: GUIDED_TOUR_STORAGE_KEY,
   BENEFITS_WORKSPACE: BENEFITS_WORKSPACE_STORAGE_KEY,
   GUIDED_USAJOBS_GOALS: GUIDED_USAJOBS_GOALS_STORAGE_KEY,

@@ -45,6 +45,18 @@ export {
   type PathAdvisorRailContent,
 } from './stores/pathAdvisorScreenOverridesStore';
 export {
+  usePathAdvisorContextLogStore,
+  buildAnchorKey,
+  getAnchorKeysForScreen,
+  getEntriesForAnchor,
+  type PathAdvisorAnchorType,
+  type PathAdvisorAnchor,
+  type PathAdvisorContextSection,
+  type PathAdvisorContextCta,
+  type PathAdvisorContextTag,
+  type PathAdvisorContextEntry,
+} from './stores/pathAdvisorContextLogStore';
+export {
   usePathAdvisorThreadStore,
   generateThreadTitle,
   type AdvisorThread,
@@ -92,6 +104,15 @@ export {
   type SavedJobsLiveEvaluation,
   type SavedJobsLiveEvaluationState,
 } from './screens/_components/SavedJobsLiveAdvisorPanel';
+export type {
+  CanonicalIntelligenceSummary,
+  ScreenNextAction,
+  CanonicalMatchProjectionDimension,
+  CanonicalJobMatchProjection,
+  DashboardIntelligencePayload,
+  ResumeBuilderIntelligencePayload,
+  ScreenIntelligenceEnvelope,
+} from './types/pathadvisorIntelligence';
 export { mockDashboardData } from './screens/dashboard/mockDashboardData';
 export type { DashboardViewModel, FocusItem, ActiveTrack, SignalItem } from './screens/dashboard/dashboardModel';
 export { buildDashboardViewModel } from './screens/dashboard/buildDashboardViewModel';
@@ -102,3 +123,26 @@ export {
   type ApplicationConfidenceCenterScreenProps,
   type ApplicationConfidenceAnchorContext,
 } from './screens/ApplicationConfidenceCenterScreen';
+export type {
+  IntelligenceActionPlanItem,
+  IntelligenceEvidenceRef,
+  IntelligenceMissingEvidence,
+  IntelligenceReasonItem,
+  IntelligenceSnapshotMeta,
+  IntelligenceTopGapItem,
+  CareerReadinessSnapshot,
+  PathAdvisorApplicationConfidenceContext,
+  PathAdvisorCareerReadinessContext,
+  PathAdvisorIntelligenceContext,
+  PathAdvisorResumeReadinessContext,
+  ResumeReadinessSnapshot,
+  ResumeSuggestionItem,
+  UnifiedCareerResumeIntelligenceSource,
+  UnifiedCareerResumeIntelligenceState,
+  UnifiedCareerResumeWorkspaceSource,
+} from './intelligence/careerResumeIntelligence';
+export {
+  useResumeWorkspaceStore,
+  type ResumeDraftSummary,
+} from './stores/resumeWorkspaceStore';
+export { buildResumeDiagnosticsRequest } from './resume-workspace/resumeDiagnostics';

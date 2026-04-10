@@ -59,6 +59,7 @@ import { publishSelectionContext } from '../lib/pathAdvisorPublish';
 import { readinessTierColor, readinessBandLabel } from '../styles/scoreTiers';
 import { loadSavedJobsStore, listSavedJobs } from '@pathos/core';
 import type { Job } from '@pathos/core';
+import type { UnifiedCareerResumeIntelligenceState } from '../intelligence/careerResumeIntelligence';
 
 /** Single item in Proof Library (STAR story, bullet, or metric). Local-only mock shape. */
 interface ProofLibraryItem {
@@ -95,6 +96,26 @@ export interface CareerScreenProps {
   lastUpdated?: string;
   /** Optional override for demo state (for tests and fast iteration). When unset, CAREER_DEMO_STATE constant is used. */
   demoState?: CareerDemoState;
+  /** Optional shared live intelligence state injected by the page wrapper. */
+  intelligence?: UnifiedCareerResumeIntelligenceState;
+}
+
+interface ReferralFinding {
+  severity: 'fixFirst' | 'improve' | 'optional';
+  title: string;
+  body: string;
+}
+
+function mapLiveSeverity(
+  index: number
+): ReferralFinding['severity'] {
+  if (index === 0) {
+    return 'fixFirst';
+  }
+  if (index <= 2) {
+    return 'improve';
+  }
+  return 'optional';
 }
 
 // ---------------------------------------------------------------------------
@@ -534,8 +555,15 @@ export function CareerScreen(props: CareerScreenProps) {
   const [proofLibraryViewDrawer, setProofLibraryViewDrawer] = useState<'star' | 'bullet' | 'metric' | null>(null);
   const [proofLibraryAddForm, setProofLibraryAddForm] = useState({ title: '', content: '' });
 
+  const liveCareerReadiness = props.intelligence?.careerReadiness ?? null;
+  const liveResumeReadiness = props.intelligence?.resumeReadiness ?? null;
+  const workspaceResume = props.intelligence?.workspaceResume ?? null;
   const lastUpdated =
-    props.lastUpdated !== undefined && props.lastUpdated !== null && props.lastUpdated !== ''
+    props.intelligence?.lastUpdatedLabel !== null &&
+    props.intelligence?.lastUpdatedLabel !== undefined &&
+    props.intelligence.lastUpdatedLabel !== ''
+      ? props.intelligence.lastUpdatedLabel
+      : props.lastUpdated !== undefined && props.lastUpdated !== null && props.lastUpdated !== ''
       ? props.lastUpdated
       : 'Feb 28, 2026';
 
@@ -600,8 +628,63 @@ export function CareerScreen(props: CareerScreenProps) {
   );
 
   const hasResume = resumes.length > 0;
+  const hasWorkspaceResume = workspaceResume !== null;
   const isResumeComplete = demoState === 'readyResume' || demoState === 'tailorReadyWithJob';
   const hasTailorJob = targetJobIdForTailoring !== null && targetJobIdForTailoring !== '';
+  const titleBadgeLabel =
+    props.intelligence !== undefined &&
+    props.intelligence.source !== 'fallback'
+      ? 'Live intelligence'
+      : 'Local only';
+  const showLiveTitleBadge = titleBadgeLabel === 'Live intelligence';
+
+  const heroMessage =
+    liveResumeReadiness !== null
+      ? 'Your resume readiness is ' +
+        String(liveResumeReadiness.overall_score) +
+        '% (' +
+        readinessBandLabel(liveResumeReadiness.overall_score) +
+        '). ' +
+        (
+          liveResumeReadiness.suggestions.length > 0
+            ? liveResumeReadiness.suggestions[0].title + ' is the clearest next improvement.'
+            : 'Keep strengthening evidence quality and required federal details.'
+        ) +
+        (
+          liveCareerReadiness !== null
+            ? ' Career readiness for ' +
+              liveCareerReadiness.target_role +
+              ' is ' +
+              String(liveCareerReadiness.overall_score) +
+              '%.'
+            : ''
+        )
+      : demoState === 'noResume'
+        ? 'Add a resume to get started. Build your master resume so you can tailor it to jobs.'
+        : demoState === 'incompleteResume' || demoState === 'readyResume' || demoState === 'tailorReadyWithJob'
+          ? 'Your resume readiness is 62% (' + readinessBandLabel(62) + '). Improving evidence and completing sections increases your chances of getting referred.'
+          : 'Your resume readiness is 62% (' + readinessBandLabel(62) + '). Improving evidence and completing sections increases your chances of getting referred.';
+  const heroCtaLabel =
+    liveResumeReadiness !== null || hasWorkspaceResume
+      ? 'Open Resume Workspace'
+      : demoState === 'noResume'
+        ? 'Add resume'
+        : 'Complete Resume';
+  const heroContextCopy =
+    liveResumeReadiness !== null
+      ? 'Based on live resume and career snapshots' +
+        (
+          workspaceResume !== null
+            ? ' for ' + workspaceResume.name
+            : ''
+        ) +
+        (
+          liveResumeReadiness.target_role.trim() !== ''
+            ? ' • Target: ' + liveResumeReadiness.target_role
+            : ''
+        ) +
+        '.'
+      : 'Based on your saved jobs, resume completeness, and last update.';
 
   const handleHeroCta = useCallback(
     function () {
@@ -619,20 +702,29 @@ export function CareerScreen(props: CareerScreenProps) {
         sections: [
           {
             heading: 'What PathOS knows',
-            body: 'Your resume completeness, missing sections, and last update time.',
+            body:
+              liveResumeReadiness !== null
+                ? 'Your live resume snapshot, documented evidence gaps, and targeted improvement suggestions.'
+                : 'Your resume completeness, missing sections, and last update time.',
           },
           {
             heading: 'What PathOS does not know',
-            body: 'Your timeline or preferences; this is a local snapshot only.',
+            body:
+              liveResumeReadiness !== null || liveCareerReadiness !== null
+                ? 'Your timeline, job-specific questionnaire answers, and any evidence that is not in the current frontend profile or active resume draft.'
+                : 'Your timeline or preferences; this is a local snapshot only.',
           },
           {
             heading: 'Why this is recommended',
-            body: 'Completing all sections increases your chances of getting referred.',
+            body:
+              liveResumeReadiness !== null && liveResumeReadiness.suggestions.length > 0
+                ? liveResumeReadiness.suggestions[0].title + ' is the strongest next resume improvement right now.'
+                : 'Completing all sections increases your chances of getting referred.',
           },
         ],
       });
     },
-    [openBriefing]
+    [liveCareerReadiness, liveResumeReadiness, openBriefing]
   );
 
   // Load saved jobs when Create tailored drawer opens (for picker).
@@ -720,20 +812,6 @@ export function CareerScreen(props: CareerScreenProps) {
     ]
   );
 
-  // Today's Best Move copy and CTA depend on demo state.
-  // Uses readiness language (not completion language) to stay consistent
-  // with the percentage-first readiness model. 62% readiness is the demo
-  // score; the band label provides the interpretation.
-  const heroMessage =
-    demoState === 'noResume'
-      ? 'Add a resume to get started. Build your master resume so you can tailor it to jobs.'
-      : demoState === 'incompleteResume' || demoState === 'readyResume' || demoState === 'tailorReadyWithJob'
-        ? 'Your resume readiness is 62% (' + readinessBandLabel(62) + '). Improving evidence and completing sections increases your chances of getting referred.'
-        : 'Your resume readiness is 62% (' + readinessBandLabel(62) + '). Improving evidence and completing sections increases your chances of getting referred.';
-  const heroCtaLabel = demoState === 'noResume' ? 'Add resume' : 'Complete Resume';
-  const heroContextCopy =
-    'Based on your saved jobs, resume completeness, and last update.';
-
   // Resume sections checklist (mock): same shape as mockup.
   const resumeSections = useMemo(
     function () {
@@ -754,7 +832,62 @@ export function CareerScreen(props: CareerScreenProps) {
 
   /** Referral Readiness Check: issues that could lower referral odds. Severity labels per mockup: Fix first, Improve, Optional. */
   const referralFindings = useMemo(
-    function () {
+    function (): ReferralFinding[] {
+      if (liveResumeReadiness !== null || liveCareerReadiness !== null) {
+        const findings: ReferralFinding[] = [];
+
+        if (liveResumeReadiness !== null) {
+          for (let i = 0; i < liveResumeReadiness.missing_evidence.length; i++) {
+            const item = liveResumeReadiness.missing_evidence[i];
+            findings.push({
+              severity: mapLiveSeverity(i),
+              title: item.label,
+              body:
+                item.why_it_matters !== undefined &&
+                item.why_it_matters !== null &&
+                item.why_it_matters.trim() !== ''
+                  ? item.why_it_matters
+                  : 'This evidence gap reduces resume readiness confidence.',
+            });
+          }
+
+          for (
+            let i = 0;
+            i < liveResumeReadiness.suggestions.length && findings.length < 4;
+            i++
+          ) {
+            const item = liveResumeReadiness.suggestions[i];
+            findings.push({
+              severity: mapLiveSeverity(findings.length),
+              title: item.title,
+              body:
+                item.example !== undefined &&
+                item.example !== null &&
+                item.example.trim() !== ''
+                  ? item.example
+                  : 'This improvement comes directly from the live resume snapshot.',
+            });
+          }
+        }
+
+        if (liveCareerReadiness !== null) {
+          for (
+            let i = 0;
+            i < liveCareerReadiness.top_gaps.length && findings.length < 4;
+            i++
+          ) {
+            const item = liveCareerReadiness.top_gaps[i];
+            findings.push({
+              severity: mapLiveSeverity(findings.length),
+              title: item.title,
+              body: item.reason,
+            });
+          }
+        }
+
+        return findings.slice(0, 4);
+      }
+
       if (demoState === 'noResume') {
         return [];
       }
@@ -781,7 +914,7 @@ export function CareerScreen(props: CareerScreenProps) {
         },
       ];
     },
-    [demoState]
+    [demoState, liveCareerReadiness, liveResumeReadiness]
   );
 
   const tailoringChecklist = useMemo(
@@ -881,8 +1014,12 @@ export function CareerScreen(props: CareerScreenProps) {
               color: 'var(--p-text-muted)',
             }}
           >
-            <Lock className="w-3 h-3" aria-hidden />
-            Local only
+            {showLiveTitleBadge ? (
+              <Sparkles className="w-3 h-3" aria-hidden />
+            ) : (
+              <Lock className="w-3 h-3" aria-hidden />
+            )}
+            {titleBadgeLabel}
           </span>
           <span className="text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
             Last updated: {lastUpdated}
@@ -940,27 +1077,103 @@ export function CareerScreen(props: CareerScreenProps) {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <ResumeReadinessTile
             label="Overall readiness"
-            value={hasResume ? '62% Ready' : '—'}
-            secondaryLabel={hasResume ? readinessBandLabel(62) : undefined}
-            subtext={hasResume ? 'Based on completeness, evidence, and federal requirements' : 'No resume'}
-            progressPercent={hasResume ? 62 : undefined}
-            readinessScore={hasResume ? 62 : undefined}
+            value={
+              liveResumeReadiness !== null
+                ? String(liveResumeReadiness.overall_score) + '% Ready'
+                : hasResume
+                  ? '62% Ready'
+                  : '—'
+            }
+            secondaryLabel={
+              liveResumeReadiness !== null
+                ? readinessBandLabel(liveResumeReadiness.overall_score)
+                : hasResume
+                  ? readinessBandLabel(62)
+                  : undefined
+            }
+            subtext={
+              liveResumeReadiness !== null
+                ? 'Based on live evidence, structure, and federal requirements'
+                : hasResume
+                  ? 'Based on completeness, evidence, and federal requirements'
+                  : 'No resume'
+            }
+            progressPercent={
+              liveResumeReadiness !== null
+                ? liveResumeReadiness.overall_score
+                : hasResume
+                  ? 62
+                  : undefined
+            }
+            readinessScore={
+              liveResumeReadiness !== null
+                ? liveResumeReadiness.overall_score
+                : hasResume
+                  ? 62
+                  : undefined
+            }
           />
           <ResumeReadinessTile
             label="Missing fields"
-            value={hasResume ? '3' : '—'}
-            subtext={hasResume ? 'sections need attention' : '—'}
+            value={
+              liveResumeReadiness !== null
+                ? String(liveResumeReadiness.missing_evidence.length)
+                : hasResume
+                  ? '3'
+                  : '—'
+            }
+            subtext={
+              liveResumeReadiness !== null
+                ? liveResumeReadiness.missing_evidence.length > 0
+                  ? liveResumeReadiness.missing_evidence[0].label
+                  : 'no open evidence gaps'
+                : hasResume
+                  ? 'sections need attention'
+                  : '—'
+            }
           />
           <ResumeReadinessTile
             label="Tailor-ready"
-            value={hasTailorJob ? 'Yes' : 'Low'}
-            subtext={hasTailorJob ? 'ready for target job' : 'fix issues first'}
-            showInfoIcon={!hasTailorJob}
+            value={
+              liveResumeReadiness !== null && liveCareerReadiness !== null
+                ? liveResumeReadiness.overall_score >= 70 &&
+                  liveCareerReadiness.overall_score >= 70
+                  ? 'Yes'
+                  : 'Hold'
+                : hasTailorJob
+                  ? 'Yes'
+                  : 'Low'
+            }
+            subtext={
+              liveResumeReadiness !== null && liveCareerReadiness !== null
+                ? 'career + resume aligned for ' + liveCareerReadiness.target_role
+                : hasTailorJob
+                  ? 'ready for target job'
+                  : 'fix issues first'
+            }
+            showInfoIcon={
+              liveResumeReadiness !== null && liveCareerReadiness !== null
+                ? liveResumeReadiness.overall_score < 70 ||
+                  liveCareerReadiness.overall_score < 70
+                : !hasTailorJob
+            }
           />
           <ResumeReadinessTile
             label="Last tailored"
-            value={hasTailorJob ? 'Today' : 'Never tailored'}
-            subtext={hasTailorJob ? 'against current target job' : 'Never tailored'}
+            value={
+              workspaceResume !== null && workspaceResume.targetRoleTitle !== null
+                ? 'Target set'
+                : hasTailorJob
+                  ? 'Today'
+                  : 'Never tailored'
+            }
+            subtext={
+              workspaceResume !== null && workspaceResume.targetRoleTitle !== null
+                ? workspaceResume.targetRoleTitle
+                : hasTailorJob
+                  ? 'against current target job'
+                  : 'Never tailored'
+            }
           />
         </div>
       </div>
@@ -1265,6 +1478,46 @@ export function CareerScreen(props: CareerScreenProps) {
                 </button>
               ) : null}
             </>
+          ) : hasWorkspaceResume ? (
+            <>
+              <p className="text-[11px] font-medium mb-1" style={{ color: 'var(--p-text-dim)' }}>
+                Active Resume Workspace draft
+              </p>
+              <div
+                className="rounded-[var(--p-radius)] px-3 py-2"
+                style={{
+                  background: 'var(--p-surface2)',
+                  border: '1px solid var(--p-border)',
+                }}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold text-[12px]" style={{ color: 'var(--p-text)' }}>
+                    {workspaceResume.name}
+                  </span>
+                  <ResumeTypeChip type={workspaceResume.mode} />
+                </div>
+                <p className="mt-1 text-[11px]" style={{ color: 'var(--p-text-muted)' }}>
+                  Live resume intelligence is sourced from the active Resume Workspace draft.
+                </p>
+                <p className="mt-1 text-[11px]" style={{ color: 'var(--p-text-dim)' }}>
+                  Updated {formatUpdatedAgo(workspaceResume.updatedAt)}
+                </p>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={function () { nav.push(RESUME_BUILDER); }}
+                  className="rounded-[var(--p-radius)] px-3 py-1.5 text-sm font-medium transition-colors hover:opacity-90 inline-flex items-center gap-1.5"
+                  style={{
+                    background: 'var(--p-accent)',
+                    color: 'var(--p-bg)',
+                  }}
+                >
+                  <FileText className="w-3.5 h-3.5" aria-hidden />
+                  Open Resume Workspace
+                </button>
+              </div>
+            </>
           ) : (
             <>
               <p style={{ color: 'var(--p-text-muted)', fontSize: 'var(--p-font-size-body)' }}>
@@ -1295,6 +1548,8 @@ export function CareerScreen(props: CareerScreenProps) {
           subtitle={
             referralFindings.length > 0 && activeResume !== undefined
               ? 'for ' + activeResume.name + ' • ' + referralFindings.length + ' issues'
+              : referralFindings.length > 0 && workspaceResume !== null
+                ? 'for ' + workspaceResume.name + ' • ' + referralFindings.length + ' issues'
               : referralFindings.length > 0
                 ? referralFindings.length + ' issues'
                 : undefined

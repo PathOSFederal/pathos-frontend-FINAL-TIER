@@ -23,6 +23,9 @@
 export type PathAdvisorGovernedDomain =
   | 'qualification'
   | 'fehb'
+  | 'job_search'
+  | 'application_confidence'
+  | 'resume_readiness'
   | 'cross_domain';
 
 export type PathAdvisorGovernedResponseState =
@@ -45,7 +48,12 @@ export interface PathAdvisorKeyFactor {
 }
 
 export interface PathAdvisorDomainGroundingRecord {
-  domain: 'qualification' | 'fehb';
+  domain:
+    | 'qualification'
+    | 'fehb'
+    | 'job_search'
+    | 'application_confidence'
+    | 'resume_readiness';
   responseState: PathAdvisorGovernedResponseState;
   grounded: boolean;
   partial: boolean;
@@ -57,6 +65,27 @@ export interface PathAdvisorDomainGroundingRecord {
   version: number | null;
   freshnessState: PathAdvisorFreshnessState | null;
   freshnessReason: string | null;
+}
+
+export interface PathAdvisorEntryPlanningDomainRecord {
+  domain: 'qualification' | 'job_search' | 'application_confidence' | 'resume_readiness';
+  selectionBasis:
+    | 'explicit_intent'
+    | 'capability_fallback'
+    | 'default_fallback'
+    | 'mixed';
+  capabilityState: 'available' | 'unavailable' | 'not_required';
+  capabilityReason: string | null;
+}
+
+export interface PathAdvisorEntryPlanningMetadata {
+  planningBasis:
+    | 'explicit_intent'
+    | 'capability_fallback'
+    | 'default_fallback'
+    | 'mixed';
+  planningSummary: string;
+  plannedDomains: PathAdvisorEntryPlanningDomainRecord[];
 }
 
 export interface PathAdvisorGroundingMetadata {
@@ -87,6 +116,7 @@ export interface PathAdvisorGroundingMetadata {
   providerUsed: boolean;
   refusalDomain: 'qualification' | 'fehb' | null;
   domains: PathAdvisorDomainGroundingRecord[];
+  entryPlanning?: PathAdvisorEntryPlanningMetadata | null;
 }
 
 export interface PathAdvisorShapedResponse {
