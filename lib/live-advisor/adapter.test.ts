@@ -13,6 +13,9 @@ import { describe, expect, it } from 'vitest';
 import { demoJobSeekerProfile } from '@/lib/api/profile';
 import {
   adaptAdvisorEvaluation,
+  adaptJobSearchIntelligencePayload,
+  adaptSavedJobsSummaryPayload,
+  adaptSavedJobsIntelligencePayload,
   adaptLiveJobSearchResponse,
   adaptStoredJobCatalogItems,
   buildLiveJobSearchRequest,
@@ -185,6 +188,192 @@ describe('live advisor adapter', function () {
     );
     expect(result.explainabilityVersion).toBe('explainability-v1');
     expect(result.engineVersion).toBe('qualification-v1');
+  });
+
+  it('adapts canonical intelligence payloads without inventing local meaning', function () {
+    const jobSearchResult = adaptJobSearchIntelligencePayload({
+      screen: 'job_search',
+      pathadvisor_mode: 'search_refinement',
+      context: {
+        target_role_clusters: ['Program analyst'],
+        preferred_locations: ['Washington, DC'],
+        readiness_state: 'Draft resume',
+        fit_lanes: ['Target field: Program / policy analyst'],
+        blockers: ['Resume evidence still needs work'],
+        top_missing_items: ['Location flexibility'],
+        next_best_actions: ['Clarify target role cluster'],
+        active_threads: ['Target direction'],
+        profile_completeness: 68,
+        freshness_band: 'fresh',
+        confidence_band: 'medium',
+        recent_meaningful_changes: [],
+        activity_signals: ['Recent job activity strengthened analyst direction.'],
+        updated_at: '2026-04-09T12:00:00Z',
+      },
+      summary: 'Job Search is projecting canonical user intelligence onto this role.',
+      refinement_suggestions: ['Clarify target role cluster'],
+      next_best_action: {
+        action_id: 'clarify_target_cluster',
+        title: 'Clarify your target role cluster',
+        description: 'The selected job is broader than your current target-role context.',
+        cta_label: 'Refine role direction',
+        cta_href: '/dashboard',
+        reason: 'Sharper target direction improves match quality.',
+      },
+      job_match_projection: {
+        overall_score: 74,
+        confidence_band: 'medium',
+        blocker_severity: 'medium',
+        explanation_summary: 'Match projection is grounded in canonical user context and job evidence.',
+        dimensions: [
+          {
+            dimension_id: 'qualification_alignment',
+            label: 'Qualification alignment',
+            score: 74,
+            status: 'building',
+            explanation: 'Grounded in the backend job-evaluation score against canonical user evidence.',
+          },
+        ],
+        next_actions: ['Clarify target role cluster'],
+        blockers: ['Resume evidence still needs work'],
+        warnings: [],
+      },
+      evaluation: {
+        recommendation: 'consider',
+        decision_band: 'caution',
+        confidence_band: 'medium',
+        overall_score: 74,
+        reasons: [],
+        gaps: [],
+        warnings: [],
+        missing_evidence: [],
+        next_actions: [],
+        application_decision: null,
+        meta: {
+          explainability_version: 'explainability-v1',
+          engine_version: 'qualification-v1',
+        },
+      },
+    });
+
+    expect(jobSearchResult.jobMatchProjection !== undefined).toBe(true);
+    expect(jobSearchResult.screenIntelligence !== undefined).toBe(true);
+    if (
+      jobSearchResult.jobMatchProjection === undefined ||
+      jobSearchResult.jobMatchProjection === null ||
+      jobSearchResult.screenIntelligence === undefined ||
+      jobSearchResult.screenIntelligence === null
+    ) {
+      throw new Error('Expected canonical intelligence fields to be present.');
+    }
+    expect(jobSearchResult.jobMatchProjection.dimensions[0].dimensionId).toBe(
+      'qualification_alignment'
+    );
+    expect(jobSearchResult.screenIntelligence.nextBestAction.title).toBe(
+      'Clarify your target role cluster'
+    );
+
+    const savedJobsResult = adaptSavedJobsIntelligencePayload({
+      screen: 'saved_jobs',
+      pathadvisor_mode: 'decision_risk',
+      context: {
+        target_role_clusters: ['Program analyst'],
+        preferred_locations: ['Washington, DC'],
+        readiness_state: 'Draft resume',
+        fit_lanes: ['Target field: Program / policy analyst'],
+        blockers: ['Resume evidence still needs work'],
+        top_missing_items: ['Location flexibility'],
+        next_best_actions: ['Improve before applying'],
+        active_threads: ['Resume readiness'],
+        profile_completeness: 72,
+        freshness_band: 'fresh',
+        confidence_band: 'medium',
+        recent_meaningful_changes: [],
+        activity_signals: ['Recent job activity strengthened analyst direction.'],
+        updated_at: '2026-04-09T12:00:00Z',
+      },
+      summary: 'Saved Jobs is using the same canonical match projection with decision-first framing.',
+      decision_guidance: ['Improve before applying'],
+      next_best_action: {
+        action_id: 'improve_before_apply',
+        title: 'Improve before applying',
+        description: 'Saved Jobs should shift from consideration to blocker removal for this role.',
+        cta_label: 'Improve readiness first',
+        cta_href: '/dashboard/resume-builder',
+        reason: 'The canonical match projection still shows blocker pressure.',
+      },
+      job_match_projection: {
+        overall_score: 76,
+        confidence_band: 'medium',
+        blocker_severity: 'medium',
+        explanation_summary: 'Match projection is grounded in canonical user context and job evidence.',
+        dimensions: [
+          {
+            dimension_id: 'qualification_alignment',
+            label: 'Qualification alignment',
+            score: 76,
+            status: 'strong',
+            explanation: 'Grounded in the backend job-evaluation score against canonical user evidence.',
+          },
+        ],
+        next_actions: ['Improve before applying'],
+        blockers: ['Resume evidence still needs work'],
+        warnings: [],
+      },
+      evaluation: {
+        recommendation: 'consider',
+        decision_band: 'caution',
+        confidence_band: 'medium',
+        overall_score: 76,
+        reasons: [],
+        gaps: [],
+        warnings: [],
+        missing_evidence: [],
+        next_actions: [],
+        application_decision: null,
+        meta: {
+          explainability_version: 'explainability-v1',
+          engine_version: 'qualification-v1',
+        },
+      },
+    });
+
+    expect(savedJobsResult.screenIntelligence !== undefined).toBe(true);
+    if (savedJobsResult.screenIntelligence === undefined || savedJobsResult.screenIntelligence === null) {
+      throw new Error('Expected Saved Jobs screen intelligence to be present.');
+    }
+    expect(savedJobsResult.screenIntelligence.screen).toBe('saved_jobs');
+    expect(savedJobsResult.screenIntelligence.decisionGuidance).toEqual([
+      'Improve before applying',
+    ]);
+  });
+
+  it('adapts backend saved-jobs summary metrics into frontend-safe fields', function () {
+    const result = adaptSavedJobsSummaryPayload({
+      screen: 'saved_jobs',
+      summary: 'Saved Jobs metrics are derived from canonical stored-job evaluation.',
+      metrics: [
+        {
+          metric_id: 'tracked_jobs',
+          label: 'Tracked jobs',
+          value: 4,
+          emphasis: 'neutral',
+          explanation: 'Recent canonical stored jobs currently available in this workspace.',
+        },
+      ],
+      next_best_action: {
+        action_id: 'review_saved_jobs',
+        title: 'Review the strongest saved opportunities',
+        description: 'Use canonical match quality and blocker pressure to decide what to pursue now.',
+        cta_label: 'Review saved jobs',
+        cta_href: '/dashboard/saved-jobs',
+        reason: 'Saved Jobs should summarize decision-ready work.',
+      },
+    });
+
+    expect(result.metrics[0]?.metricId).toBe('tracked_jobs');
+    expect(result.metrics[0]?.label).toBe('Tracked jobs');
+    expect(result.nextBestAction.actionId).toBe('review_saved_jobs');
   });
 
   it('builds a stored-job evaluation request from the frontend profile', function () {

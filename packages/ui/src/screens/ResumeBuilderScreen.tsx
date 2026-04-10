@@ -92,6 +92,8 @@ import type {
 import { usePathAdvisorScreenOverridesStore } from '../stores/pathAdvisorScreenOverridesStore';
 import { INTERACTIVE_HOVER_CLASS } from '../styles/interactiveHover';
 import { scoreTierColor, readinessTierColor, readinessBandLabel } from '../styles/scoreTiers';
+import { emitOnboardingSignal } from '../lib/onboardingSignals';
+import type { ResumeBuilderIntelligencePayload } from '../types/pathadvisorIntelligence';
 
 // ---------------------------------------------------------------------------
 // New architecture imports — live canvas, slot-based top bar, callout system
@@ -157,8 +159,59 @@ import type { PdfFederalDetails } from '../resume-builder/utils/pdf-export';
 // Props
 // ---------------------------------------------------------------------------
 
-/** Props for ResumeBuilderScreen; currently no required props. */
-export type ResumeBuilderScreenProps = Record<string, unknown>;
+/** Props for ResumeBuilderScreen; currently only optional intelligence payloads. */
+export interface ResumeBuilderScreenProps {
+  intelligencePayload?: ResumeBuilderIntelligencePayload | null;
+}
+
+function ResumeBuilderIntelligenceCard(props: {
+  intelligencePayload: ResumeBuilderIntelligencePayload;
+}) {
+  const intelligencePayload = props.intelligencePayload;
+  const targetAlignmentWarnings = Array.isArray(intelligencePayload.targetAlignmentWarnings)
+    ? intelligencePayload.targetAlignmentWarnings
+    : [];
+  const evidenceGaps = Array.isArray(intelligencePayload.evidenceGaps)
+    ? intelligencePayload.evidenceGaps
+    : [];
+  const nextBestActionTitle =
+    intelligencePayload.nextBestAction !== undefined &&
+    intelligencePayload.nextBestAction !== null &&
+    intelligencePayload.nextBestAction.title !== undefined
+      ? intelligencePayload.nextBestAction.title
+      : 'Review the highest-value resume action next.';
+
+  return (
+    <div
+      className="mx-4 mt-3 rounded-xl border px-4 py-3"
+      data-testid="resume-builder-intelligence-card"
+      style={{
+        borderColor: 'var(--p-border)',
+        background: 'var(--p-surface)',
+      }}
+    >
+      <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--p-text-dim)' }}>
+        PathAdvisor alignment context
+      </p>
+      <p className="text-sm mt-1" style={{ color: 'var(--p-text)' }}>
+        {intelligencePayload.summary}
+      </p>
+      {targetAlignmentWarnings.length > 0 ? (
+        <p className="text-xs mt-2" style={{ color: 'var(--p-text-muted)' }}>
+          Warnings: {targetAlignmentWarnings.join(', ')}
+        </p>
+      ) : null}
+      {evidenceGaps.length > 0 ? (
+        <p className="text-xs mt-1" style={{ color: 'var(--p-text-muted)' }}>
+          Evidence gaps: {evidenceGaps.join(', ')}
+        </p>
+      ) : null}
+      <p className="text-xs mt-2" style={{ color: 'var(--p-text)' }}>
+        Next best action: {nextBestActionTitle}
+      </p>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // View-model types — local intelligence layer on top of core resume model
@@ -4689,6 +4742,8 @@ function TabPlaceholder(props: { tab: WorkspaceTab }) {
  *   5. PathAdvisor overrides set on mount, cleared on unmount
  */
 export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
+  const intelligencePayload =
+    _props.intelligencePayload !== undefined ? _props.intelligencePayload : null;
   /* ---- Core resume store ---- */
   const [store, setStore] = useState<ResumeStore>({
     schemaVersion: 1,
@@ -4706,6 +4761,11 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
   const [activeTargetJobId, setActiveTargetJobId] = useState<string | null>(null);
   const [autonomyMode, setAutonomyMode] = useState<AutonomyMode>('assisted');
   const [showTargetJobDropdown, setShowTargetJobDropdown] = useState(false);
+  const emittedBuilderOpenRef = useRef(false);
+  const emittedWorkspaceOpenRef = useRef(false);
+  const emittedAttachedTargetRef = useRef<string | null>(null);
+  const emittedTailoringTargetRef = useRef<string | null>(null);
+  const emittedValidationSignatureRef = useRef('');
 
   /*
    * ---- Edit mode: dashboard vs focused ----
@@ -5810,6 +5870,92 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     return Math.min(100, computedMatchScore + boost + 14);
   }, [evidenceScores, sectionProgressList, computedMatchScore, store.draft.summary]);
 
+  useEffect(
+    function () {
+      if (!mounted || emittedBuilderOpenRef.current) {
+        return;
+      }
+      emittedBuilderOpenRef.current = true;
+      void emitOnboardingSignal('resume_builder', 'resume_builder_started', {
+        target_role_title: activeJob !== null ? activeJob.title : '',
+      });
+    },
+    [activeJob, mounted]
+  );
+
+  useEffect(
+    function () {
+      if (!mounted || emittedWorkspaceOpenRef.current) {
+        return;
+      }
+      emittedWorkspaceOpenRef.current = true;
+      void emitOnboardingSignal('resume_workspace', 'resume_workspace_opened', {});
+    },
+    [mounted]
+  );
+
+  useEffect(
+    function () {
+      if (!mounted || builderStage !== 'tailoring') {
+        return;
+      }
+      const signalKey = (activeTargetJobId !== null ? activeTargetJobId : 'none') + ':tailoring';
+      if (emittedTailoringTargetRef.current === signalKey) {
+        return;
+      }
+      emittedTailoringTargetRef.current = signalKey;
+      void emitOnboardingSignal('resume_builder', 'tailoring_mode_started', {
+        target_role_title: activeJob !== null ? activeJob.title : '',
+        role_family: activeJob !== null ? activeJob.title : '',
+      });
+    },
+    [activeJob, activeTargetJobId, builderStage, mounted]
+  );
+
+  useEffect(
+    function () {
+      if (!mounted || builderStage !== 'validation' || computedPreflightState === null) {
+        return;
+      }
+      let failedChecks = 0;
+      let warningChecks = 0;
+      for (let i = 0; i < computedPreflightState.checks.length; i++) {
+        if (computedPreflightState.checks[i].status === 'fail') {
+          failedChecks = failedChecks + 1;
+        } else if (computedPreflightState.checks[i].status === 'warn') {
+          warningChecks = warningChecks + 1;
+        }
+      }
+      const validationSignature =
+        String(computedReadinessScore) +
+        ':' +
+        String(failedChecks) +
+        ':' +
+        String(warningChecks) +
+        ':' +
+        computedPreflightState.summaryLabel;
+      if (emittedValidationSignatureRef.current === validationSignature) {
+        return;
+      }
+      emittedValidationSignatureRef.current = validationSignature;
+      void emitOnboardingSignal('resume_builder', 'resume_validation_completed', {
+        readiness_score: computedReadinessScore,
+        gap_count: failedChecks + warningChecks,
+        validation_status: computedPreflightState.summaryLabel,
+        target_role_title: activeJob !== null ? activeJob.title : '',
+      });
+      if (failedChecks + warningChecks > 0) {
+        void emitOnboardingSignal('resume_builder', 'resume_readiness_gap_detected', {
+          readiness_score: computedReadinessScore,
+          gap_count: failedChecks + warningChecks,
+          validation_status: computedPreflightState.summaryLabel,
+          evidence_gap: computedPreflightState.summaryLabel,
+        });
+      }
+    },
+    [activeJob, builderStage, computedPreflightState, computedReadinessScore, mounted]
+  );
+
   const computedTopGap = useMemo(function () {
     /* Find the weakest dimension for the "top gap" display */
     let weakest: CoverageDimension | null = null;
@@ -5886,6 +6032,16 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
     /* Regenerate proposals for the new target job context */
     const newProposals = generateProposals(store.draft, newJob);
     setProposals(newProposals);
+
+    if (jobId !== null && emittedAttachedTargetRef.current !== jobId) {
+      emittedAttachedTargetRef.current = jobId;
+      void emitOnboardingSignal('resume_builder', 'target_role_attached', {
+        target_role_title: newJob !== null ? newJob.title : '',
+        role_family: newJob !== null ? newJob.title : '',
+        location_focus:
+          newJob !== null && newJob.location !== undefined ? newJob.location : '',
+      });
+    }
   }, [savedJobs, store.draft]);
 
   /*
@@ -7405,8 +7561,13 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
   /* ---- Loading state ---- */
   if (!mounted) {
     return (
-      <div className="flex items-center justify-center h-64" style={{ color: 'var(--p-text-dim)' }}>
-        <p className="text-sm">Loading resume builder...</p>
+      <div className="space-y-3">
+        {intelligencePayload !== null ? (
+          <ResumeBuilderIntelligenceCard intelligencePayload={intelligencePayload} />
+        ) : null}
+        <div className="flex items-center justify-center h-64" style={{ color: 'var(--p-text-dim)' }}>
+          <p className="text-sm">Loading resume builder...</p>
+        </div>
       </div>
     );
   }
@@ -7466,6 +7627,10 @@ export function ResumeBuilderScreen(_props: ResumeBuilderScreenProps) {
         isEditReady={isEditReady}
         onEditToggle={function () { setIsEditReady(!isEditReady); }}
       />
+
+      {intelligencePayload !== null ? (
+        <ResumeBuilderIntelligenceCard intelligencePayload={intelligencePayload} />
+      ) : null}
 
       {/* 2) Main body: section rail + center canvas + callout overlay.
        *
@@ -8096,29 +8261,33 @@ function ResumePreviewOverlay(props: {
    * these. Users should uncheck "Headers and footers" in their browser's
    * print dialog for a clean resume PDF.
    */
-  const [printPortalContainer, setPrintPortalContainer] = useState<HTMLDivElement | null>(null);
-
-  useEffect(function () {
-    /* Create a dedicated container directly on document.body. This
-     * ensures it is a sibling of #__next rather than a descendant,
-     * so it escapes all app layout constraints. */
+  const printPortalContainer = useMemo(function () {
+    if (typeof document === 'undefined') {
+      return null;
+    }
     const container = document.createElement('div');
     container.id = 'resume-print-root';
     container.setAttribute('data-testid', 'resume-print-root');
-    /* Hidden on screen — display:none ensures zero visual/layout impact.
-     * @media print CSS in globals.css overrides this to display:block,
-     * making it the sole printed content. */
     container.style.display = 'none';
-    document.body.appendChild(container);
-    setPrintPortalContainer(container);
+    return container;
+  }, []);
+
+  useEffect(function () {
+    if (printPortalContainer === null) {
+      return;
+    }
+
+    /* Create a dedicated container directly on document.body. This
+     * ensures it is a sibling of #__next rather than a descendant,
+     * so it escapes all app layout constraints. */
+    document.body.appendChild(printPortalContainer);
 
     return function () {
-      if (container.parentNode) {
-        container.parentNode.removeChild(container);
+      if (printPortalContainer.parentNode) {
+        printPortalContainer.parentNode.removeChild(printPortalContainer);
       }
-      setPrintPortalContainer(null);
     };
-  }, []);
+  }, [printPortalContainer]);
 
   /* Build experience bullets from duties strings */
   function renderDuties(duties: string): React.ReactNode {

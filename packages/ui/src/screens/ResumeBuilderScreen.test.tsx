@@ -60,6 +60,7 @@ import {
   EDIT_SECTION_META,
   EDIT_SECTION_GROUPS,
 } from './ResumeBuilderScreen';
+import type { ResumeBuilderIntelligencePayload } from '../types/pathadvisorIntelligence';
 import type {
   BulletHealth,
   ResumeProposal,
@@ -107,6 +108,10 @@ function renderInNavigation(element: React.ReactNode) {
       {element}
     </NavigationProvider>
   );
+}
+
+function renderBuilderWithIntelligence(payload: ResumeBuilderIntelligencePayload) {
+  return renderInNavigation(<ResumeBuilderScreen intelligencePayload={payload} />);
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +190,47 @@ describe('ResumeBuilderScreen workspace structure', function () {
     const output = renderInNavigation(<ResumeBuilderScreen />);
     expect(typeof output).toBe('string');
     expect(output.length).toBeGreaterThan(0);
+  });
+
+  it('renders backend-owned resume builder intelligence context', function () {
+    const output = renderBuilderWithIntelligence({
+      screen: 'resume_builder',
+      pathadvisorMode: 'readiness_evidence',
+      context: {
+        targetRoleClusters: ['Program analyst'],
+        preferredLocations: ['Washington, DC'],
+        readinessState: 'Draft resume',
+        fitLanes: ['Target field: Program / policy analyst'],
+        blockers: ['Resume evidence still needs work'],
+        topMissingItems: ['Location flexibility'],
+        nextBestActions: ['Strengthen evidence for analyst roles'],
+        activeThreads: ['Resume readiness'],
+        profileCompleteness: 70,
+        freshnessBand: 'fresh',
+        confidenceBand: 'medium',
+        recentMeaningfulChanges: ['Resume status: Improved handoff quality.'],
+        activitySignals: ['Started resume workflow.'],
+        updatedAt: '2026-04-09T12:00:00Z',
+      },
+      summary: 'Resume Builder is consuming the same canonical user intelligence context used across the rest of PathOS.',
+      targetAlignmentWarnings: ['Target role direction is still too broad for strong tailoring guidance.'],
+      evidenceGaps: ['Location flexibility'],
+      suggestedBuilderFocus: ['Strengthen evidence for analyst roles'],
+      nextBestAction: {
+        actionId: 'strengthen_evidence',
+        title: 'Strengthen evidence for your likely-fit lane',
+        description: 'Use canonical user intelligence to focus the next resume improvement pass.',
+        ctaLabel: 'Strengthen resume evidence',
+        ctaHref: '/dashboard/resume-builder',
+        reason: 'Resume Builder should turn canonical blockers into concrete evidence work.',
+      },
+    });
+
+    expect(output).toContain('PathAdvisor alignment context');
+    expect(output).toContain('Evidence gaps:');
+    expect(output).toContain('Location flexibility');
+    expect(output).toContain('Next best action:');
+    expect(output).toContain('Strengthen evidence for your likely-fit lane');
   });
 });
 

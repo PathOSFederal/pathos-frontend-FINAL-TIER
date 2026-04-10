@@ -50,7 +50,7 @@ describe('ResumeWorkspaceScreen', function () {
 
   it('renders the workspace home with the create new resume CTA', function () {
     const output = renderInNavigation(<ResumeWorkspaceScreen view="home" />);
-    expect(output).toContain('Resume Workspace Home');
+    expect(output).toContain('Resume Workspace');
     expect(output).toContain('Create new resume');
   });
 
@@ -60,14 +60,24 @@ describe('ResumeWorkspaceScreen', function () {
     expect(output).toContain('What are you creating');
   });
 
-  it('renders the builder shell with left rail, canvas, and right rail', function () {
+  it('renders the builder shell with section rail, document canvas, and mode toggle', function () {
     const output = renderInNavigation(<ResumeWorkspaceScreen view="builder" resumeId="resume-master-seed" />);
-    expect(output).toContain('Resume canvas');
-    expect(output).toContain('Sections');
-    expect(output).toContain('Right rail');
-    expect(output).toContain('Attached to active section');
+    /* Section rail entries still present in the slim left rail */
+    expect(output).toContain('Summary');
+    expect(output).toContain('Experience');
+    expect(output).toContain('Education');
+    expect(output).toContain('Skills');
+    /* Mode toggle buttons in the top bar */
+    expect(output).toContain('Canvas');
+    expect(output).toContain('Guidance');
+    expect(output).toContain('Diagnostics');
+    /* Focus guidance button is present on the active section */
     expect(output).toContain('Focus guidance');
-    expect(output).toContain('Click into the section to edit directly.');
+    /* Right rail is hidden by default in canvas mode */
+    expect(output).not.toContain('Attached to active section');
+    /* Save/review actions in top bar */
+    expect(output).toContain('Save master');
+    expect(output).toContain('Review');
   });
 
   it('renders a resume-not-found fallback for an invalid builder resume id', function () {

@@ -91,9 +91,12 @@ import { MatchBreakdownHeader, MatchBreakdownRow } from '../components/MatchBrea
 import type { MatchBreakdownRowData } from '../components/MatchBreakdownTable';
 import {
   SavedJobsLiveAdvisorPanel,
+  buildLiveEvaluationPathAdvisorSummary,
+  canonicalProjectionHeadline,
   type SavedJobsLiveEvaluation,
   type SavedJobsLiveEvaluationState,
 } from './_components/SavedJobsLiveAdvisorPanel';
+import { emitOnboardingSignal } from '../lib/onboardingSignals';
 
 /** localStorage key for prompt-to-filters audit (view evidence). Not exported from core. */
 const PROMPT_TO_FILTERS_AUDIT_KEY = 'pathos:prompt-to-filters-audit';
@@ -210,6 +213,9 @@ export interface JobSearchScreenProps {
  */
 export interface JobSearchLiveAdvisorIntegration {
   evaluateJob: (job: Job | JobWithOverview) => Promise<SavedJobsLiveEvaluation | null>;
+  evaluateJobs?: (
+    jobs: Array<Job | JobWithOverview>
+  ) => Promise<Record<string, SavedJobsLiveEvaluation | null>>;
 }
 
 /**
@@ -680,6 +686,9 @@ function JobListItem(props: {
   isSaved: boolean;
   /** Match level and score from JobMatchSnapshot (same builder as details panel). */
   matchInfo: { matchLevel: MatchLevel; overallMatchScore: number };
+  /** Indicates whether the row is showing canonical backend score or local fallback. */
+  scoreSource?: 'canonical' | 'local';
+  rowState?: 'live' | 'loading' | 'estimated';
   riskFlags: string[];
   tag?: 'New' | 'Close date updated';
   locationQuery?: string;
@@ -697,9 +706,24 @@ function JobListItem(props: {
     props.tag === 'Close date updated' || isJobClosingSoon(props.job);
   const remoteLabel = getRemoteTeleworkLabel(props.job);
   const oneRisk = props.riskFlags.length > 0 ? props.riskFlags[0] : null;
+  const scoreSource =
+    props.scoreSource !== undefined ? props.scoreSource : 'local';
+  const rowState =
+    props.rowState !== undefined
+      ? props.rowState
+      : scoreSource === 'canonical'
+        ? 'live'
+        : 'estimated';
 
-  /* Per-job readiness for scan-level color-coded badge (matches Saved Jobs list pattern). */
-  const readiness = deriveJobReadiness(props.matchInfo.overallMatchScore);
+  /* Per-job scan badge value.
+   *
+   * Local mode keeps the existing readiness transform. Canonical live mode
+   * shows the backend score directly so the row matches the selected-job panel.
+   */
+  const readiness =
+    scoreSource === 'canonical'
+      ? props.matchInfo.overallMatchScore
+      : deriveJobReadiness(props.matchInfo.overallMatchScore);
 
   /* Selection uses accent-tinted bg (warmer, distinct from hover) matching Saved Jobs. */
   const rowBg =
@@ -761,11 +785,20 @@ function JobListItem(props: {
               background: 'color-mix(in srgb, ' + scoreTierColor(readiness) + ' 15%, transparent)',
               color: scoreTierColor(readiness),
             }}
-            title={'Readiness: ' + String(readiness) + '/100'}
+            title={
+              scoreSource === 'canonical'
+                ? 'Canonical match: ' + String(readiness) + '/100'
+                : 'Readiness: ' + String(readiness) + '/100'
+            }
           >
             {String(readiness)}%
           </span>
         </div>
+        {rowState === 'loading' || rowState === 'estimated' ? (
+          <p className="text-[10px] mt-0.5" style={{ color: 'var(--p-text-dim)' }}>
+            {rowState === 'loading' ? 'Live match loading' : 'Estimated'}
+          </p>
+        ) : null}
         <p className="text-xs truncate mt-0.5" style={{ color: 'var(--p-text-muted)' }}>
           {props.job.agency}
           {props.job.location ? (
@@ -993,6 +1026,107 @@ function deriveJobReadiness(matchScore: number | undefined): number {
   if (matchScore === undefined) return 70;
   const base = Math.round(matchScore * 0.85 + 10);
   return base > 100 ? 100 : base;
+}
+
+/**
+ * Convert one overall score into the list-row Strong / Moderate / Stretch band.
+ *
+ * WHY THIS EXISTS:
+ * The Job Search list still uses the older three-band scan label. When live
+ * backend scores are available, the row should keep that familiar label while
+ * deriving it from the same canonical score shown in the selected-job panel.
+ */
+export function deriveMatchLevelFromOverallScore(score: number): MatchLevel {
+  if (score >= 75) {
+    return 'Strong';
+  }
+
+  if (score >= 55) {
+    return 'Moderate';
+  }
+
+  return 'Stretch';
+}
+
+/**
+ * Choose the score source a Job Search result row should display.
+ *
+ * WHY THIS EXISTS:
+ * Live mode must prefer canonical backend evaluation when it is already
+ * available for a row. Until then, the UI falls back to the local snapshot so
+ * the results list remains populated. The returned source flag lets the row
+ * render the number honestly.
+ */
+export function buildJobListMatchDisplay(
+  isLiveAdvisorMode: boolean,
+  localMatchInfo: { matchLevel: MatchLevel; overallMatchScore: number },
+  cachedEvaluation: SavedJobsLiveEvaluation | null | undefined
+): {
+  matchLevel: MatchLevel;
+  overallMatchScore: number;
+  scoreSource: 'canonical' | 'local';
+} {
+  if (
+    isLiveAdvisorMode &&
+    cachedEvaluation !== null &&
+    cachedEvaluation !== undefined
+  ) {
+    return {
+      matchLevel: deriveMatchLevelFromOverallScore(cachedEvaluation.overallScore),
+      overallMatchScore: cachedEvaluation.overallScore,
+      scoreSource: 'canonical',
+    };
+  }
+
+  return {
+    matchLevel: localMatchInfo.matchLevel,
+    overallMatchScore: localMatchInfo.overallMatchScore,
+    scoreSource: 'local',
+  };
+}
+
+export function resolveJobListRowState(input: {
+  isLiveAdvisorMode: boolean;
+  scoreSource: 'canonical' | 'local';
+  liveStatus?: 'idle' | 'loading' | 'success' | 'error';
+}): 'live' | 'loading' | 'estimated' {
+  if (!input.isLiveAdvisorMode) {
+    return 'estimated';
+  }
+
+  if (input.scoreSource === 'canonical') {
+    return 'live';
+  }
+
+  if (input.liveStatus === 'loading') {
+    return 'loading';
+  }
+
+  return 'estimated';
+}
+
+/**
+ * Resolve the score Job Search should use for "Likelihood of success" sorting.
+ *
+ * WHY THIS EXISTS:
+ * Once live canonical evaluations are available for result rows, the sort order
+ * should use those backend scores instead of the older local estimate. Rows
+ * without a live evaluation still fall back to the local score.
+ */
+export function resolveJobSearchLikelihoodScore(
+  isLiveAdvisorMode: boolean,
+  localScore: number,
+  cachedEvaluation: SavedJobsLiveEvaluation | null | undefined
+): number {
+  if (
+    isLiveAdvisorMode &&
+    cachedEvaluation !== null &&
+    cachedEvaluation !== undefined
+  ) {
+    return cachedEvaluation.overallScore;
+  }
+
+  return localScore;
 }
 
 // ---------------------------------------------------------------------------
@@ -1491,6 +1625,11 @@ function JobDetailsPanelContent(props: {
     liveAdvisorState.evaluation !== null
       ? liveAdvisorState.evaluation.overallScore
       : null;
+  const liveProjection =
+    liveAdvisorState.evaluation !== null &&
+    liveAdvisorState.evaluation.jobMatchProjection !== undefined
+      ? liveAdvisorState.evaluation.jobMatchProjection
+      : null;
   const displayReadiness =
     props.isLiveAdvisorMode
       ? (liveOverallScore !== null ? liveOverallScore : 0)
@@ -1503,7 +1642,10 @@ function JobDetailsPanelContent(props: {
     props.isLiveAdvisorMode
       ? (liveOverallScore !== null ? scoreTierColor(liveOverallScore) : 'var(--p-text-muted)')
       : (jobMatch !== undefined ? scoreTierColor(jobMatch.overallMatchScore) : 'var(--p-text-muted)');
-  const headerPrimaryLabel = props.isLiveAdvisorMode ? 'Evaluation' : 'Readiness';
+  const headerPrimaryLabel =
+    props.isLiveAdvisorMode
+      ? (liveProjection !== null ? 'Match' : 'Evaluation')
+      : 'Readiness';
   const headerPrimaryValue =
     props.isLiveAdvisorMode
       ? (liveAdvisorState.status === 'loading'
@@ -1512,10 +1654,12 @@ function JobDetailsPanelContent(props: {
       : String(displayReadiness);
   const headerSecondaryValue =
     props.isLiveAdvisorMode
-      ? (liveAdvisorState.evaluation !== null
-          ? (liveAdvisorState.evaluation.applicationDecision !== null
-              ? liveAdvisorState.evaluation.applicationDecision.decisionBand
-              : liveAdvisorState.evaluation.decisionBand)
+      ? (liveProjection !== null
+          ? canonicalProjectionHeadline(liveProjection)
+          : liveAdvisorState.evaluation !== null
+            ? (liveAdvisorState.evaluation.applicationDecision !== null
+                ? liveAdvisorState.evaluation.applicationDecision.decisionBand
+                : liveAdvisorState.evaluation.decisionBand)
           : (liveAdvisorState.status === 'loading' ? 'Loading' : 'Pending'))
       : (jobMatch !== undefined ? String(jobMatch.overallMatchScore) + '/100 Match' : '');
 
@@ -2324,6 +2468,14 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
   const resultsScrollRef = useRef<HTMLDivElement>(null);
   /** Cache live evaluations by job id so revisiting a selected result does not refetch immediately. */
   const liveEvaluationCacheRef = useRef<Record<string, SavedJobsLiveEvaluation | null>>({});
+  /** Render-safe mirror of the cached live evaluations used by the result rows. */
+  const [liveEvaluationByJob, setLiveEvaluationByJob] = useState<
+    Record<string, SavedJobsLiveEvaluation | null>
+  >({});
+  /** Row-level canonical score state so the list can distinguish live values from estimates. */
+  const [liveEvaluationStatusByJob, setLiveEvaluationStatusByJob] = useState<
+    Record<string, 'idle' | 'loading' | 'success' | 'error'>
+  >({});
   /** Monotonic request id + job id guard to prevent stale responses from overwriting a newer selection. */
   const liveRequestRef = useRef<{ jobId: string | null; requestId: number }>({
     jobId: null,
@@ -2441,9 +2593,17 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
         })());
         const strat = calcStrategic(job, fit);
         const etr = calcEffortToReward(job, effort, strat);
+        const liveCachedEvaluation =
+          liveEvaluationByJob[job.id] !== undefined
+            ? liveEvaluationByJob[job.id]
+            : undefined;
         withScores.push({
           job,
-          score: fit.score,
+          score: resolveJobSearchLikelihoodScore(
+            isLiveAdvisorMode,
+            fit.score,
+            liveCachedEvaluation
+          ),
           effortToReward: etr,
           strategic: strat,
         });
@@ -2483,7 +2643,7 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
       }
       return list;
     },
-    [store.results, sortBy, targetRole]
+    [store.results, sortBy, targetRole, liveEvaluationByJob, isLiveAdvisorMode]
   );
 
   const selectedJob =
@@ -2628,6 +2788,11 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
         errorMessage: null,
         evaluation: null,
       });
+      setLiveEvaluationStatusByJob(function (prev) {
+        const next = Object.assign({}, prev);
+        next[job.id] = 'loading';
+        return next;
+      });
 
       try {
         const evaluation = await liveAdvisor.evaluateJob(job);
@@ -2643,6 +2808,16 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
         }
 
         liveEvaluationCacheRef.current[job.id] = evaluation;
+        setLiveEvaluationByJob(function (prev) {
+          const next = Object.assign({}, prev);
+          next[job.id] = evaluation;
+          return next;
+        });
+        setLiveEvaluationStatusByJob(function (prev) {
+          const next = Object.assign({}, prev);
+          next[job.id] = 'success';
+          return next;
+        });
         setLiveAdvisorState(
           evaluation === null
             ? {
@@ -2672,6 +2847,11 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
           error instanceof Error
             ? error.message
             : 'The live advisor request failed for this selected job.';
+        setLiveEvaluationStatusByJob(function (prev) {
+          const next = Object.assign({}, prev);
+          next[job.id] = 'error';
+          return next;
+        });
         setLiveAdvisorState({
           status: 'error',
           errorMessage: message,
@@ -2687,6 +2867,16 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
       return;
     }
     delete liveEvaluationCacheRef.current[selectedJob.id];
+    setLiveEvaluationByJob(function (prev) {
+      const next = Object.assign({}, prev);
+      delete next[selectedJob.id];
+      return next;
+    });
+    setLiveEvaluationStatusByJob(function (prev) {
+      const next = Object.assign({}, prev);
+      delete next[selectedJob.id];
+      return next;
+    });
     void runLiveEvaluation(selectedJob, true);
   }, [runLiveEvaluation, selectedJob]);
 
@@ -2720,6 +2910,164 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
       window.clearTimeout(timeoutId);
     };
   }, [isLiveAdvisorMode, runLiveEvaluation, selectedJob]);
+
+  /**
+   * Prefetch canonical live evaluations for the current result set.
+   *
+   * WHY THIS EXISTS:
+   * The result list itself needs real backend-owned scores so users can scan
+   * for strong matches without clicking into each job first. This effect warms
+   * the bounded in-memory cache for the currently visible results and lets the
+   * rows upgrade from local estimate to canonical score as responses arrive.
+   */
+  useEffect(function () {
+    if (!isLiveAdvisorMode || liveAdvisor === undefined) {
+      return;
+    }
+
+    const boundLiveAdvisor = liveAdvisor;
+    let cancelled = false;
+
+    async function prefetchVisibleResults() {
+      const batchEvaluator = boundLiveAdvisor.evaluateJobs;
+      const singleEvaluator = boundLiveAdvisor.evaluateJob;
+      const uncachedJobs: Array<Job | JobWithOverview> = [];
+
+      for (let i = 0; i < sortedResults.length; i++) {
+        const job = sortedResults[i];
+        if (job === undefined) {
+          continue;
+        }
+        if (liveEvaluationCacheRef.current[job.id] !== undefined) {
+          continue;
+        }
+        uncachedJobs.push(job);
+      }
+
+      if (uncachedJobs.length === 0) {
+        return;
+      }
+
+      setLiveEvaluationStatusByJob(function (prev) {
+        const next = Object.assign({}, prev);
+        for (let i = 0; i < uncachedJobs.length; i++) {
+          const job = uncachedJobs[i];
+          if (job !== undefined && next[job.id] === undefined) {
+            next[job.id] = 'loading';
+          }
+        }
+        return next;
+      });
+
+      try {
+        const batchResults =
+          batchEvaluator !== undefined
+            ? await batchEvaluator(uncachedJobs)
+            : null;
+        if (cancelled) {
+          return;
+        }
+
+        if (batchResults !== null) {
+          for (let i = 0; i < uncachedJobs.length; i++) {
+            const job = uncachedJobs[i];
+            if (job === undefined) {
+              continue;
+            }
+            if (batchResults[job.id] === undefined) {
+              continue;
+            }
+            liveEvaluationCacheRef.current[job.id] = batchResults[job.id];
+          }
+          setLiveEvaluationByJob(function (prev) {
+            const next = Object.assign({}, prev);
+            for (let i = 0; i < uncachedJobs.length; i++) {
+              const job = uncachedJobs[i];
+              if (job === undefined || batchResults[job.id] === undefined) {
+                continue;
+              }
+              next[job.id] = batchResults[job.id];
+            }
+            return next;
+          });
+          setLiveEvaluationStatusByJob(function (prev) {
+            const next = Object.assign({}, prev);
+            for (let i = 0; i < uncachedJobs.length; i++) {
+              const job = uncachedJobs[i];
+              if (job === undefined || batchResults[job.id] === undefined) {
+                next[job.id] = 'error';
+                continue;
+              }
+              next[job.id] = 'success';
+            }
+            return next;
+          });
+          return;
+        }
+
+        for (let i = 0; i < uncachedJobs.length; i++) {
+          if (cancelled) {
+            return;
+          }
+
+          const job = uncachedJobs[i];
+          if (job === undefined) {
+            continue;
+          }
+
+          try {
+            const evaluation = await singleEvaluator(job);
+            if (cancelled) {
+              return;
+            }
+
+            liveEvaluationCacheRef.current[job.id] = evaluation;
+            setLiveEvaluationByJob(function (prev) {
+              const next = Object.assign({}, prev);
+              next[job.id] = evaluation;
+              return next;
+            });
+            setLiveEvaluationStatusByJob(function (prev) {
+              const next = Object.assign({}, prev);
+              next[job.id] = 'success';
+              return next;
+            });
+          } catch {
+            if (cancelled) {
+              return;
+            }
+
+            setLiveEvaluationStatusByJob(function (prev) {
+              const next = Object.assign({}, prev);
+              next[job.id] = 'error';
+              return next;
+            });
+          }
+        }
+      } catch {
+        if (cancelled) {
+          return;
+        }
+
+        setLiveEvaluationStatusByJob(function (prev) {
+          const next = Object.assign({}, prev);
+          for (let i = 0; i < uncachedJobs.length; i++) {
+            const job = uncachedJobs[i];
+            if (job !== undefined) {
+              next[job.id] = 'error';
+            }
+          }
+          return next;
+        });
+      }
+    }
+
+    void prefetchVisibleResults();
+
+    return function () {
+      cancelled = true;
+    };
+  }, [isLiveAdvisorMode, liveAdvisor, sortedResults]);
 
   /* Day 62: Append job match entry to PathAdvisor Context Log when user selects a job. */
   useEffect(
@@ -2773,6 +3121,196 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
       });
     },
     [isLiveAdvisorMode, selectedJob, jobMatchSnapshot]
+  );
+
+  useEffect(
+    function () {
+      if (!isLiveAdvisorMode || selectedJob === undefined) {
+        return;
+      }
+
+      const agency =
+        selectedJob.agency !== undefined && selectedJob.agency !== ''
+          ? selectedJob.agency
+          : 'Agency';
+      const location =
+        selectedJob.location !== undefined && selectedJob.location !== ''
+          ? selectedJob.location
+          : 'Location';
+      const selectionLines = [
+        'Current selection in Job Search.',
+        'Location: ' + location,
+        'Deadline: ' + formatJobCloseLabel(selectedJob),
+      ];
+
+      if (selectedJob.grade !== undefined && selectedJob.grade !== '') {
+        selectionLines.push('Grade: ' + selectedJob.grade);
+      }
+
+      publishSelectionContext({
+        screen: 'job-search',
+        anchor: {
+          type: 'job',
+          id: selectedJob.id,
+          label:
+            selectedJob.title !== undefined && selectedJob.title !== ''
+              ? selectedJob.title
+              : selectedJob.id,
+        },
+        payload: {
+          title:
+            'Selected job: ' +
+            (selectedJob.title !== undefined && selectedJob.title !== ''
+              ? selectedJob.title
+              : selectedJob.id),
+          subtitle: agency,
+          lines: selectionLines,
+        },
+        dedupeKey: 'live-selected-job:' + selectedJob.id,
+      });
+    },
+    [isLiveAdvisorMode, selectedJob]
+  );
+
+  useEffect(
+    function () {
+      if (
+        !isLiveAdvisorMode ||
+        selectedJob === undefined ||
+        liveAdvisorState.status !== 'success' ||
+        liveAdvisorState.evaluation === null
+      ) {
+        return;
+      }
+
+      const summary = buildLiveEvaluationPathAdvisorSummary(
+        liveAdvisorState.evaluation
+      );
+      const agency =
+        selectedJob.agency !== undefined && selectedJob.agency !== ''
+          ? selectedJob.agency
+          : 'Agency';
+      const location =
+        selectedJob.location !== undefined && selectedJob.location !== ''
+          ? selectedJob.location
+          : 'Location';
+      const sections: Array<{
+        title: string;
+        lines?: string[];
+        bullets?: string[];
+        meta?: Record<string, string>;
+      }> = [
+        {
+          title: 'Evaluation summary',
+          lines: summary.summaryLines,
+          meta: {
+            pathadvisor_context_kind: 'application_confidence',
+            source: 'live',
+            screen_id: 'job-search',
+            job_id: selectedJob.id,
+            job_title:
+              selectedJob.title !== undefined && selectedJob.title !== ''
+                ? selectedJob.title
+                : selectedJob.id,
+            target_role:
+              selectedJob.title !== undefined && selectedJob.title !== ''
+                ? selectedJob.title
+                : selectedJob.id,
+            overall_score: String(liveAdvisorState.evaluation.overallScore),
+            recommendation: liveAdvisorState.evaluation.recommendation,
+            decision_band:
+              liveAdvisorState.evaluation.applicationDecision !== null
+                ? liveAdvisorState.evaluation.applicationDecision.decisionBand
+                : liveAdvisorState.evaluation.decisionBand,
+            confidence_band: liveAdvisorState.evaluation.confidenceBand,
+            rationale_summary:
+              liveAdvisorState.evaluation.applicationDecision !== null
+                ? liveAdvisorState.evaluation.applicationDecision.rationaleSummary
+                : liveAdvisorState.evaluation.jobMatchProjection !== undefined &&
+                    liveAdvisorState.evaluation.jobMatchProjection !== null
+                  ? liveAdvisorState.evaluation.jobMatchProjection.explanationSummary
+                  : summary.summaryLines[summary.summaryLines.length - 1] ?? '',
+            priority_level:
+              liveAdvisorState.evaluation.applicationDecision !== null
+                ? liveAdvisorState.evaluation.applicationDecision.priorityLevel
+                : '',
+            alert_importance:
+              liveAdvisorState.evaluation.applicationDecision !== null
+                ? liveAdvisorState.evaluation.applicationDecision.alertImportance
+                : '',
+            blocking_issues: JSON.stringify(
+              liveAdvisorState.evaluation.applicationDecision !== null
+                ? liveAdvisorState.evaluation.applicationDecision.blockingIssues.map(function (item) {
+                    return item.text;
+                  })
+                : []
+            ),
+            missing_evidence: JSON.stringify(summary.missingEvidence),
+            next_actions: JSON.stringify(summary.nextActions),
+            decision_version:
+              liveAdvisorState.evaluation.applicationDecision !== null &&
+              liveAdvisorState.evaluation.applicationDecision.decisionVersion !== null
+                ? liveAdvisorState.evaluation.applicationDecision.decisionVersion
+                : '',
+          },
+        },
+      ];
+
+      if (summary.keyReasons.length > 0) {
+        sections.push({
+          title: 'Why PathOS scored it this way',
+          bullets: summary.keyReasons,
+        });
+      }
+
+      if (summary.missingEvidence.length > 0) {
+        sections.push({
+          title: 'Missing evidence or blockers',
+          bullets: summary.missingEvidence,
+        });
+      }
+
+      if (summary.nextActions.length > 0) {
+        sections.push({
+          title: 'Next actions',
+          bullets: summary.nextActions,
+        });
+      }
+
+      publishScreenContext({
+        screen: 'job-search',
+        anchor: {
+          type: 'job',
+          id: selectedJob.id,
+          label:
+            selectedJob.title !== undefined && selectedJob.title !== ''
+              ? selectedJob.title
+              : selectedJob.id,
+        },
+        title:
+          'Live evaluation: ' +
+          (selectedJob.title !== undefined && selectedJob.title !== ''
+            ? selectedJob.title
+            : selectedJob.id),
+        subtitle: agency + ' • ' + location,
+        sections: sections,
+        ctas: [
+          {
+            label: 'Open Career Readiness',
+            action: 'nav',
+            route: CAREER_READINESS + '#action-plan',
+          },
+        ],
+        dedupeKey:
+          'live-evaluation:' +
+          selectedJob.id +
+          ':' +
+          String(liveAdvisorState.evaluation.overallScore) +
+          ':' +
+          liveAdvisorState.evaluation.decisionBand,
+      });
+    },
+    [isLiveAdvisorMode, liveAdvisorState.evaluation, liveAdvisorState.status, selectedJob]
   );
 
   useEffect(function () {
@@ -2990,8 +3528,15 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
   }, []);
 
   const handleSearch = useCallback(function () {
+    void emitOnboardingSignal('job_search', 'job_search_performed', {
+      search_keyword: store.lastQuery.keywords,
+      location_focus: store.lastQuery.location !== undefined ? store.lastQuery.location : '',
+      series_code: store.filters.series !== undefined ? store.filters.series : '',
+      grade_target: store.filters.gradeBand !== undefined ? store.filters.gradeBand : '',
+      remote_preference: store.filters.remoteType !== undefined ? store.filters.remoteType : '',
+    });
     void runSearchRequest(1, false);
-  }, [runSearchRequest]);
+  }, [runSearchRequest, store.filters, store.lastQuery]);
 
   const handleReset = useCallback(function () {
     liveSearchRequestRef.current = {
@@ -3023,8 +3568,17 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
   const handleSelectJob = useCallback(
     function (id: string) {
       store.setSelectedJob(id);
+      for (let i = 0; i < sortedResults.length; i++) {
+        if (sortedResults[i].id === id) {
+          void emitOnboardingSignal('job_search', 'job_opened', {
+            role_family: sortedResults[i].title,
+            location_focus: sortedResults[i].location !== undefined ? sortedResults[i].location : '',
+          });
+          break;
+        }
+      }
     },
-    [store]
+    [sortedResults, store]
   );
 
   const handleJobPeek = useCallback(
@@ -3061,6 +3615,10 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
         skillsKeywords: [],
       });
       decisionBriefsStore.saveBrief(record);
+      void emitOnboardingSignal('job_search', 'job_saved', {
+        role_family: job.title,
+        location_focus: job.location !== undefined ? job.location : '',
+      });
       setToastMessage('Saved. PathOS Brief created.');
       setDetailsTab('pathosBrief');
       setTimeout(function () {
@@ -3336,7 +3894,19 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
               </div>
               <button
                 type="button"
-                onClick={function () { setTargetRoleModalOpen(false); }}
+                onClick={function () {
+                  void emitOnboardingSignal('job_search', 'target_role_selected', {
+                    role_family: targetRoleStore.series !== undefined ? targetRoleStore.series : '',
+                    location_focus: targetRoleStore.location !== undefined ? targetRoleStore.location : '',
+                    series_code: targetRoleStore.series !== undefined ? targetRoleStore.series : '',
+                    grade_target: targetRoleStore.gsTarget !== undefined ? targetRoleStore.gsTarget : '',
+                    remote_preference:
+                      targetRoleStore.remotePreference !== undefined
+                        ? targetRoleStore.remotePreference
+                        : '',
+                  });
+                  setTargetRoleModalOpen(false);
+                }}
                 className={INTERACTIVE_HOVER_CLASS + ' mt-2 text-xs rounded px-1 py-0.5'}
                 style={{ color: 'var(--p-text-dim)', border: '1px solid transparent' }}
               >
@@ -3831,7 +4401,24 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
                 {sortedResults.map(function (job) {
                   const tag =
                     isLiveSearchMode ? undefined : MOCK_JOB_TAGS[job.id];
-                  const matchInfo = matchByJobId[job.id] !== undefined ? matchByJobId[job.id] : { matchLevel: 'Moderate' as MatchLevel, overallMatchScore: 50 };
+                  const localMatchInfo =
+                    matchByJobId[job.id] !== undefined
+                      ? matchByJobId[job.id]
+                      : { matchLevel: 'Moderate' as MatchLevel, overallMatchScore: 50 };
+                  const liveCachedEvaluation =
+                    liveEvaluationByJob[job.id] !== undefined
+                      ? liveEvaluationByJob[job.id]
+                      : undefined;
+                  const rowMatchDisplay = buildJobListMatchDisplay(
+                    isLiveAdvisorMode,
+                    localMatchInfo,
+                    liveCachedEvaluation
+                  );
+                  const rowState = resolveJobListRowState({
+                    isLiveAdvisorMode: isLiveAdvisorMode,
+                    scoreSource: rowMatchDisplay.scoreSource,
+                    liveStatus: liveEvaluationStatusByJob[job.id],
+                  });
                   const riskFlags = getRiskFlagLabels(job);
                   return (
                     <JobListItem
@@ -3840,7 +4427,12 @@ export function JobSearchScreen(props: JobSearchScreenProps) {
                       locationQuery={store.lastQuery.location}
                       isSelected={store.selectedJobId === job.id}
                       isSaved={store.isJobSaved(job.id)}
-                      matchInfo={matchInfo}
+                      matchInfo={{
+                        matchLevel: rowMatchDisplay.matchLevel,
+                        overallMatchScore: rowMatchDisplay.overallMatchScore,
+                      }}
+                      scoreSource={rowMatchDisplay.scoreSource}
+                      rowState={rowState}
                       riskFlags={riskFlags}
                       tag={tag}
                       onSelect={handleSelectJob}

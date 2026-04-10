@@ -8,12 +8,15 @@ import {
 } from '@pathos/ui';
 import { SharedDashboardRouteShell } from '../_components/SharedDashboardRouteShell';
 import { useProfileStore } from '@/store/profileStore';
+import { useCareerResumeIntelligence } from '@/lib/intelligence/useCareerResumeIntelligence';
 import {
-  fetchLiveJobSearchEvaluation,
+  fetchLiveJobSearchIntelligenceBatch,
+  fetchLiveJobSearchIntelligence,
   fetchLiveJobSearchResults,
 } from '@/lib/live-advisor/client';
 
 export default function JobSearchPage() {
+  const intelligence = useCareerResumeIntelligence();
   /**
    * Job Search uses the persisted frontend profile as the user evidence source
    * for backend advisor evaluation. This keeps the selected-job flow aligned
@@ -37,7 +40,14 @@ export default function JobSearchPage() {
 
   const liveAdvisor = useCallback<JobSearchLiveAdvisorIntegration['evaluateJob']>(
     async function (job) {
-      return fetchLiveJobSearchEvaluation(job, profile);
+      return fetchLiveJobSearchIntelligence(job, profile);
+    },
+    [profile]
+  );
+
+  const liveAdvisorBatch = useCallback<NonNullable<JobSearchLiveAdvisorIntegration['evaluateJobs']>>(
+    async function (jobs) {
+      return fetchLiveJobSearchIntelligenceBatch(jobs, profile);
     },
     [profile]
   );
@@ -55,10 +65,14 @@ export default function JobSearchPage() {
   );
 
   return (
-    <SharedDashboardRouteShell>
+    <SharedDashboardRouteShell
+      currentView="job-search"
+      conversationIntelligence={intelligence}
+    >
       <JobSearchScreen
         liveAdvisor={{
           evaluateJob: liveAdvisor,
+          evaluateJobs: liveAdvisorBatch,
         }}
         liveSearch={{
           searchJobs: liveSearch,

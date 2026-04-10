@@ -1,30 +1,55 @@
 'use client';
 
-import { ResumeBuilderScreen } from '@pathos/ui';
+import { useEffect, useState } from 'react';
+import {
+  ResumeBuilderScreen,
+  type ResumeBuilderIntelligencePayload,
+} from '@pathos/ui';
 import { SharedDashboardRouteShell } from '../_components/SharedDashboardRouteShell';
+import { fetchResumeBuilderIntelligence } from '@/lib/pathadvisor-intelligence/client';
 
 /**
- * Resume Builder hides the PathAdvisor right rail because the builder
- * provides its own section-scoped callout guidance layer. Having both
- * the callout layer and the PathAdvisor rail visible creates competing
- * guidance surfaces.
+ * RESUME BUILDER — Canonical document-centered editing experience
+ *
+ * WHY THIS IS THE PRIMARY EDITOR:
+ * This route hosts the document-centered canvas builder, which is the
+ * canonical resume editing surface. Users reach this page via "Open builder"
+ * from the Resume Workspace hub (/dashboard/resume). The PathAdvisor right
+ * rail is hidden because the builder provides its own section-scoped callout
+ * guidance layer — having both would create competing guidance surfaces.
+ *
+ * BACKEND WIRING:
+ * The builder fetches PathAdvisor intelligence on mount for contextual
+ * guidance. All save, rewrite, and export flows are handled by the
+ * ResumeBuilderScreen component via @pathos/core stores.
  */
 export default function ResumeBuilderPage() {
+  const [intelligencePayload, setIntelligencePayload] =
+    useState<ResumeBuilderIntelligencePayload | null>(null);
+
+  useEffect(function () {
+    let cancelled = false;
+
+    void fetchResumeBuilderIntelligence()
+      .then(function (payload) {
+        if (!cancelled) {
+          setIntelligencePayload(payload);
+        }
+      })
+      .catch(function () {
+        if (!cancelled) {
+          setIntelligencePayload(null);
+        }
+      });
+
+    return function () {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <SharedDashboardRouteShell hideAdvisor>
-      <div className="space-y-4">
-        <div
-          className="rounded-xl border px-4 py-3 text-sm"
-          style={{
-            borderColor: 'var(--p-border)',
-            background: 'color-mix(in srgb, var(--p-warning) 10%, var(--p-surface))',
-            color: 'var(--p-text)',
-          }}
-        >
-          The Day 75 guided resume workspace now lives at <a href="/dashboard/resume" className="font-semibold underline underline-offset-2">/dashboard/resume</a>. This legacy builder route remains available for compatibility while review and migration finish.
-        </div>
-        <ResumeBuilderScreen />
-      </div>
+      <ResumeBuilderScreen intelligencePayload={intelligencePayload} />
     </SharedDashboardRouteShell>
   );
 }

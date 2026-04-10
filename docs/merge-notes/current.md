@@ -1,3 +1,119 @@
+# Onboarding v2: Intelligence Expansion Frontend (2026-04-09)
+
+## Summary
+- Extended the dashboard-embedded onboarding experience with backend-driven prioritization, profile completeness, guided enrichment, and Job Search / Resume Builder handoff cards.
+- Preserved backend source-of-truth boundaries by rendering only backend-provided question, insight, enrichment, completeness, and handoff payloads.
+- Added frontend tests for the new intelligence-expansion surfaces and kept the existing resume/recovery behavior intact.
+
+## Branch setup
+- Created branch with `git checkout -b feature/onboarding-v2-intelligence-expansion-frontend`
+- Current branch: `feature/onboarding-v2-intelligence-expansion-frontend`
+
+## Files changed
+- `components/dashboard/PathAdvisorOnboardingExperience.tsx`
+- `components/dashboard/PathAdvisorOnboardingExperience.test.tsx`
+- `types/onboarding.ts`
+- `docs/change-briefs/onboarding-v2-intelligence-expansion-frontend.md`
+- `docs/merge-notes/current.md`
+
+## Validation performed
+- `pnpm test -- components/dashboard/PathAdvisorOnboardingExperience.test.tsx components/dashboard/PathAdvisorOnboardingGate.test.tsx lib/onboarding/client.test.ts`
+  - passed
+  - `16` tests passed
+- `pnpm test`
+  - passed
+  - `90` files, `1886` tests passed
+- `pnpm exec eslint components/dashboard/PathAdvisorOnboardingExperience.tsx components/dashboard/PathAdvisorOnboardingExperience.test.tsx types/onboarding.ts lib/onboarding/client.ts`
+  - passed
+- `pnpm lint`
+  - failed outside this slice
+  - current hard errors remain in files such as:
+    - `app/(shared)/dashboard/resume-builder/page.tsx`
+    - `app/(shared)/dashboard/resume-readiness/page.tsx`
+    - `packages/ui/src/resume-builder/components/ConversationComposer.tsx`
+    - `packages/ui/src/resume-builder/components/LiveResumeCanvas.tsx`
+    - `packages/ui/src/resume-builder/components/ResumeBuilderPathAdvisorModal.tsx`
+    - `packages/ui/src/screens/ResumeBuilderScreen.tsx`
+    - `packages/ui/src/resume-builder/__tests__/resume-builder-architecture.test.ts`
+- `pnpm typecheck`
+  - failed outside this slice
+  - current hard errors remain in files such as:
+    - `packages/ui/src/resume-builder/__tests__/hardening-pass.test.ts`
+    - `packages/ui/src/resume-builder/__tests__/resume-builder-architecture.test.ts`
+    - `packages/ui/src/resume-builder/__tests__/stabilization-pass.test.ts`
+    - `packages/ui/src/resume-workspace/resumeExportReadiness.ts`
+    - `packages/ui/src/resume-workspace/resumeRevisionDiff.ts`
+    - `packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx`
+
+## Notes
+- `git diff --name-status develop...HEAD` and `git diff --stat develop...HEAD` are still empty because this branch currently contains uncommitted work only.
+- `artifacts/onboarding-v2-intelligence-expansion-frontend.patch` is therefore `0` bytes, while the incremental patch contains the actual working-tree diff for this run.
+
+## Git state and diff logging
+### `git status`
+```text
+On branch feature/onboarding-v2-intelligence-expansion-frontend
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app/(shared)/dashboard/page.tsx
+	new file:   app/api/onboarding/_shared.ts
+	new file:   app/api/onboarding/session/[sessionId]/answer/route.ts
+	new file:   app/api/onboarding/session/[sessionId]/complete/route.ts
+	new file:   app/api/onboarding/session/[sessionId]/route.ts
+	new file:   app/api/onboarding/session/route.ts
+	new file:   app/api/pathadvisor/context/bootstrap/route.ts
+	new file:   components/dashboard/PathAdvisorOnboardingExperience.test.tsx
+	new file:   components/dashboard/PathAdvisorOnboardingExperience.tsx
+	new file:   components/dashboard/PathAdvisorOnboardingGate.test.tsx
+	new file:   components/dashboard/PathAdvisorOnboardingGate.tsx
+	new file:   docs/change-briefs/day-onboarding-v1.md
+	new file:   docs/change-briefs/onboarding-v1-frontend-hardening.md
+	modified:   docs/merge-notes/current.md
+	modified:   docs/owner-map.generated.md
+	modified:   docs/owner-map.md
+	new file:   lib/onboarding/client.test.ts
+	new file:   lib/onboarding/client.ts
+	modified:   lib/storage-keys.ts
+	new file:   types/onboarding.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	docs/change-briefs/onboarding-v2-intelligence-expansion-frontend.md
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+### `git branch --show-current`
+```text
+feature/onboarding-v2-intelligence-expansion-frontend
+```
+
+### `git diff --name-status develop...HEAD`
+```text
+(no output)
+```
+
+### `git diff --stat develop...HEAD`
+```text
+(no output)
+```
+
+### Artifact commands
+```text
+git diff develop...HEAD > artifacts/onboarding-v2-intelligence-expansion-frontend.patch
+git diff > artifacts/onboarding-v2-intelligence-expansion-frontend-this-run.patch
+bash -lc "ls -lh artifacts/onboarding-v2-intelligence-expansion-frontend.patch artifacts/onboarding-v2-intelligence-expansion-frontend-this-run.patch"
+```
+
+### `ls -lh` output
+```text
+-rwxrwxrwx 1 joriel joriel 121K Apr  9 07:06 artifacts/onboarding-v2-intelligence-expansion-frontend-this-run.patch
+-rwxrwxrwx 1 joriel joriel    0 Apr  9 07:06 artifacts/onboarding-v2-intelligence-expansion-frontend.patch
+```
+
+---
+
 # Merge Notes — Resume Builder v2
 
 ---
@@ -4975,3 +5091,700 @@ Limitations:
 - anchor lines are intentionally section-scoped and lightweight in this pass
 - this does not add bullet-level measurement or a richer editor model
 - repo-wide `pnpm exec tsc --noEmit` was not widened into this pass
+
+---
+
+## Run: Day Onboarding v1 — Dashboard onboarding vertical slice for PathAdvisor (2026-04-08)
+
+### Branch
+
+`develop`
+
+### Summary
+
+This run added the first real dashboard-embedded PathAdvisor onboarding slice on
+the frontend. The dashboard now enters a calm guided onboarding mode, creates or
+resumes a backend onboarding session, renders only backend-owned questions and
+first-insight output, and keeps progress resumable through refresh.
+
+The frontend remains a conversation and presentation layer only. It does not
+decide readiness, confidence, blockers, or recommendations locally.
+
+### Files changed
+
+- `app/(shared)/dashboard/page.tsx`
+- `app/api/onboarding/_shared.ts`
+- `app/api/onboarding/session/route.ts`
+- `app/api/onboarding/session/[sessionId]/route.ts`
+- `app/api/onboarding/session/[sessionId]/answer/route.ts`
+- `app/api/onboarding/session/[sessionId]/complete/route.ts`
+- `app/api/pathadvisor/context/bootstrap/route.ts`
+- `components/dashboard/PathAdvisorOnboardingExperience.tsx`
+- `components/dashboard/PathAdvisorOnboardingExperience.test.tsx`
+- `components/dashboard/PathAdvisorOnboardingGate.tsx`
+- `docs/change-briefs/day-onboarding-v1.md`
+- `docs/owner-map.generated.md`
+- `docs/owner-map.md`
+- `lib/onboarding/client.test.ts`
+- `lib/onboarding/client.ts`
+- `lib/storage-keys.ts`
+- `types/onboarding.ts`
+
+### What changed
+
+- added a dashboard-embedded onboarding gate so PathAdvisor onboarding appears
+  inside the real dashboard shell rather than as a detached wizard
+- added same-origin frontend API proxy routes for onboarding session create,
+  answer, resume, complete, and bootstrap calls
+- added a browser onboarding client and a persisted onboarding session storage
+  key for refresh-safe resume behavior
+- added a PathAdvisor-led onboarding experience that renders backend-provided
+  questions, progress, trust microcopy, skip support, and backend-provided
+  first-insight output
+- added tests proving the frontend advances only from backend responses and does
+  not invent readiness or confidence locally
+
+### Validation run
+
+- `pnpm test -- components/dashboard/PathAdvisorOnboardingExperience.test.tsx lib/onboarding/client.test.ts`
+  - passed
+- `npx eslint app/api/onboarding/_shared.ts app/api/onboarding/session/route.ts "app/api/onboarding/session/[sessionId]/route.ts" "app/api/onboarding/session/[sessionId]/answer/route.ts" "app/api/onboarding/session/[sessionId]/complete/route.ts" app/api/pathadvisor/context/bootstrap/route.ts "app/(shared)/dashboard/page.tsx" components/dashboard/PathAdvisorOnboardingExperience.tsx components/dashboard/PathAdvisorOnboardingGate.tsx lib/onboarding/client.ts types/onboarding.ts components/dashboard/PathAdvisorOnboardingExperience.test.tsx lib/onboarding/client.test.ts`
+  - passed
+- `pnpm docs:owner-map`
+  - passed
+- `pnpm lint`
+  - failed due pre-existing unrelated frontend lint errors outside this slice
+- `pnpm typecheck`
+  - failed due pre-existing unrelated frontend type errors outside this slice
+
+### Notes
+
+- `git diff --name-status develop...HEAD` and `git diff --stat develop...HEAD`
+  are empty because this work was completed in an uncommitted working tree on
+  `develop`, not on a feature branch with committed delta against `develop`.
+- `artifacts/day-onboarding-v1.patch` is therefore intentionally `0` bytes.
+- `artifacts/day-onboarding-v1-this-run.patch` contains the actual uncommitted
+  frontend slice for this run.
+
+### git status
+
+```text
+ M app/(shared)/dashboard/page.tsx
+ M docs/owner-map.generated.md
+ M docs/owner-map.md
+ M lib/storage-keys.ts
+?? app/api/onboarding/
+?? app/api/pathadvisor/context/
+?? components/dashboard/PathAdvisorOnboardingExperience.test.tsx
+?? components/dashboard/PathAdvisorOnboardingExperience.tsx
+?? components/dashboard/PathAdvisorOnboardingGate.tsx
+?? docs/change-briefs/day-onboarding-v1.md
+?? lib/onboarding/client.test.ts
+?? lib/onboarding/client.ts
+?? types/onboarding.ts
+```
+
+### git branch --show-current
+
+```text
+develop
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+```
+
+### git diff --stat develop...HEAD
+
+```text
+```
+
+### artifact output
+
+```text
+Name                                                         Length
+----                                                         ------
+onboarding-v4-real-signal-integration-frontend.patch               0
+onboarding-v4-real-signal-integration-frontend-this-run.patch 184979
+```
+
+### Artifact commands
+
+```text
+git diff develop...HEAD > artifacts/day-onboarding-v1.patch
+git diff > artifacts/day-onboarding-v1-this-run.patch
+bash -lc "ls -lh artifacts/day-onboarding-v1.patch artifacts/day-onboarding-v1-this-run.patch"
+```
+
+### ls -lh artifact output
+
+```text
+-rwxrwxrwx 1 joriel joriel 9.0K Apr  8 22:28 artifacts/day-onboarding-v1-this-run.patch
+-rwxrwxrwx 1 joriel joriel    0 Apr  8 22:28 artifacts/day-onboarding-v1.patch
+```
+
+### Remaining risks / follow-ups
+
+1. The frontend currently mirrors only a minimal subset of onboarding facts into
+   existing local profile state so the rest of the dashboard can stay compatible
+   without widening old stores.
+2. This slice does not yet include uploads, long-form parsing, deeper
+   post-insight dashboard handoff behavior, or multi-person household
+   onboarding.
+3. Full frontend lint and typecheck remain blocked by unrelated pre-existing
+   repo issues outside the onboarding files touched here.
+
+---
+
+## Run: Onboarding v1.1 Frontend Hardening — merge readiness and contract integrity (2026-04-09)
+
+### Branch setup
+
+- created hardening branch with:
+  - `git checkout -b feature/onboarding-v1-frontend-hardening`
+- current branch:
+  - `feature/onboarding-v1-frontend-hardening`
+
+### Summary
+
+This run hardened the dashboard onboarding shell without widening the product
+scope. The frontend now treats the backend onboarding session as the canonical
+source of truth, removes the earlier broad profile-store mirroring, protects
+against duplicate submits, supports backend-owned edit-after-insight flows, and
+recovers more honestly from missing or stale sessions.
+
+### Files changed
+
+- `app/(shared)/dashboard/page.tsx`
+- `app/api/onboarding/_shared.ts`
+- `app/api/onboarding/session/route.ts`
+- `app/api/onboarding/session/[sessionId]/route.ts`
+- `app/api/onboarding/session/[sessionId]/answer/route.ts`
+- `app/api/onboarding/session/[sessionId]/complete/route.ts`
+- `app/api/pathadvisor/context/bootstrap/route.ts`
+- `components/dashboard/PathAdvisorOnboardingExperience.tsx`
+- `components/dashboard/PathAdvisorOnboardingExperience.test.tsx`
+- `components/dashboard/PathAdvisorOnboardingGate.tsx`
+- `components/dashboard/PathAdvisorOnboardingGate.test.tsx`
+- `docs/change-briefs/day-onboarding-v1.md`
+- `docs/change-briefs/onboarding-v1-frontend-hardening.md`
+- `docs/merge-notes/current.md`
+- `docs/owner-map.generated.md`
+- `docs/owner-map.md`
+- `lib/onboarding/client.test.ts`
+- `lib/onboarding/client.ts`
+- `lib/storage-keys.ts`
+- `types/onboarding.ts`
+
+### Hardening changes
+
+- removed the broad compatibility mirroring that copied onboarding facts into
+  the profile store
+- kept only the onboarding session id in local storage for resume and handoff
+  routing
+- reloaded authoritative backend session state before rendering resumed
+  onboarding
+- added immediate in-flight guards so duplicate answer clicks do not race a
+  second request
+- added recoverable handling for missing-session and stale-session responses
+- added backend-owned question-history rendering and edit controls for earlier
+  answers after first insight appears
+- kept all displayed questions and insights backend-owned; the frontend still
+  does not decide readiness, confidence, or blockers locally
+
+### Validation run
+
+- `pnpm test -- components/dashboard/PathAdvisorOnboardingExperience.test.tsx components/dashboard/PathAdvisorOnboardingGate.test.tsx lib/onboarding/client.test.ts`
+  - passed
+  - `14` tests passed
+- `pnpm test`
+  - passed
+  - `90` files, `1884` tests passed
+- `npx eslint components/dashboard/PathAdvisorOnboardingExperience.tsx components/dashboard/PathAdvisorOnboardingExperience.test.tsx components/dashboard/PathAdvisorOnboardingGate.tsx components/dashboard/PathAdvisorOnboardingGate.test.tsx lib/onboarding/client.ts lib/onboarding/client.test.ts types/onboarding.ts app/api/onboarding/_shared.ts app/api/onboarding/session/route.ts "app/api/onboarding/session/[sessionId]/route.ts" "app/api/onboarding/session/[sessionId]/answer/route.ts" "app/api/onboarding/session/[sessionId]/complete/route.ts" app/api/pathadvisor/context/bootstrap/route.ts "app/(shared)/dashboard/page.tsx"`
+  - passed
+- `pnpm lint`
+  - failed outside this slice
+  - concrete failing files included:
+    - `app/(shared)/dashboard/resume-builder/page.tsx`
+    - `app/(shared)/dashboard/resume-readiness/page.tsx`
+    - `packages/ui/src/resume-builder/__tests__/resume-builder-architecture.test.ts`
+    - `packages/ui/src/resume-builder/components/ConversationComposer.tsx`
+    - `packages/ui/src/resume-builder/components/LiveResumeCanvas.tsx`
+    - `packages/ui/src/resume-builder/components/ResumeBuilderPathAdvisorModal.tsx`
+    - `packages/ui/src/screens/ResumeBuilderScreen.tsx`
+- `pnpm typecheck`
+  - failed outside this slice
+  - concrete failing files included:
+    - `packages/ui/src/resume-builder/__tests__/hardening-pass.test.ts`
+    - `packages/ui/src/resume-builder/__tests__/resume-builder-architecture.test.ts`
+    - `packages/ui/src/resume-builder/__tests__/stabilization-pass.test.ts`
+    - `packages/ui/src/resume-workspace/resumeExportReadiness.ts`
+    - `packages/ui/src/resume-workspace/resumeRevisionDiff.ts`
+    - `packages/ui/src/resume-workspace/ResumeSnapshotPanels.tsx`
+
+### Lint and typecheck isolation evidence
+
+- none of the full-repo lint or typecheck failures above are in the onboarding
+  files changed in this branch
+- the onboarding-specific eslint slice passed cleanly
+- the onboarding-specific and full frontend test suites both passed
+
+### git status
+
+```text
+ M app/(shared)/dashboard/page.tsx
+ A app/api/onboarding/_shared.ts
+ A app/api/onboarding/session/[sessionId]/answer/route.ts
+ A app/api/onboarding/session/[sessionId]/complete/route.ts
+ A app/api/onboarding/session/[sessionId]/route.ts
+ A app/api/onboarding/session/route.ts
+ A app/api/pathadvisor/context/bootstrap/route.ts
+ A components/dashboard/PathAdvisorOnboardingExperience.test.tsx
+ A components/dashboard/PathAdvisorOnboardingExperience.tsx
+ A components/dashboard/PathAdvisorOnboardingGate.test.tsx
+ A components/dashboard/PathAdvisorOnboardingGate.tsx
+ A docs/change-briefs/day-onboarding-v1.md
+ A docs/change-briefs/onboarding-v1-frontend-hardening.md
+ M docs/merge-notes/current.md
+ M docs/owner-map.generated.md
+ M docs/owner-map.md
+ A lib/onboarding/client.test.ts
+ A lib/onboarding/client.ts
+ M lib/storage-keys.ts
+ A types/onboarding.ts
+```
+
+### git branch --show-current
+
+```text
+feature/onboarding-v1-frontend-hardening
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+```
+
+### git diff --stat develop...HEAD
+
+```text
+```
+
+### Patch artifact notes
+
+- `git diff --name-status develop...HEAD` and `git diff --stat develop...HEAD`
+  remain empty because commits were intentionally not created in this hardening
+  run
+- to keep patch artifacts meaningful under the no-commit rule, the final patch
+  files were regenerated with the repo-canonical develop-to-working-tree and
+  HEAD-to-working-tree commands, using the requested hardening filenames
+
+### Artifact commands
+
+```text
+git add -N .
+git diff --binary develop -- . ":(exclude)artifacts" | Out-File -FilePath artifacts/onboarding-v1-frontend-hardening.patch -Encoding utf8
+git diff --binary HEAD -- . ":(exclude)artifacts" | Out-File -FilePath artifacts/onboarding-v1-frontend-hardening-this-run.patch -Encoding utf8
+bash -lc "ls -lh artifacts/onboarding-v1-frontend-hardening.patch artifacts/onboarding-v1-frontend-hardening-this-run.patch"
+```
+
+### ls -lh artifact output
+
+```text
+-rwxrwxrwx 1 joriel joriel 96K Apr  9 06:37 artifacts/onboarding-v1-frontend-hardening-this-run.patch
+-rwxrwxrwx 1 joriel joriel 96K Apr  9 06:37 artifacts/onboarding-v1-frontend-hardening.patch
+```
+
+### Remaining risks / follow-ups
+
+1. Full repo lint and full repo typecheck remain blocked by unrelated files
+   outside this onboarding slice, so frontend merge readiness still depends on
+   how those baseline failures are handled.
+2. The current frontend onboarding tests are deterministic node-environment
+   tests rather than full browser interaction tests.
+3. Dashboard handoff still relies on the persisted onboarding session id for
+   mode routing, but canonical facts and question state now stay backend-owned.
+
+## 2026-04-09 - Onboarding v3 continuity, memory, and action loop
+
+### Scope completed in this milestone
+- kept onboarding embedded in the real dashboard shell while adding a dashboard-level continue-improving prompt
+- rendered backend-owned continuity fields: profile freshness, topic threads, profile evolution, refinement recommendations, re-engagement signals, and recent action feedback
+- added frontend calls and proxy routes for backend-owned session reopen and bounded action recording
+- added v3 rendering tests for continuation prompts, thread memory, evolution, and action-loop feedback
+
+### Deferred repo issues
+- per milestone instruction, repo-wide lint and typecheck failures outside the files touched here remain deferred
+- `pnpm lint` still fails in unrelated existing files including `app/(shared)/dashboard/resume-builder/page.tsx`, `app/(shared)/dashboard/resume-readiness/page.tsx`, and multiple `packages/ui/src/resume-builder/**` files
+- `pnpm typecheck` still fails in unrelated existing files under `packages/ui/src/resume-builder/**` and `packages/ui/src/resume-workspace/**`
+
+### Commands run
+- `git checkout -b feature/onboarding-v3-continuity-action-loop-frontend`
+- `pnpm test -- components/dashboard/PathAdvisorOnboardingExperience.test.tsx components/dashboard/PathAdvisorOnboardingGate.test.tsx lib/onboarding/client.test.ts`
+- `pnpm exec eslint components/dashboard/PathAdvisorOnboardingExperience.tsx components/dashboard/PathAdvisorOnboardingGate.tsx components/dashboard/PathAdvisorOnboardingExperience.test.tsx components/dashboard/PathAdvisorOnboardingGate.test.tsx lib/onboarding/client.ts types/onboarding.ts app/api/onboarding/session/[sessionId]/reopen/route.ts app/api/onboarding/session/[sessionId]/action/route.ts`
+- `pnpm test`
+- `pnpm lint`
+- `pnpm typecheck`
+- `git status --short`
+- `git branch --show-current`
+- `git diff --name-status develop...HEAD`
+- `git diff --stat develop...HEAD`
+- `git diff develop...HEAD > artifacts/onboarding-v3-continuity-action-loop-frontend.patch`
+- `git diff > artifacts/onboarding-v3-continuity-action-loop-frontend-this-run.patch`
+- `ls -lh artifacts/onboarding-v3-continuity-action-loop-frontend.patch artifacts/onboarding-v3-continuity-action-loop-frontend-this-run.patch`
+
+### Validation results
+- `pnpm test -- ...`: passed
+- `pnpm exec eslint ...`: passed
+- `pnpm test`: passed (`90` files, `1888` tests)
+- `pnpm lint`: failed outside this milestone scope
+- `pnpm typecheck`: failed outside this milestone scope
+
+### git status
+
+```text
+ M app/(shared)/dashboard/page.tsx
+ A app/api/onboarding/_shared.ts
+ A app/api/onboarding/session/[sessionId]/answer/route.ts
+ A app/api/onboarding/session/[sessionId]/complete/route.ts
+ A app/api/onboarding/session/[sessionId]/route.ts
+ A app/api/onboarding/session/route.ts
+ A app/api/pathadvisor/context/bootstrap/route.ts
+ A components/dashboard/PathAdvisorOnboardingExperience.test.tsx
+ A components/dashboard/PathAdvisorOnboardingExperience.tsx
+ A components/dashboard/PathAdvisorOnboardingGate.test.tsx
+ A components/dashboard/PathAdvisorOnboardingGate.tsx
+ A docs/change-briefs/day-onboarding-v1.md
+ A docs/change-briefs/onboarding-v1-frontend-hardening.md
+ M docs/merge-notes/current.md
+ M docs/owner-map.generated.md
+ M docs/owner-map.md
+ A lib/onboarding/client.test.ts
+ A lib/onboarding/client.ts
+ M lib/storage-keys.ts
+ A types/onboarding.ts
+?? app/api/onboarding/session/[sessionId]/action/
+?? app/api/onboarding/session/[sessionId]/reopen/
+?? docs/change-briefs/onboarding-v2-intelligence-expansion-frontend.md
+```
+
+### git branch --show-current
+
+```text
+feature/onboarding-v3-continuity-action-loop-frontend
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+```
+
+### git diff --stat develop...HEAD
+
+```text
+```
+
+### ls -lh artifact output
+
+```text
+-rwxrwxrwx 1 joriel joriel 154K Apr  9 07:43 artifacts/onboarding-v3-continuity-action-loop-frontend-this-run.patch
+-rwxrwxrwx 1 joriel joriel    0 Apr  9 07:43 artifacts/onboarding-v3-continuity-action-loop-frontend.patch
+```
+
+### Notes
+- the cumulative `develop...HEAD` artifact is empty because this branch intentionally has no commits
+- the incremental patch artifact contains the actual working-tree delta for this no-commit run
+
+## Onboarding v4: Real Data Integration (USAJOBS + Resume Signals)
+
+### Summary
+- Added bounded onboarding signal emission from real Job Search and Resume Builder surfaces without moving interpretation into the frontend.
+- Extended the dashboard onboarding renderer to show backend-owned signal-derived updates for threads, refinement guidance, and handoff changes.
+- Kept onboarding backend-authoritative: the frontend only emits typed events and renders returned state.
+
+### Commands run
+- `git checkout -b feature/onboarding-v4-real-signal-integration-frontend`
+- `pnpm test -- components/dashboard/PathAdvisorOnboardingExperience.test.tsx components/dashboard/PathAdvisorOnboardingGate.test.tsx lib/onboarding/client.test.ts packages/ui/src/lib/onboardingSignals.test.ts`
+- `pnpm exec eslint components/dashboard/PathAdvisorOnboardingExperience.tsx components/dashboard/PathAdvisorOnboardingExperience.test.tsx components/dashboard/PathAdvisorOnboardingGate.test.tsx lib/onboarding/client.ts lib/onboarding/client.test.ts types/onboarding.ts app/api/onboarding/session/[sessionId]/signal/route.ts packages/ui/src/lib/onboardingSignals.ts packages/ui/src/lib/onboardingSignals.test.ts packages/ui/src/screens/JobSearchScreen.tsx packages/ui/src/screens/ResumeBuilderScreen.tsx`
+- `pnpm exec tsc --noEmit --pretty false`
+- `pnpm test`
+- `git status --short`
+- `git branch --show-current`
+- `git diff --name-status develop...HEAD`
+- `git diff --stat develop...HEAD`
+- `git diff develop...HEAD > artifacts/onboarding-v4-real-signal-integration-frontend.patch`
+- `git diff > artifacts/onboarding-v4-real-signal-integration-frontend-this-run.patch`
+- `ls -lh artifacts/onboarding-v4-real-signal-integration-frontend.patch artifacts/onboarding-v4-real-signal-integration-frontend-this-run.patch`
+
+### Validation results
+- `pnpm test -- ...`: passed (`4` files, `22` tests)
+- `pnpm test`: passed (`91` files, `1892` tests)
+- `pnpm exec eslint ...`: failed only because `packages/ui/src/screens/ResumeBuilderScreen.tsx:8215` already has the pre-existing `react-hooks/set-state-in-effect` error and long-standing unused-symbol warnings in the same file
+- `pnpm exec tsc --noEmit --pretty false`: repo-wide failures remain outside this slice in existing `packages/ui/src/resume-builder/**` and `packages/ui/src/resume-workspace/**` files; the v4-introduced `JobSearchScreen.tsx` and `ResumeBuilderScreen.tsx` type errors were fixed before close-out
+
+### Deferred repo issues
+- Repo-wide lint/typecheck failures outside this milestone remain deferred per instruction.
+- Touched-file lint debt remains in the pre-existing `packages/ui/src/screens/ResumeBuilderScreen.tsx:8215` effect pattern; no new lint errors were introduced by the v4 signal wiring.
+
+### git status
+
+```text
+ M app/(shared)/dashboard/page.tsx
+ A app/api/onboarding/_shared.ts
+ A app/api/onboarding/session/[sessionId]/answer/route.ts
+ A app/api/onboarding/session/[sessionId]/complete/route.ts
+ A app/api/onboarding/session/[sessionId]/route.ts
+ A app/api/onboarding/session/route.ts
+ A app/api/pathadvisor/context/bootstrap/route.ts
+ A components/dashboard/PathAdvisorOnboardingExperience.test.tsx
+ A components/dashboard/PathAdvisorOnboardingExperience.tsx
+ A components/dashboard/PathAdvisorOnboardingGate.test.tsx
+ A components/dashboard/PathAdvisorOnboardingGate.tsx
+ A docs/change-briefs/day-onboarding-v1.md
+ A docs/change-briefs/onboarding-v1-frontend-hardening.md
+ M docs/merge-notes/current.md
+ M docs/owner-map.generated.md
+ M docs/owner-map.md
+ A lib/onboarding/client.test.ts
+ A lib/onboarding/client.ts
+ M lib/storage-keys.ts
+ M packages/ui/src/screens/JobSearchScreen.tsx
+ M packages/ui/src/screens/ResumeBuilderScreen.tsx
+ A types/onboarding.ts
+ ?? app/api/onboarding/session/[sessionId]/action/
+ ?? app/api/onboarding/session/[sessionId]/reopen/
+ ?? app/api/onboarding/session/[sessionId]/signal/
+ ?? docs/change-briefs/onboarding-v2-intelligence-expansion-frontend.md
+ ?? docs/change-briefs/onboarding-v3-continuity-action-loop-frontend.md
+ ?? packages/ui/src/lib/onboardingSignals.test.ts
+ ?? packages/ui/src/lib/onboardingSignals.ts
+```
+
+### git branch --show-current
+
+```text
+feature/onboarding-v4-real-signal-integration-frontend
+```
+
+### git diff --name-status develop...HEAD
+
+```text
+```
+
+### git diff --stat develop...HEAD
+
+```text
+```
+# Onboarding v5: Intelligence Distribution Frontend (2026-04-09)
+
+## Summary
+- Added backend-owned intelligence distribution across Dashboard, Job Search, Saved Jobs, and Resume Builder.
+- Job Search and Saved Jobs now render the same canonical match projection path instead of screen-local matching logic.
+- Resume Builder now consumes backend-owned alignment/readiness context and shows it even during the initial loading shell.
+
+## Branch setup
+- Created branch with `git checkout -b feature/onboarding-v5-intelligence-distribution-frontend`
+- Current branch: `feature/onboarding-v5-intelligence-distribution-frontend`
+
+## Files changed
+- `app/(shared)/dashboard/page.tsx`
+- `app/(shared)/dashboard/job-search/page.tsx`
+- `app/(shared)/dashboard/saved-jobs/page.tsx`
+- `app/(shared)/dashboard/resume-builder/page.tsx`
+- `app/api/live-advisor/intelligence/job-search/route.ts`
+- `app/api/live-advisor/stored-jobs/intelligence/route.ts`
+- `app/api/pathadvisor/intelligence/dashboard/route.ts`
+- `app/api/pathadvisor/intelligence/resume-builder/route.ts`
+- `lib/live-advisor/adapter.ts`
+- `lib/live-advisor/adapter.test.ts`
+- `lib/live-advisor/client.ts`
+- `lib/pathadvisor-intelligence/client.ts`
+- `packages/ui/src/index.ts`
+- `packages/ui/src/screens/DashboardScreen.tsx`
+- `packages/ui/src/screens/DashboardScreen.test.tsx`
+- `packages/ui/src/screens/JobSearchScreen.tsx`
+- `packages/ui/src/screens/JobSearchScreen.test.tsx`
+- `packages/ui/src/screens/ResumeBuilderScreen.tsx`
+- `packages/ui/src/screens/ResumeBuilderScreen.test.tsx`
+- `packages/ui/src/screens/SavedJobsScreen.test.tsx`
+- `packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx`
+- `packages/ui/src/types/pathadvisorIntelligence.ts`
+- `docs/change-briefs/onboarding-v5-intelligence-distribution-frontend.md`
+- `docs/merge-notes/current.md`
+
+## Validation performed
+- `pnpm test -- packages/ui/src/screens/DashboardScreen.test.tsx packages/ui/src/screens/JobSearchScreen.test.tsx packages/ui/src/screens/SavedJobsScreen.test.tsx packages/ui/src/screens/ResumeBuilderScreen.test.tsx lib/live-advisor/adapter.test.ts`
+  - passed
+  - `264` tests passed
+- `pnpm test`
+  - passed
+  - `91` files, `1897` tests passed
+- `pnpm exec eslint "app\\(shared)\\dashboard\\page.tsx" "app\\(shared)\\dashboard\\job-search\\page.tsx" "app\\(shared)\\dashboard\\saved-jobs\\page.tsx" "app\\(shared)\\dashboard\\resume-builder\\page.tsx" "app\\api\\live-advisor\\intelligence\\job-search\\route.ts" "app\\api\\live-advisor\\stored-jobs\\intelligence\\route.ts" "app\\api\\pathadvisor\\intelligence\\dashboard\\route.ts" "app\\api\\pathadvisor\\intelligence\\resume-builder\\route.ts" "lib\\live-advisor\\adapter.ts" "lib\\live-advisor\\adapter.test.ts" "lib\\live-advisor\\client.ts" "lib\\pathadvisor-intelligence\\client.ts" "packages\\ui\\src\\types\\pathadvisorIntelligence.ts" "packages\\ui\\src\\index.ts" "packages\\ui\\src\\screens\\DashboardScreen.tsx" "packages\\ui\\src\\screens\\DashboardScreen.test.tsx" "packages\\ui\\src\\screens\\JobSearchScreen.tsx" "packages\\ui\\src\\screens\\JobSearchScreen.test.tsx" "packages\\ui\\src\\screens\\SavedJobsScreen.test.tsx" "packages\\ui\\src\\screens\\_components\\SavedJobsLiveAdvisorPanel.tsx"`
+  - passed
+- `pnpm exec eslint ...including packages/ui/src/screens/ResumeBuilderScreen.tsx and packages/ui/src/screens/ResumeBuilderScreen.test.tsx`
+  - failed in pre-existing `packages/ui/src/screens/ResumeBuilderScreen.tsx`
+  - current blocking errors are:
+    - React compiler memoization preservation errors at `packages/ui/src/screens/ResumeBuilderScreen.tsx:5239`
+    - pre-existing `react-hooks/set-state-in-effect` at `packages/ui/src/screens/ResumeBuilderScreen.tsx:5730`
+- `pnpm exec tsc --noEmit --pretty false`
+  - failed outside this slice
+  - current failures remain in existing files under:
+    - `packages/ui/src/resume-builder/__tests__/*`
+    - `packages/ui/src/resume-workspace/*`
+
+## Milestone-slice vs deferred gate notes
+- Milestone slice:
+  - the new screen-specific intelligence rendering and client/proxy wiring are implemented
+  - targeted v5 tests pass
+  - full frontend tests pass
+  - touched v5 files outside the long-standing Resume Builder screen debt pass scoped eslint
+- Deferred repo-wide issues:
+  - repo-wide typecheck failures remain outside this slice
+  - pre-existing lint debt in `packages/ui/src/screens/ResumeBuilderScreen.tsx` remains and is not caused by the v5 intelligence-distribution changes
+
+## git status
+```text
+ M app/(shared)/dashboard/job-search/page.tsx
+ M app/(shared)/dashboard/page.tsx
+ M app/(shared)/dashboard/resume-builder/page.tsx
+ M app/(shared)/dashboard/saved-jobs/page.tsx
+ A app/api/onboarding/_shared.ts
+ A app/api/onboarding/session/[sessionId]/answer/route.ts
+ A app/api/onboarding/session/[sessionId]/complete/route.ts
+ A app/api/onboarding/session/[sessionId]/route.ts
+ A app/api/onboarding/session/route.ts
+ A app/api/pathadvisor/context/bootstrap/route.ts
+ A components/dashboard/PathAdvisorOnboardingExperience.test.tsx
+ A components/dashboard/PathAdvisorOnboardingExperience.tsx
+ A components/dashboard/PathAdvisorOnboardingGate.test.tsx
+ A components/dashboard/PathAdvisorOnboardingGate.tsx
+ A docs/change-briefs/day-onboarding-v1.md
+ A docs/change-briefs/onboarding-v1-frontend-hardening.md
+ M docs/merge-notes/current.md
+ M docs/owner-map.generated.md
+ M docs/owner-map.md
+ M lib/live-advisor/adapter.test.ts
+ M lib/live-advisor/adapter.ts
+ M lib/live-advisor/client.ts
+ A lib/onboarding/client.test.ts
+ A lib/onboarding/client.ts
+ M lib/storage-keys.ts
+ M packages/ui/src/index.ts
+ M packages/ui/src/screens/DashboardScreen.test.tsx
+ M packages/ui/src/screens/DashboardScreen.tsx
+ M packages/ui/src/screens/JobSearchScreen.test.tsx
+ M packages/ui/src/screens/JobSearchScreen.tsx
+ M packages/ui/src/screens/ResumeBuilderScreen.test.tsx
+ M packages/ui/src/screens/ResumeBuilderScreen.tsx
+ M packages/ui/src/screens/SavedJobsScreen.test.tsx
+ M packages/ui/src/screens/_components/SavedJobsLiveAdvisorPanel.tsx
+ A types/onboarding.ts
+ ?? app/api/live-advisor/intelligence/
+ ?? app/api/live-advisor/stored-jobs/intelligence/
+ ?? app/api/onboarding/session/[sessionId]/action/
+ ?? app/api/onboarding/session/[sessionId]/reopen/
+ ?? app/api/onboarding/session/[sessionId]/signal/
+ ?? app/api/pathadvisor/intelligence/
+ ?? docs/change-briefs/onboarding-v2-intelligence-expansion-frontend.md
+ ?? docs/change-briefs/onboarding-v3-continuity-action-loop-frontend.md
+ ?? docs/change-briefs/onboarding-v4-real-signal-integration-frontend.md
+ ?? docs/change-briefs/onboarding-v5-intelligence-distribution-frontend.md
+ ?? lib/pathadvisor-intelligence/
+ ?? packages/ui/src/lib/onboardingSignals.test.ts
+ ?? packages/ui/src/lib/onboardingSignals.ts
+ ?? packages/ui/src/types/
+```
+
+## git branch --show-current
+```text
+feature/onboarding-v5-intelligence-distribution-frontend
+```
+
+## git diff --name-status develop...HEAD
+```text
+(no output)
+```
+
+## git diff --stat develop...HEAD
+```text
+(no output)
+```
+
+## Artifact commands
+```text
+git diff develop...HEAD > artifacts/onboarding-v5-intelligence-distribution-frontend.patch
+git diff > artifacts/onboarding-v5-intelligence-distribution-frontend-this-run.patch
+Get-Item artifacts/onboarding-v5-intelligence-distribution-frontend.patch, artifacts/onboarding-v5-intelligence-distribution-frontend-this-run.patch | Select-Object Name, Length | Format-Table -AutoSize
+```
+
+## Artifact output
+```text
+Name                                                           Length
+----                                                           ------
+onboarding-v5-intelligence-distribution-frontend.patch               0
+onboarding-v5-intelligence-distribution-frontend-this-run.patch 246909
+```
+
+## Notes
+- `git diff develop...HEAD` is empty because this branch has no committed delta against `develop`.
+- The incremental patch contains the actual working-tree changes for this no-commit run.
+
+---
+
+# Resume Navigation: Canonical Builder Adjustment (2026-04-09)
+
+## Summary
+- Made the document-centered canvas builder at `/dashboard/resume-builder` the canonical editing experience
+- Removed the informational banner from the canvas builder page
+- Updated workspace hub "Open builder" and card actions to navigate to the canvas builder
+- Repositioned the structured builder at `/dashboard/resume/[resumeId]` as review/diagnostics/guidance
+- Updated workspace hub copy to clarify the hub as a resume management surface, not the editor itself
+- All backend-connected flows preserved (diagnostics, rewrite assistance, intelligence, save/export)
+
+## Branch
+- `feature/onboarding-v5-intelligence-distribution-frontend`
+
+## Files changed
+- `app/(shared)/dashboard/resume-builder/page.tsx` — removed banner, updated comments
+- `packages/ui/src/screens/ResumeWorkspaceScreen.tsx` — changed navigateToBuilder target, updated hub copy and file header
+- `packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx` — updated test assertion for new hub copy
+- `app/(shared)/dashboard/resume/[resumeId]/page.tsx` — updated comments to reflect review/diagnostics role
+- `docs/change-briefs/day-resume-nav-canonical-builder.md` — new change brief
+
+## Validation performed
+- `vitest run packages/ui/src/screens/ResumeWorkspaceScreen.test.tsx` — 6 tests passed
+- Linter check on edited files — no errors
+- Manual route verification:
+  - Sidebar "Resume Builder" → `/dashboard/resume` (workspace hub) — correct
+  - Hub "Open builder" → `/dashboard/resume-builder` (canvas builder) — correct
+  - Hub "Review" → `/dashboard/resume/[id]/review` — correct
+  - Dashboard "Open Resume Builder" → `/dashboard/resume` (hub) — correct
+  - Onboarding handoff → `/dashboard/resume-builder` — correct
+  - Career resume deep-links → `/dashboard/resume-builder?resumeFocus=...` — correct
+
+## Backend-connected flows verified intact
+- `GET /api/pathadvisor/intelligence/resume-builder` (canvas builder intelligence fetch)
+- `POST /api/resume/diagnostics/evaluate` (review diagnostics)
+- `POST /api/resume/rewrite-assist` (rewrite assistance)
+- PathAdvisor conversation/governed/entry APIs (dashboard, onboarding)
+- Onboarding signal emission from ResumeBuilderScreen
+
+## Accessibility sanity check
+- All navigation buttons retain `focus-visible:ring-2` keyboard feedback
+- Hub card click handlers include `onKeyDown` with Enter/Space activation
+- No new interactive elements introduced — only navigation targets changed
+- Role attributes and aria labels on existing controls unchanged
+
+## Mobile sanity pass
+- Hub layout uses responsive grid (`md:flex-row`, `md:items-end`, `xl:grid-cols-*`)
+- Card action buttons stack vertically on narrow viewports via `flex-col`
+- No layout changes in this diff — only navigation targets and copy changed
+
+## Patch artifacts
+- `artifacts/day-resume-nav-canonical-builder.patch` (cumulative, develop to working tree)
+- `artifacts/day-resume-nav-canonical-builder-this-run.patch` (incremental, unstaged changes)
+
+## Known risks
+- Canvas builder manages resume state via `@pathos/core` stores independently of the workspace store. Clicking "Open builder" for a specific resume in the hub navigates to the canvas builder, but the canvas builder loads its own store state — not the specific resume that was clicked. Store synchronization is a follow-up.
+- `/dashboard/resume/[resumeId]` still renders the structured builder view. It functions correctly as a review/guidance surface but the URL does not explicitly signal "review" — a future route rename could improve clarity.

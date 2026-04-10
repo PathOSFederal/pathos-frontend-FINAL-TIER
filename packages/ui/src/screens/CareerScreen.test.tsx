@@ -18,8 +18,9 @@ import {
 } from '@pathos/adapters';
 import { useCareerResumeScreenStore } from '../stores/careerResumeScreenStore';
 import { CareerScreen } from './CareerScreen';
+import type { UnifiedCareerResumeIntelligenceState } from '../intelligence/careerResumeIntelligence';
 
-function noop(_text: string) {
+function noop() {
   /* mock */
 }
 
@@ -119,5 +120,93 @@ describe('CareerScreen', function () {
     const output = renderCareer(<CareerScreen demoState="incompleteResume" />);
     expect(output).toContain('YOUR RESUMES');
     expect(output).toContain('No resume yet');
+  });
+
+  it('renders live unified intelligence on the resume-readiness surface', function () {
+    const intelligence: UnifiedCareerResumeIntelligenceState = {
+      source: 'live',
+      isRefreshing: false,
+      lastUpdatedLabel: 'Apr 9, 2026, 8:30 AM',
+      errorMessage: null,
+      careerReadiness: {
+        meta: {
+          snapshot_id: 'career-1',
+          generated_at: '2026-04-09T12:30:00Z',
+          input_hash: 'hash-1',
+          rule_version: 'rules-1',
+          knowledge_pack_version: 'pack-1',
+          kind: 'career_readiness',
+        },
+        overall_score: 74,
+        label: 'Competitive with targeted improvements',
+        target_role: 'GS-12 Program Analyst (0343)',
+        spokes: {
+          qualification: 80,
+        },
+        top_gaps: [
+          {
+            key: 'transcript',
+            title: 'Transcript documentation',
+            impact_points: 5,
+            reason: 'Transcript evidence is still required for one qualification path.',
+          },
+        ],
+        action_plan: [],
+        reasons: [],
+        evidence_used: [],
+        missing_evidence: [],
+      },
+      resumeReadiness: {
+        meta: {
+          snapshot_id: 'resume-1',
+          generated_at: '2026-04-09T12:31:00Z',
+          input_hash: 'hash-2',
+          rule_version: 'rules-1',
+          knowledge_pack_version: 'pack-1',
+          kind: 'resume_readiness',
+        },
+        overall_score: 68,
+        target_role: 'GS-12 Program Analyst (0343)',
+        categories: {
+          clarity: 70,
+          evidence: 64,
+        },
+        suggestions: [
+          {
+            key: 'dates',
+            title: 'Add employment dates',
+            impact_points: 6,
+            example: 'List start and end dates for each federal role.',
+          },
+        ],
+        reasons: [],
+        evidence_used: [],
+        missing_evidence: [
+          {
+            key: 'employment_dates',
+            label: 'Employment dates',
+            why_it_matters: 'Federal review needs dates to evaluate experience chronology.',
+          },
+        ],
+      },
+      workspaceResume: {
+        id: 'resume-1',
+        name: 'Program Analyst Resume',
+        mode: 'master',
+        updatedAt: '2026-04-09T12:00:00Z',
+        targetRoleTitle: 'GS-12 Program Analyst (0343)',
+      },
+      refresh: function () {
+        /* noop */
+      },
+    };
+
+    const output = renderCareer(<CareerScreen intelligence={intelligence} />);
+    expect(output).toContain('Live intelligence');
+    expect(output).toContain('68% Ready');
+    expect(output).toContain('Employment dates');
+    expect(output).toContain('GS-12 Program Analyst (0343)');
+    expect(output).toContain('Program Analyst Resume');
+    expect(output).toContain('Open Resume Workspace');
   });
 });

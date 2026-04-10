@@ -13,8 +13,9 @@ import {
 } from '@pathos/adapters';
 import { usePathAdvisorScreenOverridesStore } from '../stores/pathAdvisorScreenOverridesStore';
 import { CareerReadinessScreen } from './CareerReadinessScreen';
+import type { UnifiedCareerResumeIntelligenceState } from '../intelligence/careerResumeIntelligence';
 
-function noop(_text: string) {
+function noop() {
   /* mock */
 }
 
@@ -94,5 +95,85 @@ describe('CareerReadinessScreen', function () {
     expect(output).toContain('Projected readiness');
     expect(output.indexOf('Evidence') !== -1 && output.indexOf('Inputs') !== -1).toBe(true);
     expect(output).toContain('See what inputs were used for scoring.');
+  });
+
+  it('renders live career-readiness content when unified intelligence is provided', function () {
+    const intelligence: UnifiedCareerResumeIntelligenceState = {
+      source: 'live',
+      isRefreshing: false,
+      lastUpdatedLabel: 'Apr 9, 2026, 8:30 AM',
+      errorMessage: null,
+      careerReadiness: {
+        meta: {
+          snapshot_id: 'career-1',
+          generated_at: '2026-04-09T12:30:00Z',
+          input_hash: 'hash-1',
+          rule_version: 'rules-1',
+          knowledge_pack_version: 'pack-1',
+          kind: 'career_readiness',
+        },
+        overall_score: 81,
+        label: 'Ready to compete',
+        target_role: 'GS-7 Program Analyst (0343)',
+        spokes: {
+          target_alignment: 80,
+          specialized_experience: 78,
+          resume_evidence: 76,
+          keywords: 74,
+          leadership_scope: 70,
+          qualification: 88,
+        },
+        top_gaps: [
+          {
+            key: 'transcript',
+            title: 'Transcript documentation',
+            impact_points: 6,
+            reason: 'Official transcript evidence is still missing.',
+          },
+        ],
+        action_plan: [
+          {
+            key: 'transcript',
+            title: 'Upload transcript',
+            impact_points: 6,
+            effort: 'S',
+            helper: 'Add the transcript that supports your education-substitution path.',
+          },
+        ],
+        reasons: [
+          {
+            code: 'qualification',
+            message: 'Qualification evidence is strong for the target grade.',
+          },
+        ],
+        evidence_used: [
+          {
+            key: 'education',
+            label: 'Education level',
+            source_type: 'profile_field',
+          },
+        ],
+        missing_evidence: [],
+      },
+      resumeReadiness: null,
+      workspaceResume: {
+        id: 'resume-1',
+        name: 'Program Analyst Resume',
+        mode: 'master',
+        updatedAt: '2026-04-09T12:00:00Z',
+        targetRoleTitle: 'GS-7 Program Analyst (0343)',
+      },
+      refresh: function () {
+        /* noop */
+      },
+    };
+
+    const output = renderScreen(<CareerReadinessScreen intelligence={intelligence} />);
+    expect(output).toContain('81');
+    expect(output).toContain('Ready to compete');
+    expect(output).toContain('Live backend');
+    expect(output).toContain('GS-7 Program Analyst (0343)');
+    expect(output).toContain('Transcript documentation');
+    expect(output).toContain('Upload transcript');
   });
 });

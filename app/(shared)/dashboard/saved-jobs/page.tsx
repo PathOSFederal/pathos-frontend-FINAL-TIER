@@ -4,12 +4,15 @@ import { useCallback, useEffect } from 'react';
 import { SavedJobsScreen, type SavedJobsLiveStoredJob } from '@pathos/ui';
 import { SharedDashboardRouteShell } from '../_components/SharedDashboardRouteShell';
 import { useProfileStore } from '@/store/profileStore';
+import { useCareerResumeIntelligence } from '@/lib/intelligence/useCareerResumeIntelligence';
 import {
-  fetchLiveStoredJobEvaluation,
+  fetchLiveSavedJobsSummary,
+  fetchLiveStoredJobIntelligence,
   fetchLiveStoredJobs,
 } from '@/lib/live-advisor/client';
 
 export default function SavedJobsPage() {
+  const intelligence = useCareerResumeIntelligence();
   /**
    * The live Saved Jobs integration depends on the persisted frontend profile so
    * the backend receives real user context instead of a frontend mock payload.
@@ -48,17 +51,25 @@ export default function SavedJobsPage() {
    */
   const evaluateStoredJob = useCallback(
     async function (storedJob: SavedJobsLiveStoredJob) {
-      return fetchLiveStoredJobEvaluation(storedJob, profile);
+      return fetchLiveStoredJobIntelligence(storedJob, profile);
     },
     [profile]
   );
 
+  const loadSummary = useCallback(async function () {
+    return fetchLiveSavedJobsSummary(profile);
+  }, [profile]);
+
   return (
-    <SharedDashboardRouteShell>
+    <SharedDashboardRouteShell
+      currentView="saved-jobs"
+      conversationIntelligence={intelligence}
+    >
       <SavedJobsScreen
         liveAdvisor={{
           loadStoredJobs: loadStoredJobs,
           evaluateStoredJob: evaluateStoredJob,
+          loadSummary: loadSummary,
         }}
       />
     </SharedDashboardRouteShell>

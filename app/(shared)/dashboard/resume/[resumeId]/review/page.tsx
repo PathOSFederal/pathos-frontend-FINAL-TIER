@@ -11,7 +11,7 @@ export default function ResumeWorkspaceReviewPage(props: {
 }) {
   const params = use(props.params);
   return (
-    <SharedDashboardRouteShell hideAdvisor>
+    <SharedDashboardRouteShell currentView="resume-review" hideAdvisor>
       <ResumeWorkspaceScreen view="review" resumeId={params.resumeId} />
     </SharedDashboardRouteShell>
   );

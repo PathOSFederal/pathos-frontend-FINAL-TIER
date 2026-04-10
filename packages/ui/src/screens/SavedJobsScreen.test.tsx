@@ -32,6 +32,7 @@ import {
   SavedJobsScreen,
   deriveReadinessScore,
 } from './SavedJobsScreen';
+import { SavedJobsLiveAdvisorPanel } from './_components/SavedJobsLiveAdvisorPanel';
 import {
   createSavedJobsMockData,
   seedSavedJobsIfEmpty,
@@ -115,6 +116,115 @@ function renderDetails(
   );
 }
 
+function renderLiveAdvisorPanel() {
+  return renderToString(
+    <SavedJobsLiveAdvisorPanel
+      jobTitle="Program Analyst"
+      onRetry={null}
+      state={{
+        status: 'success',
+        errorMessage: null,
+        evaluation: {
+          recommendation: 'consider',
+          decisionBand: 'caution',
+          confidenceBand: 'medium',
+          overallScore: 76,
+          reasons: [],
+          gaps: [],
+          warnings: [],
+          missingEvidence: [],
+          nextActions: [],
+          applicationDecision: null,
+          explainabilityVersion: 'explainability-v1',
+          engineVersion: 'qualification-v1',
+          canonicalUserContext: {
+            targetRoleClusters: ['Program analyst'],
+            preferredLocations: ['Washington, DC'],
+            readinessState: 'Draft resume',
+            fitLanes: ['Target field: Program / policy analyst'],
+            blockers: ['Resume evidence still needs work'],
+            topMissingItems: ['Location flexibility'],
+            nextBestActions: ['Strengthen resume evidence'],
+            activeThreads: ['Resume readiness'],
+            profileCompleteness: 72,
+            freshnessBand: 'fresh',
+            confidenceBand: 'medium',
+            recentMeaningfulChanges: [],
+            activitySignals: ['Recent job activity strengthened analyst direction.'],
+            updatedAt: '2026-04-09T12:00:00Z',
+          },
+          jobMatchProjection: {
+            overallScore: 76,
+            confidenceBand: 'medium',
+            blockerSeverity: 'medium',
+            explanationSummary: 'Match projection is grounded in canonical user context and job evidence.',
+            dimensions: [
+              {
+                dimensionId: 'qualification_alignment',
+                label: 'Qualification alignment',
+                score: 76,
+                status: 'strong',
+                explanation: 'Grounded in the backend job-evaluation score against canonical user evidence.',
+              },
+            ],
+            nextActions: ['Strengthen resume evidence'],
+            blockers: ['Resume evidence still needs work'],
+            warnings: [],
+          },
+          screenIntelligence: {
+            screen: 'saved_jobs',
+            pathadvisorMode: 'decision_risk',
+            context: {
+              targetRoleClusters: ['Program analyst'],
+              preferredLocations: ['Washington, DC'],
+              readinessState: 'Draft resume',
+              fitLanes: ['Target field: Program / policy analyst'],
+              blockers: ['Resume evidence still needs work'],
+              topMissingItems: ['Location flexibility'],
+              nextBestActions: ['Strengthen resume evidence'],
+              activeThreads: ['Resume readiness'],
+              profileCompleteness: 72,
+              freshnessBand: 'fresh',
+              confidenceBand: 'medium',
+              recentMeaningfulChanges: [],
+              activitySignals: ['Recent job activity strengthened analyst direction.'],
+              updatedAt: '2026-04-09T12:00:00Z',
+            },
+            summary: 'Saved Jobs is using the same canonical match projection with decision-first framing.',
+            nextBestAction: {
+              actionId: 'improve_before_apply',
+              title: 'Improve before applying',
+              description: 'Saved Jobs should shift from consideration to blocker removal for this role.',
+              ctaLabel: 'Improve readiness first',
+              ctaHref: '/dashboard/resume-builder',
+              reason: 'The canonical match projection still shows blocker pressure.',
+            },
+            jobMatchProjection: {
+              overallScore: 76,
+              confidenceBand: 'medium',
+              blockerSeverity: 'medium',
+              explanationSummary: 'Match projection is grounded in canonical user context and job evidence.',
+              dimensions: [
+                {
+                  dimensionId: 'qualification_alignment',
+                  label: 'Qualification alignment',
+                  score: 76,
+                  status: 'strong',
+                  explanation: 'Grounded in the backend job-evaluation score against canonical user evidence.',
+                },
+              ],
+              nextActions: ['Strengthen resume evidence'],
+              blockers: ['Resume evidence still needs work'],
+              warnings: [],
+            },
+            decisionGuidance: ['Improve before applying'],
+          },
+        },
+      }}
+    />
+  );
+}
+
 describe('SavedJobsScreen hardening', function () {
   beforeEach(function () {
     usePathAdvisorScreenOverridesStore.getState().setOverrides(null);
@@ -171,6 +281,16 @@ describe('SavedJobsScreen hardening', function () {
     expect(output).toContain('Work Mode');
     expect(output).toContain('Deadline');
     expect(output).not.toContain('Schedule');
+  });
+
+  it('renders the shared canonical match projection for saved jobs', function () {
+    const output = renderLiveAdvisorPanel();
+    expect(output).toContain('Match for this job');
+    expect(output).toContain('Building match');
+    expect(output).toContain('Canonical user intelligence');
+    expect(output).toContain('Canonical match projection');
+    expect(output).toContain('Saved Jobs is using the same canonical match projection with decision-first framing.');
+    expect(output).toContain('Improve before applying');
   });
 });
 

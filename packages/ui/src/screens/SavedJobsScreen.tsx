@@ -78,6 +78,7 @@ import { MatchBreakdownHeader, MatchBreakdownRow } from '../components/MatchBrea
 import type { MatchBreakdownRowData } from '../components/MatchBreakdownTable';
 import {
   SavedJobsLiveAdvisorPanel,
+  buildLiveEvaluationPathAdvisorSummary,
   type SavedJobsLiveEvaluation,
   type SavedJobsLiveEvaluationState,
   type SavedJobsLiveStoredJob,
@@ -88,7 +89,11 @@ import {
   JobMatchSnapshot,
   MatchLevel,
 } from '../lib/jobMatchSnapshot';
-import { publishDimensionExplainContext } from '../lib/pathAdvisorPublish';
+import {
+  publishDimensionExplainContext,
+  publishScreenContext,
+  publishSelectionContext,
+} from '../lib/pathAdvisorPublish';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,12 +122,35 @@ export interface SavedJobsLiveAdvisorIntegration {
   evaluateStoredJob: (
     storedJob: SavedJobsLiveStoredJob
   ) => Promise<SavedJobsLiveEvaluation | null>;
+  loadSummary?: () => Promise<SavedJobsSummaryPayload>;
 }
 
 /** Props for SavedJobsScreen. */
 export interface SavedJobsScreenProps {
   liveAdvisor?: SavedJobsLiveAdvisorIntegration;
 }
+
+type SavedJobsSummaryMetric = {
+  metricId: string;
+  label: string;
+  value: number;
+  emphasis: 'neutral' | 'accent' | 'success' | 'warning';
+  explanation: string;
+};
+
+type SavedJobsSummaryPayload = {
+  screen: 'saved_jobs';
+  summary: string;
+  metrics: SavedJobsSummaryMetric[];
+  nextBestAction: {
+    actionId: string;
+    title: string;
+    description: string;
+    ctaLabel: string;
+    ctaHref: string;
+    reason: string;
+  };
+};
 
 // ---------------------------------------------------------------------------
 // Local derived-data helpers
@@ -340,7 +368,37 @@ function countByStatus(jobs: Job[], status: SavedJobStatus): number {
  * SIZING: These are meant to read as meaningful summary tiles, not compact chips.
  * The mockup shows generous padding, prominent numbers, and clear labels.
  */
-function MetricsStrip(props: { jobs: Job[] }) {
+function MetricsStrip(props: { jobs: Job[]; summary?: SavedJobsSummaryPayload | null }) {
+  if (props.summary !== undefined && props.summary !== null) {
+    return (
+      <div
+        className="flex items-stretch gap-3 px-4 py-3 flex-shrink-0"
+        style={{ borderBottom: '1px solid var(--p-border)' }}
+      >
+        {props.summary.metrics.map(function (metric) {
+          return (
+            <MetricItem
+              key={metric.metricId}
+              icon={<BarChart2 className="w-4 h-4" />}
+              label={metric.label}
+              value={String(metric.value)}
+              valueColor={
+                metric.emphasis === 'success'
+                  ? 'var(--p-success)'
+                  : metric.emphasis === 'warning'
+                    ? 'var(--p-warning, #eab308)'
+                    : metric.emphasis === 'accent'
+                      ? 'var(--p-accent)'
+                      : undefined
+              }
+              tooltip={metric.explanation}
+            />
+          );
+        })}
+      </div>
+    );
+  }
+
   const total = props.jobs.length;
   const readyToApply = countByStatus(props.jobs, 'ready');
   const needsReview = countByStatus(props.jobs, 'needs-review');
@@ -396,6 +454,7 @@ function MetricItem(props: {
   label: string;
   value: string;
   valueColor?: string;
+  tooltip?: string;
 }) {
   const valueStyle = props.valueColor
     ? { color: props.valueColor }
@@ -408,6 +467,7 @@ function MetricItem(props: {
         border: '1px solid var(--p-border)',
         boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
       }}
+      title={props.tooltip}
     >
       <div
         className="w-10 h-10 rounded-md flex items-center justify-center flex-shrink-0"
@@ -1750,6 +1810,138 @@ function SavedJobDetailsContent(props: SavedJobDetailsContentProps) {
     };
   }, [evaluateStoredJob, fetchLiveAdvisorEvaluation, liveStoredJob]);
 
+  useEffect(function () {
+    if (
+      liveStoredJob === undefined ||
+      liveAdvisorState.status !== 'success' ||
+      liveAdvisorState.evaluation === null
+    ) {
+      return;
+    }
+
+    const summary = buildLiveEvaluationPathAdvisorSummary(
+      liveAdvisorState.evaluation
+    );
+    const sections: Array<{
+      title: string;
+      lines?: string[];
+      bullets?: string[];
+      meta?: Record<string, string>;
+    }> = [
+      {
+        title: 'Evaluation summary',
+        lines: summary.summaryLines,
+        meta: {
+          pathadvisor_context_kind: 'application_confidence',
+          source: 'live',
+          screen_id: 'saved-jobs',
+          job_id: liveStoredJob.jobId,
+          job_title:
+            liveStoredJob.title !== null && liveStoredJob.title !== ''
+              ? liveStoredJob.title
+              : liveStoredJob.jobId,
+          target_role:
+            liveStoredJob.title !== null && liveStoredJob.title !== ''
+              ? liveStoredJob.title
+              : liveStoredJob.jobId,
+          overall_score: String(liveAdvisorState.evaluation.overallScore),
+          recommendation: liveAdvisorState.evaluation.recommendation,
+          decision_band:
+            liveAdvisorState.evaluation.applicationDecision !== null
+              ? liveAdvisorState.evaluation.applicationDecision.decisionBand
+              : liveAdvisorState.evaluation.decisionBand,
+          confidence_band: liveAdvisorState.evaluation.confidenceBand,
+          rationale_summary:
+            liveAdvisorState.evaluation.applicationDecision !== null
+              ? liveAdvisorState.evaluation.applicationDecision.rationaleSummary
+              : liveAdvisorState.evaluation.jobMatchProjection !== undefined &&
+                  liveAdvisorState.evaluation.jobMatchProjection !== null
+                ? liveAdvisorState.evaluation.jobMatchProjection.explanationSummary
+                : summary.summaryLines[summary.summaryLines.length - 1] ?? '',
+          priority_level:
+            liveAdvisorState.evaluation.applicationDecision !== null
+              ? liveAdvisorState.evaluation.applicationDecision.priorityLevel
+              : '',
+          alert_importance:
+            liveAdvisorState.evaluation.applicationDecision !== null
+              ? liveAdvisorState.evaluation.applicationDecision.alertImportance
+              : '',
+          blocking_issues: JSON.stringify(
+            liveAdvisorState.evaluation.applicationDecision !== null
+              ? liveAdvisorState.evaluation.applicationDecision.blockingIssues.map(function (item) {
+                  return item.text;
+                })
+              : []
+          ),
+          missing_evidence: JSON.stringify(summary.missingEvidence),
+          next_actions: JSON.stringify(summary.nextActions),
+          decision_version:
+            liveAdvisorState.evaluation.applicationDecision !== null &&
+            liveAdvisorState.evaluation.applicationDecision.decisionVersion !== null
+              ? liveAdvisorState.evaluation.applicationDecision.decisionVersion
+              : '',
+        },
+      },
+    ];
+
+    if (summary.keyReasons.length > 0) {
+      sections.push({
+        title: 'Why PathOS scored it this way',
+        bullets: summary.keyReasons,
+      });
+    }
+
+    if (summary.missingEvidence.length > 0) {
+      sections.push({
+        title: 'Missing evidence or blockers',
+        bullets: summary.missingEvidence,
+      });
+    }
+
+    if (summary.nextActions.length > 0) {
+      sections.push({
+        title: 'Next actions',
+        bullets: summary.nextActions,
+      });
+    }
+
+    publishScreenContext({
+      screen: 'saved-jobs',
+      anchor: {
+        type: 'job',
+        id: liveStoredJob.jobId,
+        label:
+          liveStoredJob.title !== null && liveStoredJob.title !== ''
+            ? liveStoredJob.title
+            : liveStoredJob.jobId,
+      },
+      title:
+        'Live evaluation: ' +
+        (liveStoredJob.title !== null && liveStoredJob.title !== ''
+          ? liveStoredJob.title
+          : liveStoredJob.jobId),
+      subtitle:
+        liveStoredJob.organization !== null && liveStoredJob.organization !== ''
+          ? liveStoredJob.organization
+          : '',
+      sections: sections,
+      ctas: [
+        {
+          label: 'Start Guided Apply',
+          action: 'nav',
+          route: '/guided-apply',
+        },
+      ],
+      dedupeKey:
+        'saved-job-live-evaluation:' +
+        liveStoredJob.jobId +
+        ':' +
+        String(liveAdvisorState.evaluation.overallScore) +
+        ':' +
+        liveAdvisorState.evaluation.decisionBand,
+    });
+  }, [liveAdvisorState.evaluation, liveAdvisorState.status, liveStoredJob]);
+
   const liveOverallScore =
     liveAdvisorState.evaluation !== null ? liveAdvisorState.evaluation.overallScore : null;
   const headerScoreLabel =
@@ -2530,6 +2722,7 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
   const [mounted, setMounted] = useState(false);
   const [liveStoredJobMap, setLiveStoredJobMap] = useState<Record<string, SavedJobsLiveStoredJob>>({});
   const [liveLoadError, setLiveLoadError] = useState<string | null>(null);
+  const [liveSummary, setLiveSummary] = useState<SavedJobsSummaryPayload | null>(null);
 
   // ── Search + sort state ──────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
@@ -2550,11 +2743,17 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
     if (isLiveAdvisorMode && liveAdvisor !== undefined) {
       void (async function () {
         try {
-          const storedJobs = await liveAdvisor.loadStoredJobs();
+          const [storedJobs, summary] = await Promise.all([
+            liveAdvisor.loadStoredJobs(),
+            liveAdvisor.loadSummary !== undefined
+              ? liveAdvisor.loadSummary()
+              : Promise.resolve(null),
+          ]);
           const built = buildLiveSavedJobsStore(storedJobs);
           queueMicrotask(function () {
             setStore(built.store);
             setLiveStoredJobMap(built.liveJobMap);
+            setLiveSummary(summary);
             setLiveLoadError(null);
             setMounted(true);
           });
@@ -2567,6 +2766,7 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
               selectedJobId: null,
             });
             setLiveStoredJobMap({});
+            setLiveSummary(null);
             setLiveLoadError(message);
             setMounted(true);
           });
@@ -2586,6 +2786,7 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
       }
       queueMicrotask(function () {
         setStore(seeded);
+        setLiveSummary(null);
         setMounted(true);
       });
     }
@@ -2772,6 +2973,42 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
       makeActive: true,
     });
   }, [appendContextEntry, isLiveAdvisorMode, selectedJob]);
+
+  useEffect(function () {
+    if (!isLiveAdvisorMode || selectedJob === undefined) {
+      return;
+    }
+
+    const selectionLines = [
+      'Current selection in Saved Jobs.',
+      'Location: ' + selectedJob.location,
+    ];
+
+    if (selectedJob.grade !== undefined && selectedJob.grade !== '') {
+      selectionLines.push('Grade: ' + selectedJob.grade);
+    }
+    if (selectedJob.salaryRange !== undefined && selectedJob.salaryRange !== '') {
+      selectionLines.push('Salary: ' + selectedJob.salaryRange);
+    }
+    if (selectedJob.closeDate !== undefined && selectedJob.closeDate !== '') {
+      selectionLines.push('Deadline: ' + selectedJob.closeDate);
+    }
+
+    publishSelectionContext({
+      screen: 'saved-jobs',
+      anchor: {
+        type: 'job',
+        id: selectedJob.id,
+        label: selectedJob.title,
+      },
+      payload: {
+        title: 'Selected saved job: ' + selectedJob.title,
+        subtitle: selectedJob.agency || '',
+        lines: selectionLines,
+      },
+      dedupeKey: 'saved-job-live-selection:' + selectedJob.id,
+    });
+  }, [isLiveAdvisorMode, selectedJob]);
 
   // Clean up context log entries when the screen unmounts so stale entries
   // from this screen do not persist in the PathAdvisor rail on other screens.
@@ -2997,7 +3234,7 @@ export function SavedJobsScreen(_props: SavedJobsScreenProps) {
        * Always uses store.jobs (the full unfiltered list) so the metrics
        * reflect the user's actual saved state, not the current search view.
        */}
-      <MetricsStrip jobs={store.jobs} />
+      <MetricsStrip jobs={store.jobs} summary={liveSummary} />
 
       {/* Two-pane workspace: grid layout matching Job Search panel treatment.
        * Both panes wrapped in rounded-lg border containers with var(--p-surface) bg

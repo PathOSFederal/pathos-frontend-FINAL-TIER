@@ -5,7 +5,7 @@ import { SharedDashboardRouteShell } from '../../_components/SharedDashboardRout
 
 export default function ResumeWorkspaceNewPage() {
   return (
-    <SharedDashboardRouteShell hideAdvisor>
+    <SharedDashboardRouteShell currentView="resume-workspace" hideAdvisor>
       <ResumeWorkspaceScreen view="new" />
     </SharedDashboardRouteShell>
   );

@@ -25,7 +25,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   return proxyGovernedPathAdvisorRequest(
     request,
     '/api/v1/pathadvisor/conversation',
-    'The PathAdvisor conversation route requires only the bounded user message and governed context payload.',
+    'The PathAdvisor conversation route requires only the bounded user message, governed context payload, and optional bounded intelligence and route context.',
     'The backend did not return a PathAdvisor conversation response.',
     isPathAdvisorConversationRequestPayload
   );
